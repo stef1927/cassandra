@@ -57,13 +57,16 @@ public class KeysSearcher extends SecondaryIndexSearcher
         final SecondaryIndex index = indexManager.getIndexForColumn(primary.column);
         // TODO: this should perhaps not open and maintain a writeOp for the full duration, but instead only *try* to delete stale entries, without blocking if there's no room
         // as it stands, we open a writeOp and keep it open for the duration to ensure that should this CF get flushed to make room we don't block the reclamation of any room  being made
-        try (OpOrder.Group writeOp = baseCfs.keyspace.writeOrder.start(); OpOrder.Group baseOp = baseCfs.readOrdering.start(); OpOrder.Group indexOp = index.getIndexCfs().readOrdering.start())
+        try (OpOrder.Group writeOp = baseCfs.keyspace.writeOrder.start(); 
+             OpOrder.Group baseOp = baseCfs.readOrdering.start(); 
+             OpOrder.Group indexOp = index.getIndexCfs().readOrdering.start())
         {
             return baseCfs.filter(getIndexedIterator(writeOp, filter, primary, index), filter);
         }
     }
 
-    private ColumnFamilyStore.AbstractScanIterator getIndexedIterator(final OpOrder.Group writeOp, final ExtendedFilter filter, final IndexExpression primary, final SecondaryIndex index)
+    private ColumnFamilyStore.AbstractScanIterator getIndexedIterator(final OpOrder.Group writeOp, final ExtendedFilter filter, 
+                                                                       final IndexExpression primary, final SecondaryIndex index)
     {
 
         // Start with the most-restrictive indexed clause, then apply remaining clauses
@@ -71,7 +74,9 @@ public class KeysSearcher extends SecondaryIndexSearcher
         // TODO: allow merge join instead of just one index + loop
         assert index != null;
         assert index.getIndexCfs() != null;
-        final DecoratedKey indexKey = index.getIndexKeyFor(primary.value);
+        
+        //final DecoratedKey indexKey = index.getIndexKeyFor(primary.value);
+        final Collection<DecoratedKey> indexKeys = index.getIndexFor(primary);
 
         if (logger.isDebugEnabled())
             logger.debug("Most-selective indexed predicate is {}",
@@ -92,18 +97,36 @@ public class KeysSearcher extends SecondaryIndexSearcher
 
         return new ColumnFamilyStore.AbstractScanIterator()
         {
-            private Composite lastSeenKey = startKey;
+            private Composite lastSeenKey;
             private Iterator<Cell> indexColumns;
-            private int columnsRead = Integer.MAX_VALUE;
-
+            private int columnsRead;
+            private final Iterator<DecoratedKey> indexKeysIterator = indexKeys.iterator();
+            private DecoratedKey indexKey;
+            
             protected Row computeNext()
             {
                 int meanColumns = Math.max(index.getIndexCfs().getMeanColumns(), 1);
                 // We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses
                 int rowsPerQuery = Math.max(Math.min(filter.maxRows(), filter.maxColumns() / meanColumns), 2);
+                
                 while (true)
                 {
-                    if (indexColumns == null || !indexColumns.hasNext())
+                    if (indexKey == null) 
+                    {
+                        if (indexKeysIterator.hasNext())
+                        {
+                            indexKey = indexKeysIterator.next();
+                            lastSeenKey = startKey;
+                            columnsRead = Integer.MAX_VALUE;
+                        }
+                        else 
+                        {
+                            logger.trace("No more primary keys");
+                            return endOfData();
+                        }
+                    }
+                    
+                    if (indexColumns == null)
                     {
                         if (columnsRead < rowsPerQuery)
                         {
@@ -113,8 +136,9 @@ public class KeysSearcher extends SecondaryIndexSearcher
 
                         if (logger.isTraceEnabled() && (index instanceof AbstractSimplePerColumnSecondaryIndex))
                             logger.trace("Scanning index {} starting with {}",
-                                         ((AbstractSimplePerColumnSecondaryIndex)index).expressionString(primary), index.getBaseCfs().metadata.getKeyValidator().getString(startKey.toByteBuffer()));
-
+                                         ((AbstractSimplePerColumnSecondaryIndex)index).expressionString(primary), 
+                                         index.getBaseCfs().metadata.getKeyValidator().getString(startKey.toByteBuffer()));
+                        
                         QueryFilter indexFilter = QueryFilter.getSliceFilter(indexKey,
                                                                              index.getIndexCfs().name,
                                                                              lastSeenKey,
@@ -126,8 +150,9 @@ public class KeysSearcher extends SecondaryIndexSearcher
                         logger.trace("fetched {}", indexRow);
                         if (indexRow == null)
                         {
-                            logger.trace("no data, all done");
-                            return endOfData();
+                            logger.trace("no data, moving to next key");
+                            indexKey = null;
+                            continue;
                         }
 
                         Collection<Cell> sortedCells = indexRow.getSortedColumns();
@@ -197,6 +222,11 @@ public class KeysSearcher extends SecondaryIndexSearcher
                         }
                         return new Row(dk, data);
                     }
+                    
+                    if (columnsRead < rowsPerQuery) {
+                        indexKey = null;
+                    }
+                    indexColumns = null;
                  }
              }
 

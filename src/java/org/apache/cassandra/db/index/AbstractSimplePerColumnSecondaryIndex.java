@@ -18,19 +18,35 @@
 package org.apache.cassandra.db.index;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.concurrent.Future;
 
+import org.apache.cassandra.Util;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.db.*;
+import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNameType;
+import org.apache.cassandra.db.filter.IDiskAtomFilter;
+import org.apache.cassandra.db.filter.NamesQueryFilter;
+import org.apache.cassandra.db.filter.QueryFilter;
 import org.apache.cassandra.db.marshal.AbstractType;
+import org.apache.cassandra.dht.Bounds;
+import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.LocalPartitioner;
 import org.apache.cassandra.dht.LocalToken;
+import org.apache.cassandra.dht.Range;
+import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.concurrent.OpOrder;
+
+import com.google.common.collect.ImmutableSortedSet;
 
 /**
  * Implements a secondary index for a column family using a second column family
@@ -69,6 +85,40 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
     public DecoratedKey getIndexKeyFor(ByteBuffer value)
     {
         return new BufferDecoratedKey(new LocalToken(getIndexKeyComparator(), value), value);
+    }
+    
+    @Override
+    public Collection<DecoratedKey> getIndexFor(IndexExpression expr) 
+    {
+        List<DecoratedKey> ret = new LinkedList<DecoratedKey>();
+        
+        if (expr.isSingleValueQuery()) 
+        {
+            ret.add(getIndexKeyFor(expr.value));
+            return ret;
+        }
+       
+        RowPosition minPos = expr.isMinValueQuery() 
+                            ? (new LocalToken(getIndexKeyComparator(), expr.value)).minKeyBound() 
+                            : Util.rp("", indexCfs.partitioner);
+                            
+        RowPosition maxPos = expr.isMaxValueQuery() 
+                             ? (new LocalToken(getIndexKeyComparator(), expr.value)).minKeyBound() 
+                             : Util.rp("", indexCfs.partitioner);                    
+        
+        Range<RowPosition> range = new Range<RowPosition>(minPos, maxPos);
+        IDiskAtomFilter filter = new IdentityQueryFilter();
+        
+        List<Row> rows = indexCfs.getRangeSlice(range, null, filter, Integer.MAX_VALUE, System.currentTimeMillis());
+        for (Row row : rows)
+        {
+            if (expr.isInRange(row.key.getKey()))
+            {
+                ret.add(row.key);
+            }
+        }
+
+        return ret;
     }
 
     @Override

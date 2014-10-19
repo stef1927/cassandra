@@ -18,6 +18,7 @@
 package org.apache.cassandra.db.index;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
@@ -29,13 +30,13 @@ import java.util.concurrent.FutureTask;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.db.BufferDecoratedKey;
 import org.apache.cassandra.db.Cell;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.db.IndexExpression;
 import org.apache.cassandra.db.SystemKeyspace;
 import org.apache.cassandra.db.compaction.CompactionManager;
 import org.apache.cassandra.db.composites.CellName;
@@ -293,6 +294,17 @@ public abstract class SecondaryIndex
         return new BufferDecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).type, value), value);
     }
 
+    /** 
+     * Returns a list of decorated keys for one or more column values according to the expression operator
+     * @param expr the expression containing value and operator
+     * @return the list of keys
+     */
+    public Collection<DecoratedKey> getIndexFor(IndexExpression expr) 
+    {
+        // FIXME: correct implementation currently only in AbstractSimplePerColumnSecondaryIndex
+        return Arrays.asList(getIndexKeyFor(expr.value));
+    }
+    
     /**
      * Returns true if the provided cell name is indexed by this secondary index.
      */

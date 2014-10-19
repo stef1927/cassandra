@@ -43,11 +43,12 @@ import java.util.concurrent.TimeUnit;
 import com.google.common.base.Function;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
+
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
+import static org.junit.Assert.*;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-
 import org.apache.cassandra.OrderedJUnit4ClassRunner;
 import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
@@ -97,11 +98,6 @@ import static org.apache.cassandra.Util.column;
 import static org.apache.cassandra.Util.dk;
 import static org.apache.cassandra.Util.rp;
 import static org.apache.cassandra.utils.ByteBufferUtil.bytes;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
 
 @RunWith(OrderedJUnit4ClassRunner.class)
 public class ColumnFamilyStoreTest extends SchemaLoader
@@ -728,6 +724,64 @@ public class ColumnFamilyStoreTest extends SchemaLoader
 
         assert rows != null;
         assert rows.size() == 1 : StringUtils.join(rows, ",");
+    }
+    
+    // See CASSANDRA-4476 (Support 2ndary index queries with only non-EQ clauses)
+    @Test
+    public void testIndexScanWithoutEQClauses()
+    {
+        ColumnFamilyStore cfs = Keyspace.open("Keyspace1").getColumnFamilyStore("Indexed1");
+        Mutation rm;
+
+        CellName nobirthdate = cellname("notbirthdate");
+        CellName birthdate = cellname("birthdate");
+
+        rm = new Mutation("Keyspace1", ByteBufferUtil.bytes("kk1"));
+        rm.add("Indexed1", nobirthdate, ByteBufferUtil.bytes(1L), 0);
+        rm.add("Indexed1", birthdate, ByteBufferUtil.bytes(1L), 0);
+        rm.apply();
+
+        rm = new Mutation("Keyspace1", ByteBufferUtil.bytes("kk2"));
+        rm.add("Indexed1", nobirthdate, ByteBufferUtil.bytes(2L), 0);
+        rm.add("Indexed1", birthdate, ByteBufferUtil.bytes(2L), 0);
+        rm.apply();
+
+        rm = new Mutation("Keyspace1", ByteBufferUtil.bytes("kk3"));
+        rm.add("Indexed1", nobirthdate, ByteBufferUtil.bytes(2L), 0);
+        rm.add("Indexed1", birthdate, ByteBufferUtil.bytes(3L), 0);
+        rm.apply();
+
+        rm = new Mutation("Keyspace1", ByteBufferUtil.bytes("kk4"));
+        rm.add("Indexed1", nobirthdate, ByteBufferUtil.bytes(2L), 0);
+        rm.add("Indexed1", birthdate, ByteBufferUtil.bytes(2L), 0);
+        rm.apply();
+
+        IndexExpression expr = new IndexExpression(ByteBufferUtil.bytes("birthdate"), IndexExpression.Operator.GTE, ByteBufferUtil.bytes(2L));
+        List<IndexExpression> clause = Arrays.asList(expr);
+        IDiskAtomFilter filter = new IdentityQueryFilter();
+        Range<RowPosition> range = Util.range("", "");
+
+        List<Row> rows = null;
+        if (cfs.indexManager.hasIndexFor(clause)) 
+        {
+            rows = cfs.search(range, clause, filter, 100);
+        }
+
+        assertNotNull(rows);
+        assertEquals(3, rows.size());
+
+        String key = new String(rows.get(0).key.getKey().array(), rows.get(0).key.getKey().position(), rows.get(0).key.getKey().remaining());
+        assertEquals("kk2", key);
+
+        key = new String(rows.get(1).key.getKey().array(), rows.get(1).key.getKey().position(), rows.get(1).key.getKey().remaining());
+        assertEquals("kk4", key);
+
+        key = new String(rows.get(2).key.getKey().array(), rows.get(1).key.getKey().position(), rows.get(1).key.getKey().remaining());
+        assertEquals("kk3", key);
+
+        assertEquals(ByteBufferUtil.bytes(2L), rows.get(0).cf.getColumn(birthdate).value());
+        assertEquals(ByteBufferUtil.bytes(2L), rows.get(1).cf.getColumn(birthdate).value());
+        assertEquals(ByteBufferUtil.bytes(3L), rows.get(2).cf.getColumn(birthdate).value());
     }
 
     @Test
@@ -1423,7 +1477,7 @@ public class ColumnFamilyStoreTest extends SchemaLoader
         // explicitly tell to the KeysSearcher to use column limiting for rowsPerQuery to trigger bogus columnsRead--; (CASSANDRA-3996)
         List<Row> rows = store.search(store.makeExtendedFilter(Util.range("", ""), new IdentityQueryFilter(), Arrays.asList(expr), 10, true, false, System.currentTimeMillis()));
 
-        assert rows.size() == 10;
+        assertEquals(10, rows.size());
     }
 
     @SuppressWarnings("unchecked")
