@@ -550,20 +550,14 @@ public class SecondaryIndexManager
         return indexSearchers;
     }
 
-    /**
-     * Performs a search across a number of column indexes
-     *
-     * @param filter the column range to restrict to
-     * @return found indexed rows
-     */
-    public List<Row> search(ExtendedFilter filter)
+    SecondaryIndexSearcher mostSelectiveIndexSearcher(ExtendedFilter filter)
     {
         List<SecondaryIndexSearcher> indexSearchers = getIndexSearchersForQuery(filter.getClause());
 
-        if (indexSearchers.isEmpty())
-            return Collections.emptyList();
-
         SecondaryIndexSearcher mostSelective = null;
+        if (indexSearchers.isEmpty())
+            return mostSelective;
+        
         long bestEstimate = Long.MAX_VALUE;
         for (SecondaryIndexSearcher searcher : indexSearchers)
         {
@@ -575,7 +569,23 @@ public class SecondaryIndexManager
                 mostSelective = searcher;
             }
         }
+        
+        return mostSelective;
+    }
+    
+    /**
+     * Performs a search across a number of column indexes
+     *
+     * @param filter the column range to restrict to
+     * @return found indexed rows
+     */
+    public List<Row> search(ExtendedFilter filter)
+    {
+        SecondaryIndexSearcher mostSelective = mostSelectiveIndexSearcher(filter);
 
+        if (mostSelective == null)
+            return Collections.emptyList();
+        
         return mostSelective.search(filter);
     }
 

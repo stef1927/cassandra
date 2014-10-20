@@ -161,8 +161,14 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
                     return new LocalToken(index.getIndexKeyComparator(), expr.value).maxKeyBound();
                 case GTE:
                     return new LocalToken(index.getIndexKeyComparator(), expr.value).minKeyBound();
-                default:
+                case LT:
+                case LTE:    
                     return Util.rp("", index.indexCfs.partitioner);
+                case EQ:
+                case CONTAINS:
+                case CONTAINS_KEY:
+                default:    
+                    return new LocalToken(index.getIndexKeyComparator(), expr.value).minKeyBound();
             }
         }
         
@@ -174,8 +180,14 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
                     return new LocalToken(index.getIndexKeyComparator(), expr.value).minKeyBound();
                 case LTE:
                     return new LocalToken(index.getIndexKeyComparator(), expr.value).maxKeyBound();
-                default:
+                case GT:
+                case GTE:   
                     return Util.rp("", index.indexCfs.partitioner);
+                case EQ:
+                case CONTAINS:
+                case CONTAINS_KEY:
+                default:
+                    return new LocalToken(index.getIndexKeyComparator(), expr.value).maxKeyBound();
             }
         }
     }
