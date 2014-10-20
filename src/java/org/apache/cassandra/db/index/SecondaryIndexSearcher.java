@@ -78,8 +78,10 @@ public abstract class SecondaryIndexSearcher
             SecondaryIndex index = indexManager.getIndexForColumn(expression.column);
             if (index == null || index.getIndexCfs() == null || !expression.operator.allowsIndexQuery())
                 continue;
-            int columns = index.getIndexCfs().getMeanColumns();
+            
+            int columns = index.getExpectedNumberOfColumns(expression);
             candidates.put(index, columns);
+            
             if (columns < bestMeanCount)
             {
                 best = expression;

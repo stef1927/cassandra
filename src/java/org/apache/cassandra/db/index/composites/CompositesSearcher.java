@@ -23,7 +23,6 @@ import java.util.*;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.db.ArrayBackedSortedColumns;
 import org.apache.cassandra.db.Cell;
 import org.apache.cassandra.db.ColumnFamily;
@@ -96,7 +95,8 @@ public class CompositesSearcher extends SecondaryIndexSearcher
         // TODO: allow merge join instead of just one index + loop
         assert index != null;
         assert index.getIndexCfs() != null;
-        final DecoratedKey indexKey = index.getIndexKeyFor(primary.value);
+        
+        final Collection<DecoratedKey> indexKeys = index.getIndexFor(primary);
 
         if (logger.isDebugEnabled())
             logger.debug("Most-selective indexed predicate is {}", index.expressionString(primary));
@@ -119,16 +119,19 @@ public class CompositesSearcher extends SecondaryIndexSearcher
 
         return new ColumnFamilyStore.AbstractScanIterator()
         {
-            private Composite lastSeenPrefix = startPrefix;
+            private Composite lastSeenPrefix;
             private Deque<Cell> indexCells;
-            private int columnsRead = Integer.MAX_VALUE;
-            private int limit = filter.currentLimit();
+            private int columnsRead;
+            private final int limit = filter.currentLimit();
             private int columnsCount = 0;
 
-            private int meanColumns = Math.max(index.getIndexCfs().getMeanColumns(), 1);
+            private final int meanColumns = Math.max(index.getIndexCfs().getMeanColumns(), 1);
             // We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses
-            private int rowsPerQuery = Math.max(Math.min(filter.maxRows(), filter.maxColumns() / meanColumns), 2);
+            private final int rowsPerQuery = Math.max(Math.min(filter.maxRows(), filter.maxColumns() / meanColumns), 2);
 
+            private final Iterator<DecoratedKey> indexKeysIterator = indexKeys.iterator();
+            private DecoratedKey indexKey;
+            
             public boolean needsFiltering()
             {
                 return false;
@@ -160,8 +163,23 @@ public class CompositesSearcher extends SecondaryIndexSearcher
                     // (but we still need to return what has been fetched already)
                     if (columnsCount >= limit)
                         return makeReturn(currentKey, data);
+                    
+                    if (indexKey == null) 
+                    {
+                        if (indexKeysIterator.hasNext())
+                        {
+                            indexKey = indexKeysIterator.next();
+                            lastSeenPrefix = startPrefix;
+                            columnsRead = Integer.MAX_VALUE;
+                        }
+                        else 
+                        {
+                            logger.trace("No more primary keys");
+                            return makeReturn(currentKey, data);
+                        }
+                    }
 
-                    if (indexCells == null || indexCells.isEmpty())
+                    if (indexCells == null)
                     {
                         if (columnsRead < rowsPerQuery)
                         {
@@ -182,8 +200,12 @@ public class CompositesSearcher extends SecondaryIndexSearcher
                                                                              filter.timestamp);
                         ColumnFamily indexRow = index.getIndexCfs().getColumnFamily(indexFilter);
                         if (indexRow == null || !indexRow.hasColumns())
-                            return makeReturn(currentKey, data);
-
+                        {
+                            logger.trace("No data moving to next primary key");
+                            indexKey = null;
+                            continue;
+                        }
+                        
                         Collection<Cell> sortedCells = indexRow.getSortedColumns();
                         columnsRead = sortedCells.size();
                         indexCells = new ArrayDeque<>(sortedCells);
@@ -236,7 +258,7 @@ public class CompositesSearcher extends SecondaryIndexSearcher
                             if (!range.right.isMinimum(baseCfs.partitioner) && range.right.compareTo(dk) < 0)
                             {
                                 logger.trace("Reached end of assigned scan range");
-                                return endOfData();
+                                break;
                             }
                             else
                             {
@@ -299,9 +321,16 @@ public class CompositesSearcher extends SecondaryIndexSearcher
 
                         if (data == null)
                             data = ArrayBackedSortedColumns.factory.create(baseCfs.metadata);
+                        
                         data.addAll(newData);
                         columnsCount += dataFilter.lastCounted();
                     }
+                    
+                    if (columnsRead < rowsPerQuery) {
+                        indexKey = null;
+                    }
+                    
+                    indexCells = null;
                  }
              }
 

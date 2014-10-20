@@ -19,15 +19,17 @@
 package org.apache.cassandra.db;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Set;
 
 import org.junit.Test;
-
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNames;
 import org.apache.cassandra.db.index.PerColumnSecondaryIndex;
 import org.apache.cassandra.db.index.PerRowSecondaryIndex;
 import org.apache.cassandra.db.index.SecondaryIndexSearcher;
+import org.apache.cassandra.dht.LocalToken;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.concurrent.OpOrder;
@@ -135,6 +137,17 @@ public class SecondaryIndexCellSizeTest
         public long estimateResultRows() {
             return 0;
         }
+        
+        public DecoratedKey getIndexKeyFor(ByteBuffer value)
+        {
+            ByteBuffer name = columnDefs.iterator().next().name.bytes;
+            return new BufferDecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).type, value), value);
+        }
+
+        public Collection<DecoratedKey> getIndexFor(IndexExpression expr)
+        {
+            return Arrays.asList(getIndexKeyFor(expr.value));
+        }
     }
 
 
@@ -216,6 +229,17 @@ public class SecondaryIndexCellSizeTest
         @Override
         public long estimateResultRows() {
             return 0;
+        }
+        
+        public DecoratedKey getIndexKeyFor(ByteBuffer value)
+        {
+            ByteBuffer name = columnDefs.iterator().next().name.bytes;
+            return new BufferDecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).type, value), value);
+        }
+
+        public Collection<DecoratedKey> getIndexFor(IndexExpression expr)
+        {
+            return Arrays.asList(getIndexKeyFor(expr.value));
         }
     }
 }

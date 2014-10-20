@@ -72,108 +72,11 @@ public class IndexExpression
         }
     }
 
-    public boolean isSingleValueQuery() 
-    {
-        switch (operator)
-        {
-            case EQ:
-            case CONTAINS:
-            case CONTAINS_KEY:
-                return true;
-            default:
-                return false;
-        }
-    }
-    
-    public boolean isMinValueQuery() 
-    {
-        switch (operator)
-        {
-            case GT:
-            case GTE:
-                return true;
-            default:
-                return false;
-        }
-    }
-    
-    public boolean isMaxValueQuery() 
-    {
-        switch (operator)
-        {
-            case LT:
-            case LTE:
-                return true;
-            default:
-                return false;
-        }
-    }
-    
-    public boolean isInRange(ByteBuffer value)
-    {
-        int comparison = value.compareTo(this.value);
-        
-        switch (operator)
-        {
-            case EQ:
-            case CONTAINS:
-            case CONTAINS_KEY:
-                return comparison == 0;
-            case GTE:
-                return comparison >= 0;
-            case GT:
-                return comparison > 0;
-            case LTE:
-                return comparison <= 0;
-            case LT:
-                return comparison < 0;
-            default:
-                return false;
-        }
-    }
-    
     @Override
     public String toString()
     {
         return String.format("%s %s %s", ByteBufferUtil.bytesToHex(column), operator, ByteBufferUtil.bytesToHex(value));
     }
-
-    /*
-    public RowPosition start(AbstractType<?> comparator)
-    {
-        switch (operator)
-        {
-            case GTE:
-            case GT:
-                return new BufferDecoratedKey(new LocalToken(comparator, value), value); 
-            case LTE:
-            case LT:
-                return RowPosition.Kind.MIN_BOUND;
-            case EQ:
-            case CONTAINS:
-            case CONTAINS_KEY:
-            default:    
-                return new BufferDecoratedKey(new LocalToken(comparator, value), value);
-        }
-    }
-    
-    public RowPosition end(AbstractType<?> comparator)
-    {
-        switch (operator)
-        {
-            case GTE:
-            case GT:
-                return value; //TODO absolute max
-            case LTE:
-            case LT:
-                return new BufferDecoratedKey(new LocalToken(comparator, value), value);
-            case EQ:
-            case CONTAINS:
-            case CONTAINS_KEY:
-            default:    
-                return new BufferDecoratedKey(new LocalToken(comparator, value), value);
-        }
-    }*/
     
     @Override
     public boolean equals(Object o)

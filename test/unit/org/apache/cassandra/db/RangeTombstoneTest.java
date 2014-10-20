@@ -21,6 +21,7 @@ package org.apache.cassandra.db;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
@@ -30,8 +31,8 @@ import java.util.concurrent.ExecutionException;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterators;
-import org.junit.Test;
 
+import org.junit.Test;
 import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.config.ColumnDefinition;
@@ -51,6 +52,7 @@ import org.apache.cassandra.db.index.PerColumnSecondaryIndex;
 import org.apache.cassandra.db.index.SecondaryIndex;
 import org.apache.cassandra.db.index.SecondaryIndexSearcher;
 import org.apache.cassandra.db.marshal.Int32Type;
+import org.apache.cassandra.dht.LocalToken;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.io.sstable.SSTableReader;
 import org.apache.cassandra.utils.ByteBufferUtil;
@@ -620,6 +622,17 @@ public class RangeTombstoneTest extends SchemaLoader
         @Override
         public long estimateResultRows() {
             return 0;
+        }
+        
+        public DecoratedKey getIndexKeyFor(ByteBuffer value)
+        {
+            ByteBuffer name = columnDefs.iterator().next().name.bytes;
+            return new BufferDecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).type, value), value);
+        }
+
+        public Collection<DecoratedKey> getIndexFor(IndexExpression expr)
+        {
+            return Arrays.asList(getIndexKeyFor(expr.value));
         }
     }
 }

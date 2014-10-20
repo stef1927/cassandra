@@ -91,34 +91,93 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
     public Collection<DecoratedKey> getIndexFor(IndexExpression expr) 
     {
         List<DecoratedKey> ret = new LinkedList<DecoratedKey>();
+        IndexRange range = new IndexRange(this, expr);
         
-        if (expr.isSingleValueQuery()) 
+        if (range.isSingleValue()) 
         {
-            ret.add(getIndexKeyFor(expr.value));
+            ret.add(new BufferDecoratedKey(new LocalToken(getIndexKeyComparator(), expr.value), expr.value));
             return ret;
         }
        
-        RowPosition minPos = expr.isMinValueQuery() 
-                            ? (new LocalToken(getIndexKeyComparator(), expr.value)).minKeyBound() 
-                            : Util.rp("", indexCfs.partitioner);
-                            
-        RowPosition maxPos = expr.isMaxValueQuery() 
-                             ? (new LocalToken(getIndexKeyComparator(), expr.value)).minKeyBound() 
-                             : Util.rp("", indexCfs.partitioner);                    
-        
-        Range<RowPosition> range = new Range<RowPosition>(minPos, maxPos);
-        IDiskAtomFilter filter = new IdentityQueryFilter();
-        
-        List<Row> rows = indexCfs.getRangeSlice(range, null, filter, Integer.MAX_VALUE, System.currentTimeMillis());
-        for (Row row : rows)
+        for (Row row : range.getRows())
         {
-            if (expr.isInRange(row.key.getKey()))
-            {
-                ret.add(row.key);
-            }
+            ret.add(row.key);
         }
 
         return ret;
+    }
+    
+    @Override
+    public int getExpectedNumberOfColumns(IndexExpression expr) {
+        IndexRange range = new IndexRange(this, expr);
+        
+        if (range.isSingleValue())
+            return indexCfs.getMeanColumns();
+        
+        int ret = 0;
+        for (Row row : range.getRows()) 
+        {
+            ret += row.cf.getColumnCount();
+        }
+        return ret;
+    }
+    
+    private final static class IndexRange 
+    {
+        private final AbstractSimplePerColumnSecondaryIndex index;
+        private final IndexExpression expr;
+        
+        public IndexRange(AbstractSimplePerColumnSecondaryIndex index, IndexExpression expr)
+        {
+            this.index = index;
+            this.expr = expr;
+        }
+        
+        public List<Row> getRows() {
+            Range<RowPosition> range = new Range<RowPosition>(minPos(), maxPos());
+            IDiskAtomFilter filter = new IdentityQueryFilter();
+            
+            return index.indexCfs.getRangeSlice(range, null, filter, Integer.MAX_VALUE, System.currentTimeMillis());
+        }
+        
+        public boolean isSingleValue() 
+        {
+            switch (expr.operator)
+            {
+                case EQ:
+                case CONTAINS:
+                case CONTAINS_KEY:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        
+        private RowPosition minPos() 
+        {
+            switch (expr.operator)
+            {
+                case GT:
+                    return new LocalToken(index.getIndexKeyComparator(), expr.value).maxKeyBound();
+                case GTE:
+                    return new LocalToken(index.getIndexKeyComparator(), expr.value).minKeyBound();
+                default:
+                    return Util.rp("", index.indexCfs.partitioner);
+            }
+        }
+        
+        private RowPosition maxPos() 
+        {
+            switch (expr.operator)
+            {
+                case LT:
+                    return new LocalToken(index.getIndexKeyComparator(), expr.value).minKeyBound();
+                case LTE:
+                    return new LocalToken(index.getIndexKeyComparator(), expr.value).maxKeyBound();
+                default:
+                    return Util.rp("", index.indexCfs.partitioner);
+            }
+        }
     }
 
     @Override

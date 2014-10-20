@@ -75,7 +75,6 @@ public class KeysSearcher extends SecondaryIndexSearcher
         assert index != null;
         assert index.getIndexCfs() != null;
         
-        //final DecoratedKey indexKey = index.getIndexKeyFor(primary.value);
         final Collection<DecoratedKey> indexKeys = index.getIndexFor(primary);
 
         if (logger.isDebugEnabled())
@@ -102,13 +101,13 @@ public class KeysSearcher extends SecondaryIndexSearcher
             private int columnsRead;
             private final Iterator<DecoratedKey> indexKeysIterator = indexKeys.iterator();
             private DecoratedKey indexKey;
+            private final int meanColumns = Math.max(index.getIndexCfs().getMeanColumns(), 1);
+            
+            // We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses
+            private final int rowsPerQuery = Math.max(Math.min(filter.maxRows(), filter.maxColumns() / meanColumns), 2);
             
             protected Row computeNext()
             {
-                int meanColumns = Math.max(index.getIndexCfs().getMeanColumns(), 1);
-                // We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses
-                int rowsPerQuery = Math.max(Math.min(filter.maxRows(), filter.maxColumns() / meanColumns), 2);
-                
                 while (true)
                 {
                     if (indexKey == null) 
@@ -150,7 +149,7 @@ public class KeysSearcher extends SecondaryIndexSearcher
                         logger.trace("fetched {}", indexRow);
                         if (indexRow == null)
                         {
-                            logger.trace("no data, moving to next key");
+                            logger.trace("no data, moving to next primary key");
                             indexKey = null;
                             continue;
                         }

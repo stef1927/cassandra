@@ -20,21 +20,24 @@ package org.apache.cassandra.db.index;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Set;
 
 import org.junit.Before;
 import org.junit.Test;
-
 import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.db.BufferDecoratedKey;
 import org.apache.cassandra.db.Cell;
 import org.apache.cassandra.db.ColumnFamily;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.db.IndexExpression;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.filter.QueryFilter;
+import org.apache.cassandra.dht.LocalToken;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.concurrent.OpOrder;
@@ -203,6 +206,17 @@ public class PerRowSecondaryIndexTest extends SchemaLoader
         @Override
         public long estimateResultRows() {
             return 0;
+        }
+        
+        public DecoratedKey getIndexKeyFor(ByteBuffer value)
+        {
+            ByteBuffer name = columnDefs.iterator().next().name.bytes;
+            return new BufferDecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).type, value), value);
+        }
+
+        public Collection<DecoratedKey> getIndexFor(IndexExpression expr)
+        {
+            return Arrays.asList(getIndexKeyFor(expr.value));
         }
     }
 }

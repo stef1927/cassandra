@@ -22,12 +22,14 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -46,7 +48,10 @@ import com.google.common.collect.Sets;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
+
 import static org.junit.Assert.*;
+
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.apache.cassandra.OrderedJUnit4ClassRunner;
@@ -113,7 +118,6 @@ public class ColumnFamilyStoreTest extends SchemaLoader
         random.nextBytes(bytes2);
     }
 
-    @Test
     // create two sstables, and verify that we only deserialize data from the most recent one
     public void testTimeSortedQuery()
     {
@@ -726,64 +730,6 @@ public class ColumnFamilyStoreTest extends SchemaLoader
         assert rows.size() == 1 : StringUtils.join(rows, ",");
     }
     
-    // See CASSANDRA-4476 (Support 2ndary index queries with only non-EQ clauses)
-    @Test
-    public void testIndexScanWithoutEQClauses()
-    {
-        ColumnFamilyStore cfs = Keyspace.open("Keyspace1").getColumnFamilyStore("Indexed1");
-        Mutation rm;
-
-        CellName nobirthdate = cellname("notbirthdate");
-        CellName birthdate = cellname("birthdate");
-
-        rm = new Mutation("Keyspace1", ByteBufferUtil.bytes("kk1"));
-        rm.add("Indexed1", nobirthdate, ByteBufferUtil.bytes(1L), 0);
-        rm.add("Indexed1", birthdate, ByteBufferUtil.bytes(1L), 0);
-        rm.apply();
-
-        rm = new Mutation("Keyspace1", ByteBufferUtil.bytes("kk2"));
-        rm.add("Indexed1", nobirthdate, ByteBufferUtil.bytes(2L), 0);
-        rm.add("Indexed1", birthdate, ByteBufferUtil.bytes(2L), 0);
-        rm.apply();
-
-        rm = new Mutation("Keyspace1", ByteBufferUtil.bytes("kk3"));
-        rm.add("Indexed1", nobirthdate, ByteBufferUtil.bytes(2L), 0);
-        rm.add("Indexed1", birthdate, ByteBufferUtil.bytes(3L), 0);
-        rm.apply();
-
-        rm = new Mutation("Keyspace1", ByteBufferUtil.bytes("kk4"));
-        rm.add("Indexed1", nobirthdate, ByteBufferUtil.bytes(2L), 0);
-        rm.add("Indexed1", birthdate, ByteBufferUtil.bytes(2L), 0);
-        rm.apply();
-
-        IndexExpression expr = new IndexExpression(ByteBufferUtil.bytes("birthdate"), IndexExpression.Operator.GTE, ByteBufferUtil.bytes(2L));
-        List<IndexExpression> clause = Arrays.asList(expr);
-        IDiskAtomFilter filter = new IdentityQueryFilter();
-        Range<RowPosition> range = Util.range("", "");
-
-        List<Row> rows = null;
-        if (cfs.indexManager.hasIndexFor(clause)) 
-        {
-            rows = cfs.search(range, clause, filter, 100);
-        }
-
-        assertNotNull(rows);
-        assertEquals(3, rows.size());
-
-        String key = new String(rows.get(0).key.getKey().array(), rows.get(0).key.getKey().position(), rows.get(0).key.getKey().remaining());
-        assertEquals("kk2", key);
-
-        key = new String(rows.get(1).key.getKey().array(), rows.get(1).key.getKey().position(), rows.get(1).key.getKey().remaining());
-        assertEquals("kk4", key);
-
-        key = new String(rows.get(2).key.getKey().array(), rows.get(1).key.getKey().position(), rows.get(1).key.getKey().remaining());
-        assertEquals("kk3", key);
-
-        assertEquals(ByteBufferUtil.bytes(2L), rows.get(0).cf.getColumn(birthdate).value());
-        assertEquals(ByteBufferUtil.bytes(2L), rows.get(1).cf.getColumn(birthdate).value());
-        assertEquals(ByteBufferUtil.bytes(3L), rows.get(2).cf.getColumn(birthdate).value());
-    }
-
     @Test
     public void testIndexCreate() throws IOException, InterruptedException, ExecutionException
     {

@@ -166,7 +166,14 @@ public abstract class SecondaryIndex
      * @return the underlying column family store or null
      */
     public abstract ColumnFamilyStore getIndexCfs();
-
+    
+    /** Return the best estimate of how many columns we have for this expression 
+     * @param The index expression
+     * @return the estimated number of columns
+     */
+    public int getExpectedNumberOfColumns(IndexExpression expr) {
+        return getIndexCfs().getMeanColumns();
+    }
 
     /**
      * Delete all files and references to this index
@@ -287,23 +294,14 @@ public abstract class SecondaryIndex
      * @param value column value
      * @return decorated key
      */
-    public DecoratedKey getIndexKeyFor(ByteBuffer value)
-    {
-        // FIXME: this imply one column definition per index
-        ByteBuffer name = columnDefs.iterator().next().name.bytes;
-        return new BufferDecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).type, value), value);
-    }
+    public abstract DecoratedKey getIndexKeyFor(ByteBuffer value);
 
     /** 
      * Returns a list of decorated keys for one or more column values according to the expression operator
      * @param expr the expression containing value and operator
      * @return the list of keys
      */
-    public Collection<DecoratedKey> getIndexFor(IndexExpression expr) 
-    {
-        // FIXME: correct implementation currently only in AbstractSimplePerColumnSecondaryIndex
-        return Arrays.asList(getIndexKeyFor(expr.value));
-    }
+    public abstract Collection<DecoratedKey> getIndexFor(IndexExpression expr); 
     
     /**
      * Returns true if the provided cell name is indexed by this secondary index.
