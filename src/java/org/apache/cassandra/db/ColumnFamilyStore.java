@@ -24,6 +24,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
+
 import javax.management.*;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -31,19 +32,18 @@ import com.google.common.base.Function;
 import com.google.common.base.Predicate;
 import com.google.common.collect.*;
 import com.google.common.util.concurrent.*;
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.Uninterruptibles;
+
 import org.apache.cassandra.io.FSWriteError;
 import org.json.simple.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.cache.*;
 import org.apache.cassandra.concurrent.JMXEnabledThreadPoolExecutor;
 import org.apache.cassandra.concurrent.NamedThreadFactory;
 import org.apache.cassandra.concurrent.StageManager;
 import org.apache.cassandra.config.*;
 import org.apache.cassandra.config.CFMetaData.SpeculativeRetry;
+import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
 import org.apache.cassandra.db.commitlog.CommitLog;
 import org.apache.cassandra.db.commitlog.ReplayPosition;
 import org.apache.cassandra.db.compaction.*;
@@ -413,6 +413,12 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     public int getMeanColumns()
     {
         return data.getMeanColumns();
+    }
+    
+    public long getApproximateKeyCount(Range<RowPosition> range)
+    {
+        ViewFragment view = select(viewFilter(range));
+        return SSTableReader.getApproximateKeyCount(view.sstables);
     }
 
     public static ColumnFamilyStore createColumnFamilyStore(Keyspace keyspace, String columnFamily, boolean loadSSTables)
@@ -2127,6 +2133,49 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
                 throw new RuntimeException(e);
             }
         }
+    }
+    
+    public AbstractScanIterator getSequentialIterator(final AbstractBounds<RowPosition> range, long now)
+    {
+        final OpOrder.Group op = readOrdering.start();
+        final AbstractScanIterator it = getSequentialIterator(new DataRange(range, new IdentityQueryFilter()), now);
+        
+        //TODO Wrap the iterator because we need to call op.close() - correct?
+        return new AbstractScanIterator()
+        {
+            protected Row computeNext()
+            {
+                while (it.hasNext())
+                    return it.next();
+
+                return endOfData();
+            }
+
+            public void close() throws IOException
+            {
+                try 
+                {
+                    it.close();
+                }
+                catch (Exception ex) 
+                {
+                    logger.error("Failed to close abstract scan iterator", ex);
+                    throw ex;
+                }
+                finally 
+                {
+                    try 
+                    {
+                        op.close();
+                    }
+                    catch (Exception ex) 
+                    {
+                        logger.error("Failed to close read ordering op", ex);
+                        throw ex;
+                    }
+                }
+            }
+        };
     }
 
     public CellNameType getComparator()

@@ -26,7 +26,6 @@ import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNameType;
@@ -53,7 +52,7 @@ public class KeysSearcher extends SecondaryIndexSearcher
     public List<Row> search(ExtendedFilter filter)
     {
         assert filter.getClause() != null && !filter.getClause().isEmpty();
-        final IndexExpression primary = highestSelectivityPredicate(filter.getClause());
+        final IndexExpression primary = highestSelectivityPredicate(filter);
         final SecondaryIndex index = indexManager.getIndexForColumn(primary.column);
         // TODO: this should perhaps not open and maintain a writeOp for the full duration, but instead only *try* to delete stale entries, without blocking if there's no room
         // as it stands, we open a writeOp and keep it open for the duration to ensure that should this CF get flushed to make room we don't block the reclamation of any room  being made
@@ -75,7 +74,7 @@ public class KeysSearcher extends SecondaryIndexSearcher
         assert index != null;
         assert index.getIndexCfs() != null;
         
-        final Collection<DecoratedKey> indexKeys = index.getIndexFor(primary);
+        final ColumnFamilyStore.AbstractScanIterator primaryRowsIt = index.getIndexedRows(filter, primary);
 
         if (logger.isDebugEnabled())
             logger.debug("Most-selective indexed predicate is {}",
@@ -99,8 +98,7 @@ public class KeysSearcher extends SecondaryIndexSearcher
             private Composite lastSeenKey;
             private Iterator<Cell> indexColumns;
             private int columnsRead;
-            private final Iterator<DecoratedKey> indexKeysIterator = indexKeys.iterator();
-            private DecoratedKey indexKey;
+            private Row primaryRow;
             private final int meanColumns = Math.max(index.getIndexCfs().getMeanColumns(), 1);
             
             // We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses
@@ -110,11 +108,11 @@ public class KeysSearcher extends SecondaryIndexSearcher
             {
                 while (true)
                 {
-                    if (indexKey == null) 
+                    if (primaryRow == null) 
                     {
-                        if (indexKeysIterator.hasNext())
+                        if (primaryRowsIt.hasNext())
                         {
-                            indexKey = indexKeysIterator.next();
+                            primaryRow = primaryRowsIt.next();
                             lastSeenKey = startKey;
                             columnsRead = Integer.MAX_VALUE;
                         }
@@ -138,7 +136,9 @@ public class KeysSearcher extends SecondaryIndexSearcher
                                          ((AbstractSimplePerColumnSecondaryIndex)index).expressionString(primary), 
                                          index.getBaseCfs().metadata.getKeyValidator().getString(startKey.toByteBuffer()));
                         
-                        QueryFilter indexFilter = QueryFilter.getSliceFilter(indexKey,
+                        //TODO - can we safely get rid of this query given that we already have the primary row?
+                        //ColumnFamily indexRow = primaryRow.cf;
+                        QueryFilter indexFilter = QueryFilter.getSliceFilter(primaryRow.key,
                                                                              index.getIndexCfs().name,
                                                                              lastSeenKey,
                                                                              endKey,
@@ -150,7 +150,7 @@ public class KeysSearcher extends SecondaryIndexSearcher
                         if (indexRow == null)
                         {
                             logger.trace("no data, moving to next primary key");
-                            indexKey = null;
+                            primaryRow = null;
                             continue;
                         }
 
@@ -212,10 +212,10 @@ public class KeysSearcher extends SecondaryIndexSearcher
                                 data.addAll(cf);
                         }
 
-                        if (((KeysIndex)index).isIndexEntryStale(indexKey.getKey(), data, filter.timestamp))
+                        if (((KeysIndex)index).isIndexEntryStale(primaryRow.key.getKey(), data, filter.timestamp))
                         {
                             // delete the index entry w/ its own timestamp
-                            Cell dummyCell = new BufferCell(primaryColumn, indexKey.getKey(), cell.timestamp());
+                            Cell dummyCell = new BufferCell(primaryColumn, primaryRow.key.getKey(), cell.timestamp());
                             ((PerColumnSecondaryIndex)index).delete(dk.getKey(), dummyCell, writeOp);
                             continue;
                         }
@@ -223,13 +223,16 @@ public class KeysSearcher extends SecondaryIndexSearcher
                     }
                     
                     if (columnsRead < rowsPerQuery) {
-                        indexKey = null;
+                        primaryRow = null;
                     }
                     indexColumns = null;
                  }
              }
 
-            public void close() throws IOException {}
+            public void close() throws IOException 
+            {
+                primaryRowsIt.close();
+            }
         };
     }
 }

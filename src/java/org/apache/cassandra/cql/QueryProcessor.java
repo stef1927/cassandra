@@ -33,7 +33,6 @@ import org.apache.cassandra.cql.hooks.ExecutionContext;
 import org.apache.cassandra.cql.hooks.PostPreparationHook;
 import org.apache.cassandra.cql.hooks.PreExecutionHook;
 import org.apache.cassandra.cql.hooks.PreparationContext;
-import org.apache.cassandra.db.CounterCell;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNameType;
@@ -63,7 +62,6 @@ import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Pair;
 import org.apache.cassandra.utils.SemanticVersion;
 import org.antlr.runtime.*;
-
 
 import static org.apache.cassandra.thrift.ThriftValidation.validateColumnFamily;
 
@@ -244,7 +242,7 @@ public class QueryProcessor
             return new NamesQueryFilter(getColumnNames(select, metadata, variables));
         }
     }
-
+   
     /* Test for SELECT-specific taboos */
     private static void validateSelect(String keyspace, SelectStatement select, List<ByteBuffer> variables) throws InvalidRequestException
     {
@@ -275,10 +273,10 @@ public class QueryProcessor
             for (Relation relation : select.getColumnRelations())
             {
                 ByteBuffer name = relation.getEntity().getByteBuffer(at, variables);
-                if ((relation.operator() == RelationType.EQ) && idxManager.indexes(comparator.cellFromByteBuffer(name)))
+                if (relation.supportsIndexing() && idxManager.indexes(comparator.cellFromByteBuffer(name)))
                     return;
             }
-            throw new InvalidRequestException("No indexed columns present in by-columns clause with \"equals\" operator");
+            throw new InvalidRequestException("No indexed columns present in by-columns clause with valid operator");
         }
     }
 

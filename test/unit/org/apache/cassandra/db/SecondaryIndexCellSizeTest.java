@@ -18,6 +18,7 @@
 */
 package org.apache.cassandra.db;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Collection;
@@ -26,6 +27,7 @@ import java.util.Set;
 import org.junit.Test;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNames;
+import org.apache.cassandra.db.filter.ExtendedFilter;
 import org.apache.cassandra.db.index.PerColumnSecondaryIndex;
 import org.apache.cassandra.db.index.PerRowSecondaryIndex;
 import org.apache.cassandra.db.index.SecondaryIndexSearcher;
@@ -133,20 +135,24 @@ public class SecondaryIndexCellSizeTest
             return true;
         }
 
-        @Override
-        public long estimateResultRows() {
-            return 0;
-        }
-        
         public DecoratedKey getIndexKeyFor(ByteBuffer value)
         {
             ByteBuffer name = columnDefs.iterator().next().name.bytes;
             return new BufferDecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).type, value), value);
         }
 
-        public Collection<DecoratedKey> getIndexFor(IndexExpression expr)
+        public ColumnFamilyStore.AbstractScanIterator getIndexedRows(ExtendedFilter filter, IndexExpression primary)
         {
-            return Arrays.asList(getIndexKeyFor(expr.value));
+            return new ColumnFamilyStore.AbstractScanIterator() {
+
+                protected Row computeNext()
+                {
+                    return endOfData();
+                }
+                
+                public void close() throws IOException{ }
+                
+            };
         }
     }
 
@@ -226,20 +232,24 @@ public class SecondaryIndexCellSizeTest
             return true;
         }
 
-        @Override
-        public long estimateResultRows() {
-            return 0;
-        }
-        
         public DecoratedKey getIndexKeyFor(ByteBuffer value)
         {
             ByteBuffer name = columnDefs.iterator().next().name.bytes;
             return new BufferDecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).type, value), value);
         }
 
-        public Collection<DecoratedKey> getIndexFor(IndexExpression expr)
+        public ColumnFamilyStore.AbstractScanIterator getIndexedRows(ExtendedFilter filter, IndexExpression primary)
         {
-            return Arrays.asList(getIndexKeyFor(expr.value));
+            return new ColumnFamilyStore.AbstractScanIterator() {
+
+                protected Row computeNext()
+                {
+                    return endOfData();
+                }
+                
+                public void close() throws IOException{ }
+                
+            };
         }
     }
 }

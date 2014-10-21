@@ -58,7 +58,7 @@ public class CompositesSearcher extends SecondaryIndexSearcher
     public List<Row> search(ExtendedFilter filter)
     {
         assert filter.getClause() != null && !filter.getClause().isEmpty();
-        final IndexExpression primary = highestSelectivityPredicate(filter.getClause());
+        final IndexExpression primary = highestSelectivityPredicate(filter);
         final CompositesIndex index = (CompositesIndex)indexManager.getIndexForColumn(primary.column);
         // TODO: this should perhaps not open and maintain a writeOp for the full duration, but instead only *try* to delete stale entries, without blocking if there's no room
         // as it stands, we open a writeOp and keep it open for the duration to ensure that should this CF get flushed to make room we don't block the reclamation of any room being made
@@ -96,7 +96,7 @@ public class CompositesSearcher extends SecondaryIndexSearcher
         assert index != null;
         assert index.getIndexCfs() != null;
         
-        final Collection<DecoratedKey> indexKeys = index.getIndexFor(primary);
+        final ColumnFamilyStore.AbstractScanIterator primaryRowsIt = index.getIndexedRows(filter, primary);
 
         if (logger.isDebugEnabled())
             logger.debug("Most-selective indexed predicate is {}", index.expressionString(primary));
@@ -129,8 +129,7 @@ public class CompositesSearcher extends SecondaryIndexSearcher
             // We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses
             private final int rowsPerQuery = Math.max(Math.min(filter.maxRows(), filter.maxColumns() / meanColumns), 2);
 
-            private final Iterator<DecoratedKey> indexKeysIterator = indexKeys.iterator();
-            private DecoratedKey indexKey;
+            private Row primaryRow;
             
             public boolean needsFiltering()
             {
@@ -164,11 +163,11 @@ public class CompositesSearcher extends SecondaryIndexSearcher
                     if (columnsCount >= limit)
                         return makeReturn(currentKey, data);
                     
-                    if (indexKey == null) 
+                    if (primaryRow == null) 
                     {
-                        if (indexKeysIterator.hasNext())
+                        if (primaryRowsIt.hasNext())
                         {
-                            indexKey = indexKeysIterator.next();
+                            primaryRow = primaryRowsIt.next();
                             lastSeenPrefix = startPrefix;
                             columnsRead = Integer.MAX_VALUE;
                         }
@@ -191,7 +190,9 @@ public class CompositesSearcher extends SecondaryIndexSearcher
                             logger.trace("Scanning index {} starting with {}",
                                          index.expressionString(primary), indexComparator.getString(startPrefix));
 
-                        QueryFilter indexFilter = QueryFilter.getSliceFilter(indexKey,
+                        //TODO - can we safely get rid of this query given that we already have the primary row?
+                        //ColumnFamily indexRow = primaryRow.cf;
+                        QueryFilter indexFilter = QueryFilter.getSliceFilter(primaryRow.key,
                                                                              index.getIndexCfs().name,
                                                                              lastSeenPrefix,
                                                                              endPrefix,
@@ -202,7 +203,7 @@ public class CompositesSearcher extends SecondaryIndexSearcher
                         if (indexRow == null || !indexRow.hasColumns())
                         {
                             logger.trace("No data moving to next primary key");
-                            indexKey = null;
+                            primaryRow = null;
                             continue;
                         }
                         
@@ -230,7 +231,7 @@ public class CompositesSearcher extends SecondaryIndexSearcher
                             continue;
                         }
 
-                        CompositesIndex.IndexedEntry entry = index.decodeEntry(indexKey, cell);
+                        CompositesIndex.IndexedEntry entry = index.decodeEntry(primaryRow.key, cell);
                         DecoratedKey dk = baseCfs.partitioner.decorateKey(entry.indexedKey);
 
                         // Are we done for this row?
@@ -327,14 +328,16 @@ public class CompositesSearcher extends SecondaryIndexSearcher
                     }
                     
                     if (columnsRead < rowsPerQuery) {
-                        indexKey = null;
+                        primaryRow = null;
                     }
                     
                     indexCells = null;
                  }
              }
 
-            public void close() throws IOException {}
+            public void close() throws IOException {
+                primaryRowsIt.close();
+            }
         };
     }
 }

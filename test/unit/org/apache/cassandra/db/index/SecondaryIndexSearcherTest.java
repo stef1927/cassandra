@@ -21,16 +21,14 @@ import org.apache.cassandra.db.IndexExpression;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.Row;
-import org.apache.cassandra.db.RowPosition;
 import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNameType;
-import org.apache.cassandra.db.filter.ExtendedFilter;
 import org.apache.cassandra.db.marshal.LongType;
 import org.apache.cassandra.db.marshal.UTF8Type;
-import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.utils.ByteBufferUtil;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 public class SecondaryIndexSearcherTest extends SchemaLoader
@@ -56,6 +54,60 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
     
     private final int MAX_RESULTS = 100;
     
+    // according to Junit doc this should run after SchemaLoader.loadSchema()
+    // http://junit.sourceforge.net/javadoc/org/junit/BeforeClass.html
+    @BeforeClass
+    public static void enhanceSchema() throws ConfigurationException, InterruptedException, ExecutionException 
+    {
+        addColumn(KS1, KS1_CF_NAME, KS1_INDEXED_MANUAL_COL_NAME, IndexType.KEYS);
+        addColumn(KS2, KS2_CF_NAME, KS2_INDEXED_MANUAL_COL_NAME, IndexType.COMPOSITES);
+        
+        addColumn(KS1, KS1_CF_NAME, KS1_NON_INDEXED_COL_NAME, null);
+        addColumn(KS2, KS2_CF_NAME, KS2_NON_INDEXED_COL_NAME, null);
+    }
+    
+    private static void addColumn(String keySpaceName, 
+            String columnFamilyName, 
+            String columnName, 
+            IndexType indexType) throws InterruptedException, ExecutionException, ConfigurationException 
+    {
+        Keyspace keyspace = Keyspace.open(keySpaceName);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(columnFamilyName);
+
+        ByteBuffer colName = ByteBufferUtil.bytes(columnName);
+
+        if (indexType == null)
+        {
+            ColumnDefinition cd = ColumnDefinition.regularDef(cfs.metadata, colName, UTF8Type.instance, 0);
+            cfs.metadata.addColumnDefinition(cd);
+        }
+        else
+        {
+            ColumnDefinition cd = null;
+            if (indexType == IndexType.COMPOSITES)
+            {
+                cd = ColumnDefinition.regularDef(cfs.metadata, colName, UTF8Type.instance, 1);
+                cfs.metadata.addColumnDefinition(cd);
+
+                cd.setIndex(columnName + "_index", indexType, Collections.<String, String>emptyMap());
+            }
+            else if (indexType == IndexType.KEYS)
+            {
+                cd = ColumnDefinition.regularDef(cfs.metadata, colName, LongType.instance, null);
+                cfs.metadata.addColumnDefinition(cd);
+
+                cd.setIndex(columnName + "_index", indexType, null);
+            }
+            else
+            {
+                throw new RuntimeException("Unsupported index type");
+            }
+
+            Future<?> future = cfs.indexManager.addIndexedColumn(cd);
+            future.get();
+        }
+    }
+    
     private void testIndexScanSimple(String keySpaceName, 
             String columnFamilyName, 
             Map<String, Map<String, Long>> values, 
@@ -77,16 +129,19 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
     {
         ColumnFamilyStore cfs = Keyspace.open(keySpaceName).getColumnFamilyStore(columnFamilyName);
         
+        long now = System.currentTimeMillis();
         for (Map.Entry<String, Map<String, Long>> entry : values.entrySet())
         {
             Mutation rm = new Mutation(keySpaceName, ByteBufferUtil.bytes(entry.getKey()));
+            rm.delete(columnFamilyName, now);
             
             for (Map.Entry<String, Long> cell : entry.getValue().entrySet()) 
             {
                 CellName cellName = cellname(cell.getKey());
-                rm.add(columnFamilyName, cellName, ByteBufferUtil.bytes(cell.getValue()), 0);
-                rm.apply();
+                rm.add(columnFamilyName, cellName, ByteBufferUtil.bytes(cell.getValue()), now+1);
             }
+            
+            rm.apply();
         }
         
         List<Row> rows = search(clause, cfs);
@@ -126,15 +181,15 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
             List<IndexExpression> clause,
             Map<String, Map<String, Long>> expectedValues) {
 
-        Keyspace keyspace = Keyspace.open(keySpaceName);
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(columnFamilyName);
-        
+        ColumnFamilyStore cfs = Keyspace.open(keySpaceName).getColumnFamilyStore(columnFamilyName);
         CellNameType baseComparator = cfs.getComparator();
         
+        long now = System.currentTimeMillis();
         for (Map.Entry<String, Map<String, Long>> entry : values.entrySet())
         {
             Mutation rm = new Mutation(keySpaceName, ByteBufferUtil.bytes(entry.getKey()));
-
+            rm.delete(columnFamilyName, now);
+            
             for (Map.Entry<String, Long> cell : entry.getValue().entrySet()) 
             {
                 ByteBuffer colName = ByteBufferUtil.bytes(cell.getKey());
@@ -143,9 +198,10 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
                 CellName compositeName = baseComparator.makeCellName(clusterKey, colName);
                 ByteBuffer val1 = ByteBufferUtil.bytes(cell.getValue());
 
-                rm.add(columnFamilyName, compositeName, val1, 0);
-                rm.apply();
+                rm.add(columnFamilyName, compositeName, val1, now + 1);
             }
+            
+            rm.apply();
         }
         
         List<Row> rows = search(clause, cfs);
@@ -169,54 +225,10 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
 
     private List<Row> search(List<IndexExpression> clause, ColumnFamilyStore cfs)
     {
-        List<Row> rows = null;
         if (!cfs.indexManager.hasIndexFor(clause))
-            return rows;
+            return null;
         
-        Range<RowPosition> range = Util.range("", "");
-        ExtendedFilter filter = cfs.makeExtendedFilter(range, 
-                                                       new IdentityQueryFilter(), 
-                                                       clause, 
-                                                       MAX_RESULTS, 
-                                                       false, 
-                                                       false, 
-                                                       System.currentTimeMillis());
-        
-        assertNotNull(filter);
-        
-        SecondaryIndexSearcher mostSelective = cfs.indexManager.mostSelectiveIndexSearcher(filter);
-        assertNotNull(mostSelective);
-        
-        IndexExpression mostSelectiveExpr = mostSelective.highestSelectivityPredicate(filter.getClause());
-        assertNotNull(mostSelectiveExpr);
-        
-        assertEquals(clause.get(0), mostSelectiveExpr); 
-        
-        rows = mostSelective.search(filter);
-        return rows;
-    }
-    
-    private void addColumn(String keySpaceName, 
-                               String columnFamilyName, 
-                               String columnName, 
-                               IndexType indexType) throws InterruptedException, ExecutionException, ConfigurationException 
-    {
-        Keyspace keyspace = Keyspace.open(keySpaceName);
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(columnFamilyName);
-        
-        ByteBuffer colName = ByteBufferUtil.bytes(columnName);
-        
-        ColumnDefinition cd = ColumnDefinition.regularDef(cfs.metadata, colName, UTF8Type.instance, 1);
-        assertNotNull(cd);
-        
-        cfs.metadata.addColumnDefinition(cd);
-        
-        if (indexType != null)
-        {
-            cd.setIndex(columnName + "_index", indexType, Collections.<String, String>emptyMap());
-            Future<?> future = cfs.indexManager.addIndexedColumn(cd);
-            future.get();
-        }
+        return cfs.search(Util.range("", ""), clause, new IdentityQueryFilter(), MAX_RESULTS);
     }
     
     //Each key will contain the same column with the given values one per key
@@ -490,9 +502,7 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
         
         Map<String, Map<String,Long>> expectedValues = makeMapForColumn(KS2_INDEXED_COL_NAME, 
                                                                         new String[] { "kk4"}, 
-                                                                        new Long[] {4L});
-        
-        addColumn(KS2, KS2_CF_NAME, KS2_NON_INDEXED_COL_NAME, null);
+                                                                        new Long[] {2L});
         
         addKeysForColumn(values, KS2_NON_INDEXED_COL_NAME, new String[] {"kk3", "kk4"}, new Long[] {3L, 4L});
         addKeysForColumn(expectedValues, KS2_NON_INDEXED_COL_NAME, new String[] {"kk4"}, new Long[] {4L});
@@ -514,9 +524,7 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
         
         Map<String, Map<String,Long>> expectedValues = makeMapForColumn(KS2_INDEXED_COL_NAME, 
                                                                         new String[] { "kk4"}, 
-                                                                        new Long[] {4L});
-        
-        addColumn(KS2, KS2_CF_NAME, KS2_INDEXED_MANUAL_COL_NAME, IndexType.COMPOSITES);
+                                                                        new Long[] {2L});
         
         addKeysForColumn(values, KS2_INDEXED_MANUAL_COL_NAME, new String[] {"kk3", "kk4"}, new Long[] {3L, 4L});
         addKeysForColumn(expectedValues, KS2_INDEXED_MANUAL_COL_NAME, new String[] {"kk4"}, new Long[] {4L});

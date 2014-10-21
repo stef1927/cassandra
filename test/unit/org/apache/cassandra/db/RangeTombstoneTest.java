@@ -45,6 +45,7 @@ import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNames;
 import org.apache.cassandra.db.composites.Composites;
 import org.apache.cassandra.db.filter.ColumnSlice;
+import org.apache.cassandra.db.filter.ExtendedFilter;
 import org.apache.cassandra.db.filter.IDiskAtomFilter;
 import org.apache.cassandra.db.filter.QueryFilter;
 import org.apache.cassandra.db.filter.SliceQueryFilter;
@@ -619,20 +620,24 @@ public class RangeTombstoneTest extends SchemaLoader
 
         public boolean indexes(CellName name) { return name.toByteBuffer().equals(ByteBufferUtil.bytes(1)); }
 
-        @Override
-        public long estimateResultRows() {
-            return 0;
-        }
-        
         public DecoratedKey getIndexKeyFor(ByteBuffer value)
         {
             ByteBuffer name = columnDefs.iterator().next().name.bytes;
             return new BufferDecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).type, value), value);
         }
 
-        public Collection<DecoratedKey> getIndexFor(IndexExpression expr)
+        public ColumnFamilyStore.AbstractScanIterator getIndexedRows(ExtendedFilter filter, IndexExpression primary)
         {
-            return Arrays.asList(getIndexKeyFor(expr.value));
+            return new ColumnFamilyStore.AbstractScanIterator() {
+
+                protected Row computeNext()
+                {
+                    return endOfData();
+                }
+                
+                public void close() throws IOException{ }
+                
+            };
         }
     }
 }

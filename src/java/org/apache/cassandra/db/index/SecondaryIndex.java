@@ -18,10 +18,10 @@
 package org.apache.cassandra.db.index;
 
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
@@ -32,7 +32,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.db.BufferDecoratedKey;
 import org.apache.cassandra.db.Cell;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
@@ -42,18 +41,17 @@ import org.apache.cassandra.db.compaction.CompactionManager;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNameType;
 import org.apache.cassandra.db.composites.SimpleDenseCellNameType;
+import org.apache.cassandra.db.filter.ExtendedFilter;
 import org.apache.cassandra.db.index.composites.CompositesIndex;
 import org.apache.cassandra.db.index.keys.KeysIndex;
 import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.db.marshal.BytesType;
 import org.apache.cassandra.db.marshal.LocalByPartionerType;
-import org.apache.cassandra.dht.LocalToken;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.io.sstable.ReducingKeyIterator;
 import org.apache.cassandra.io.sstable.SSTableReader;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.memory.MemtableAllocator;
 
 /**
  * Abstract base class for different types of secondary indexes.
@@ -166,14 +164,11 @@ public abstract class SecondaryIndex
      * @return the underlying column family store or null
      */
     public abstract ColumnFamilyStore getIndexCfs();
-    
-    /** Return the best estimate of how many columns we have for this expression 
-     * @param The index expression
-     * @return the estimated number of columns
-     */
-    public int getExpectedNumberOfColumns(IndexExpression expr) {
+
+    public long estimateResultRows(ExtendedFilter filter, IndexExpression primary)
+    {
         return getIndexCfs().getMeanColumns();
-    }
+    } 
 
     /**
      * Delete all files and references to this index
@@ -297,11 +292,13 @@ public abstract class SecondaryIndex
     public abstract DecoratedKey getIndexKeyFor(ByteBuffer value);
 
     /** 
-     * Returns a list of decorated keys for one or more column values according to the expression operator
-     * @param expr the expression containing value and operator
-     * @return the list of keys
+     * Returns an iterator to one or more rows according to the filter 
+     * key range and the keys selected by the primary expression
+     * @param filter the query filter
+     * @param primary the primary expression
+     * @return the row iterator
      */
-    public abstract Collection<DecoratedKey> getIndexFor(IndexExpression expr); 
+    public abstract ColumnFamilyStore.AbstractScanIterator getIndexedRows(ExtendedFilter filter, IndexExpression primary);
     
     /**
      * Returns true if the provided cell name is indexed by this secondary index.
@@ -355,8 +352,6 @@ public abstract class SecondaryIndex
     }
 
     public abstract boolean validate(Cell cell);
-
-    public abstract long estimateResultRows();
 
     /**
      * Returns the index comparator for index backed by CFS, or null.

@@ -563,9 +563,24 @@ public class ThriftValidation
             throw new org.apache.cassandra.exceptions.InvalidRequestException("index clause list may not be empty");
 
         if (!validateFilterClauses(metadata, index_clause.expressions))
-            throw new org.apache.cassandra.exceptions.InvalidRequestException("No indexed columns present in index clause with operator EQ");
+            throw new org.apache.cassandra.exceptions.InvalidRequestException("No indexed columns present in index clause with valid operator");
     }
 
+    private static boolean supportsIndexing(IndexExpression expr)
+    {
+        switch(expr.op)
+        {
+        case EQ:
+        case GTE:
+        case GT:
+        case LTE:
+        case LT:
+            return true;
+        default:
+            return false;
+        }
+    }
+    
     // return true if index_clause contains an indexed columns with operator EQ
     public static boolean validateFilterClauses(CFMetaData metadata, List<IndexExpression> index_clause)
     throws org.apache.cassandra.exceptions.InvalidRequestException
@@ -609,7 +624,7 @@ public class ThriftValidation
                                                                                   me.getMessage()));
             }
 
-            isIndexed |= (expression.op == IndexOperator.EQ) && idxManager.indexes(name);
+            isIndexed |= supportsIndexing(expression) && idxManager.indexes(name);
         }
 
         return isIndexed;

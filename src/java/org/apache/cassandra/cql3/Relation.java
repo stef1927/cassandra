@@ -31,6 +31,10 @@ public abstract class Relation {
             switch (this)
             {
                 case EQ:
+                case LT:
+                case LTE:
+                case GTE:
+                case GT:
                 case CONTAINS:
                 case CONTAINS_KEY:
                     return true;

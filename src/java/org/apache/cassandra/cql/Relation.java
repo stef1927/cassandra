@@ -62,6 +62,21 @@ public class Relation
     {
         return String.format("Relation(%s, %s, %s)", entity, relationType, value);
     }
+    
+    public boolean supportsIndexing()
+    {
+        switch(relationType)
+        {
+        case EQ:
+        case GTE:
+        case GT:
+        case LTE:
+        case LT:
+            return true;
+        default:
+            return false;
+        }
+    }
 }
 
 enum RelationType

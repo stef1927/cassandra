@@ -32,10 +32,12 @@ import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNameType;
+import org.apache.cassandra.db.filter.ExtendedFilter;
 import org.apache.cassandra.db.filter.IDiskAtomFilter;
 import org.apache.cassandra.db.filter.NamesQueryFilter;
 import org.apache.cassandra.db.filter.QueryFilter;
 import org.apache.cassandra.db.marshal.AbstractType;
+import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.Bounds;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.LocalPartitioner;
@@ -81,68 +83,56 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
         return columnDef.type;
     }
 
-    @Override
     public DecoratedKey getIndexKeyFor(ByteBuffer value)
     {
         return new BufferDecoratedKey(new LocalToken(getIndexKeyComparator(), value), value);
     }
     
-    @Override
-    public Collection<DecoratedKey> getIndexFor(IndexExpression expr) 
+    public ColumnFamilyStore.AbstractScanIterator getIndexedRows(ExtendedFilter filter, IndexExpression primary)
     {
-        List<DecoratedKey> ret = new LinkedList<DecoratedKey>();
-        IndexRange range = new IndexRange(this, expr);
-        
-        if (range.isSingleValue()) 
-        {
-            ret.add(new BufferDecoratedKey(new LocalToken(getIndexKeyComparator(), expr.value), expr.value));
-            return ret;
-        }
-       
-        for (Row row : range.getRows())
-        {
-            ret.add(row.key);
-        }
-
-        return ret;
+        IndexRange range = new IndexRange(this, filter, primary);        
+        return range.getIndexedRows();
     }
     
     @Override
-    public int getExpectedNumberOfColumns(IndexExpression expr) {
-        IndexRange range = new IndexRange(this, expr);
-        
-        if (range.isSingleValue())
-            return indexCfs.getMeanColumns();
-        
-        int ret = 0;
-        for (Row row : range.getRows()) 
-        {
-            ret += row.cf.getColumnCount();
-        }
-        return ret;
-    }
+    public long estimateResultRows(ExtendedFilter filter, IndexExpression primary)
+    {
+        IndexRange range = new IndexRange(this, filter, primary);
+        return range.estimateResultRows();
+    } 
     
     private final static class IndexRange 
     {
         private final AbstractSimplePerColumnSecondaryIndex index;
-        private final IndexExpression expr;
+        private final ExtendedFilter filter;
+        private final IndexExpression primary;
         
-        public IndexRange(AbstractSimplePerColumnSecondaryIndex index, IndexExpression expr)
+        // We need a filter for the list of expressions and the timestamp, possibly filter.dataRange.keyRange() too
+        public IndexRange(AbstractSimplePerColumnSecondaryIndex index, ExtendedFilter filter, IndexExpression primary)
         {
             this.index = index;
-            this.expr = expr;
+            this.filter = filter;
+            this.primary = primary;
         }
         
-        public List<Row> getRows() {
+        public ColumnFamilyStore.AbstractScanIterator getIndexedRows() {
             Range<RowPosition> range = new Range<RowPosition>(minPos(), maxPos());
-            IDiskAtomFilter filter = new IdentityQueryFilter();
+            return index.indexCfs.getSequentialIterator(range, filter.timestamp);
+        }
+        
+        public long estimateResultRows() 
+        {
+            ColumnFamilyStore cfs = index.indexCfs;
+            if (isSingleValue())
+                return cfs.getMeanColumns();
             
-            return index.indexCfs.getRangeSlice(range, null, filter, Integer.MAX_VALUE, System.currentTimeMillis());
+            Range<RowPosition> range = new Range<RowPosition>(minPos(), maxPos());
+            return cfs.getApproximateKeyCount(range) * cfs.getMeanColumns(); 
         }
         
         public boolean isSingleValue() 
         {
-            switch (expr.operator)
+            switch (primary.operator)
             {
                 case EQ:
                 case CONTAINS:
@@ -153,7 +143,37 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
             }
         }
         
-        private RowPosition minPos() 
+        private RowPosition minPos() {
+            RowPosition ret = minPos(primary);
+            
+            // TODO - can we consider the filter data range at this level and get rid of the query 
+            // in the searcher getIndexedIterator loop?
+            //final AbstractBounds<RowPosition> filterRange = filter.dataRange.keyRange();
+            //if (filterRange.left.compareTo(ret) > 0) {
+            //    ret = filterRange.left;
+            //}
+            
+            if (isSingleValue())
+                return ret;
+            
+            for (IndexExpression expr : filter.getClause()) 
+            {
+                if (expr.equals(primary))
+                    continue;
+                
+                if (!expr.column.equals(primary.column))
+                    continue;
+                
+                RowPosition pos = minPos(expr);
+                if (pos.compareTo(ret) > 0) {
+                    ret = pos;
+                }
+            }
+            
+            return ret;
+        }
+        
+        private RowPosition minPos(IndexExpression expr) 
         {
             switch (expr.operator)
             {
@@ -163,7 +183,7 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
                     return new LocalToken(index.getIndexKeyComparator(), expr.value).minKeyBound();
                 case LT:
                 case LTE:    
-                    return Util.rp("", index.indexCfs.partitioner);
+                    return Util.rp("", index.indexCfs.partitioner); //TODO absolute minimum - is this correct??
                 case EQ:
                 case CONTAINS:
                 case CONTAINS_KEY:
@@ -172,7 +192,37 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
             }
         }
         
-        private RowPosition maxPos() 
+        private RowPosition maxPos() {
+            RowPosition ret = maxPos(primary);
+            
+            //TODO - can we consider the filter date range at this level and get rid of the query 
+            //in the searcher getIndexedIterator loop?
+            //final AbstractBounds<RowPosition> filterRange = filter.dataRange.keyRange();
+            //if (filterRange.right.compareTo(ret) < 0) {
+            //    ret = filterRange.right;
+            //}
+            
+            if (isSingleValue())
+                return ret;
+            
+            for (IndexExpression expr : filter.getClause()) 
+            {
+                if (expr.equals(primary))
+                    continue;
+                
+                if (!expr.column.equals(primary.column))
+                    continue;
+                
+                RowPosition pos = maxPos(expr);
+                if (pos.compareTo(ret) < 0) {
+                    ret = pos;
+                }
+            }
+            
+            return ret;
+        }
+        
+        private RowPosition maxPos(IndexExpression expr) 
         {
             switch (expr.operator)
             {
@@ -182,7 +232,7 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
                     return new LocalToken(index.getIndexKeyComparator(), expr.value).maxKeyBound();
                 case GT:
                 case GTE:   
-                    return Util.rp("", index.indexCfs.partitioner);
+                    return Util.rp("", index.indexCfs.partitioner); //TODO absolute max - of this correct?
                 case EQ:
                 case CONTAINS:
                 case CONTAINS_KEY:
@@ -297,9 +347,4 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
         indexCfs.metadata.reloadSecondaryIndexMetadata(baseCfs.metadata);
         indexCfs.reload();
     }
-    
-    public long estimateResultRows()
-    {
-        return getIndexCfs().getMeanColumns();
-    } 
 }

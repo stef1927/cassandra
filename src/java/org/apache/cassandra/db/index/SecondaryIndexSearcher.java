@@ -38,12 +38,6 @@ public abstract class SecondaryIndexSearcher
         this.baseCfs = indexManager.baseCfs;
     }
 
-    public SecondaryIndex highestSelectivityIndex(List<IndexExpression> clause)
-    {
-        IndexExpression expr = highestSelectivityPredicate(clause);
-        return expr == null ? null : indexManager.getIndexForColumn(expr.column);
-    }
-
     public abstract List<Row> search(ExtendedFilter filter);
 
     /**
@@ -63,12 +57,13 @@ public abstract class SecondaryIndexSearcher
         return false;
     }
 
-    protected IndexExpression highestSelectivityPredicate(List<IndexExpression> clause)
+    public IndexExpression highestSelectivityPredicate(ExtendedFilter filter)
     {
         IndexExpression best = null;
-        int bestMeanCount = Integer.MAX_VALUE;
-        Map<SecondaryIndex, Integer> candidates = new HashMap<>();
-
+        long bestMeanCount = Long.MAX_VALUE;
+        Map<SecondaryIndex, Long> candidates = new HashMap<>();
+        List<IndexExpression> clause = filter.getClause();
+        
         for (IndexExpression expression : clause)
         {
             // skip columns belonging to a different index type
@@ -79,7 +74,7 @@ public abstract class SecondaryIndexSearcher
             if (index == null || index.getIndexCfs() == null || !expression.operator.allowsIndexQuery())
                 continue;
             
-            int columns = index.getExpectedNumberOfColumns(expression);
+            long columns = index.estimateResultRows(filter, expression);
             candidates.put(index, columns);
             
             if (columns < bestMeanCount)

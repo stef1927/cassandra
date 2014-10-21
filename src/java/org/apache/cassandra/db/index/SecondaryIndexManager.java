@@ -36,7 +36,6 @@ import java.util.concurrent.Future;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.config.IndexType;
 import org.apache.cassandra.db.Cell;
@@ -561,8 +560,10 @@ public class SecondaryIndexManager
         long bestEstimate = Long.MAX_VALUE;
         for (SecondaryIndexSearcher searcher : indexSearchers)
         {
-            SecondaryIndex highestSelectivityIndex = searcher.highestSelectivityIndex(filter.getClause());
-            long estimate = highestSelectivityIndex.estimateResultRows();
+            IndexExpression primary = searcher.highestSelectivityPredicate(filter);
+            SecondaryIndex highestSelectivityIndex = getIndexForColumn(primary.column);
+            
+            long estimate = highestSelectivityIndex.estimateResultRows(filter, primary);
             if (estimate <= bestEstimate)
             {
                 bestEstimate = estimate;

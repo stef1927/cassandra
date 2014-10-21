@@ -1430,7 +1430,7 @@ public class SelectStatement implements CQLStatement, MeasurableForPreparedCache
             if (!stmt.metadataRestrictions.isEmpty())
             {
                 if (!hasQueriableIndex)
-                    throw new InvalidRequestException("No indexed columns present in by-columns clause with Equal operator");
+                    throw new InvalidRequestException("No indexed columns present in by-columns clause with valid operator");
                 stmt.usesSecondaryIndexing = true;
             }
 
