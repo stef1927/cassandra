@@ -18,37 +18,21 @@
 package org.apache.cassandra.db.index;
 
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.LinkedList;
-import java.util.List;
 import java.util.concurrent.Future;
 
-import org.apache.cassandra.Util;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNameType;
 import org.apache.cassandra.db.filter.ExtendedFilter;
-import org.apache.cassandra.db.filter.IDiskAtomFilter;
-import org.apache.cassandra.db.filter.NamesQueryFilter;
-import org.apache.cassandra.db.filter.QueryFilter;
 import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.dht.AbstractBounds;
-import org.apache.cassandra.dht.Bounds;
-import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.LocalPartitioner;
 import org.apache.cassandra.dht.LocalToken;
 import org.apache.cassandra.dht.Range;
-import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.concurrent.OpOrder;
-
-import com.google.common.collect.ImmutableSortedSet;
 
 /**
  * Implements a secondary index for a column family using a second column family
@@ -146,13 +130,6 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
         private RowPosition minPos() {
             RowPosition ret = minPos(primary);
             
-            // TODO - can we consider the filter data range at this level and get rid of the query 
-            // in the searcher getIndexedIterator loop?
-            //final AbstractBounds<RowPosition> filterRange = filter.dataRange.keyRange();
-            //if (filterRange.left.compareTo(ret) > 0) {
-            //    ret = filterRange.left;
-            //}
-            
             if (isSingleValue())
                 return ret;
             
@@ -183,7 +160,7 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
                     return new LocalToken(index.getIndexKeyComparator(), expr.value).minKeyBound();
                 case LT:
                 case LTE:    
-                    return Util.rp("", index.indexCfs.partitioner); //TODO absolute minimum - is this correct??
+                    return index.indexCfs.partitioner.getMinimumToken().minKeyBound(); // Absolute minimum
                 case EQ:
                 case CONTAINS:
                 case CONTAINS_KEY:
@@ -194,13 +171,6 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
         
         private RowPosition maxPos() {
             RowPosition ret = maxPos(primary);
-            
-            //TODO - can we consider the filter date range at this level and get rid of the query 
-            //in the searcher getIndexedIterator loop?
-            //final AbstractBounds<RowPosition> filterRange = filter.dataRange.keyRange();
-            //if (filterRange.right.compareTo(ret) < 0) {
-            //    ret = filterRange.right;
-            //}
             
             if (isSingleValue())
                 return ret;
@@ -232,7 +202,7 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
                     return new LocalToken(index.getIndexKeyComparator(), expr.value).maxKeyBound();
                 case GT:
                 case GTE:   
-                    return Util.rp("", index.indexCfs.partitioner); //TODO absolute max - of this correct?
+                    return index.indexCfs.partitioner.getMinimumToken().maxKeyBound(); // Absolute minimum
                 case EQ:
                 case CONTAINS:
                 case CONTAINS_KEY:
