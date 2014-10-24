@@ -1,4 +1,5 @@
 2.0.17
+ * Add 'die' policy for commit log and disk failure (CASSANDRA-7927)
  * Avoid ballot clash in Paxos (CASSANDRA-9649)
  * Improve trace messages for RR (CASSANDRA-9479)
  * Fix suboptimal secondary index selection when restricted

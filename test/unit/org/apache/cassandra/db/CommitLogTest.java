@@ -23,11 +23,9 @@ import java.io.*;
 import java.nio.ByteBuffer;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 import java.util.zip.CRC32;
 import java.util.zip.Checksum;
 
-import com.google.common.util.concurrent.Uninterruptibles;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -45,6 +43,7 @@ import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.Killer;
 
 import static org.apache.cassandra.utils.ByteBufferUtil.bytes;
 
@@ -255,6 +254,47 @@ public class CommitLogTest extends SchemaLoader
         finally
         {
             DatabaseDescriptor.setCommitFailurePolicy(oldPolicy);
+        }
+    }
+
+    public class KillerForTests extends Killer.Impl
+    {
+        private boolean killed = false;
+
+        @Override
+        protected void kill(Throwable t)
+        {
+            killed = true;
+        }
+
+        public boolean wasKilled()
+        {
+            return killed;
+        }
+
+        public void reset()
+        {
+            killed = false;
+        }
+    }
+
+    @Test
+    public void testCommitFailurePolicy_die()
+    {
+        KillerForTests killerForTests = new KillerForTests();
+        Killer.Impl originalKiller = Killer.replaceImpl(killerForTests);
+        Config.CommitFailurePolicy oldPolicy = DatabaseDescriptor.getCommitFailurePolicy();
+
+        try
+        {
+            DatabaseDescriptor.setCommitFailurePolicy(Config.CommitFailurePolicy.die);
+            CommitLog.handleCommitError("Testing die policy", new Throwable());
+            Assert.assertTrue(killerForTests.wasKilled());
+        }
+        finally
+        {
+            DatabaseDescriptor.setCommitFailurePolicy(oldPolicy);
+            Killer.replaceImpl(originalKiller);
         }
     }
 

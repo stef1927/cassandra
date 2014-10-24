@@ -21,7 +21,6 @@ import java.io.*;
 import java.lang.management.ManagementFactory;
 import java.util.*;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import javax.management.MBeanServer;
@@ -36,12 +35,12 @@ import org.slf4j.LoggerFactory;
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.*;
-import org.apache.cassandra.io.FSError;
 import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.metrics.CommitLogMetrics;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.Killer;
 
 /*
  * Commit Log tracks every write operation into the system. The aim of the commit log is to be able to
@@ -414,6 +413,8 @@ public class CommitLog implements CommitLogMBean
     {
         switch (DatabaseDescriptor.getCommitFailurePolicy())
         {
+            case die:
+                Killer.kill(t);
             case stop:
                 StorageService.instance.stopTransports();
             case stop_commit:

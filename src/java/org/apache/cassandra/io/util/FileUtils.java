@@ -40,6 +40,7 @@ import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.io.sstable.CorruptSSTableException;
 import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.utils.Killer;
 
 public class FileUtils
 {
@@ -411,14 +412,26 @@ public class FileUtils
 
     public static void handleCorruptSSTable(CorruptSSTableException e)
     {
-        if (DatabaseDescriptor.getDiskFailurePolicy() == Config.DiskFailurePolicy.stop_paranoid)
-            StorageService.instance.stopTransports();
+        switch (DatabaseDescriptor.getDiskFailurePolicy())
+        {
+            case die:
+                StorageService.instance.stopTransports();
+                Killer.kill(e);
+                break;
+            case stop_paranoid:
+                StorageService.instance.stopTransports();
+                break;
+        }
     }
     
     public static void handleFSError(FSError e)
     {
         switch (DatabaseDescriptor.getDiskFailurePolicy())
         {
+            case die:
+                StorageService.instance.stopTransports();
+                Killer.kill(e);
+                break;
             case stop_paranoid:
             case stop:
                 StorageService.instance.stopTransports();
