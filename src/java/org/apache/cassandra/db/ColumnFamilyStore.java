@@ -2135,27 +2135,116 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         }
     }
     
-    public AbstractScanIterator getSequentialIterator(final AbstractBounds<RowPosition> range, long now)
+    public static abstract class AbstractCellIterator extends AbstractIterator<Cell> implements CloseableIterator<Cell>
+    {
+        public abstract DecoratedKey currentKey();
+    }
+    
+    public AbstractCellIterator getCellIterator(final AbstractBounds<RowPosition> range, 
+                                                       final SliceQueryFilter sliceFilter, 
+                                                       final long now)
     {
         final OpOrder.Group op = readOrdering.start();
-        final AbstractScanIterator it = getSequentialIterator(new DataRange(range, new IdentityQueryFilter()), now);
+        final AbstractScanIterator rowIt = getSequentialIterator(new DataRange(range, sliceFilter), now);
         
-        //TODO Wrap the iterator because we need to call op.close() - correct?
-        return new AbstractScanIterator()
+        return new AbstractCellIterator()
         {
-            protected Row computeNext()
+            Row currentRow = null;
+            Cell currentCell = null;
+
+            Iterator<Cell> cellIt = null;
+            SliceQueryFilter currentSliceFilter = sliceFilter;
+            
+            protected Cell computeNext()
             {
-                while (it.hasNext())
-                    return it.next();
-
-                return endOfData();
+                while (true) 
+                {
+                    if (cellIt == null) 
+                    { 
+                        logger.trace("Next row");
+                        
+                        if (rowIt.hasNext()) 
+                        {
+                            currentRow = rowIt.next();
+                            cellIt = currentRow.cf.getSortedColumns().iterator();
+                            currentCell = null;
+                        }
+                        else 
+                        { 
+                            logger.trace("No more rows");
+                            return endOfData();
+                        }
+                    }
+                    else if (!cellIt.hasNext())
+                    { 
+                        logger.trace("Cells of current row exhausted");
+                        
+                        if (currentRow.cf.getSortedColumns().size() < currentSliceFilter.count) 
+                        { 
+                            logger.trace("Read fewer than max num columns, next row");
+                            nextRow();
+                            continue;
+                        }
+                        else 
+                        { 
+                            logger.trace("See if this row has more cells by moving column slice forward");
+                          
+                            CellNameType comparator = currentRow.cf.metadata.comparator;
+                            currentSliceFilter = sliceFilter.withUpdatedStart(currentCell.name(), comparator);
+                            
+                            ColumnFamily data = getColumnFamily(new QueryFilter(currentRow.key, name, currentSliceFilter, now));
+                            if (data == null || !data.hasColumns())
+                            {
+                                nextRow();
+                                continue;
+                            }
+                            
+                            currentRow = new Row(currentRow.key, data);
+                            cellIt = currentRow.cf.getSortedColumns().iterator();
+                            
+                            Iterator<Cell> cellsTempIt = currentRow.cf.getSortedColumns().iterator();
+                            if (currentCell.name().equals(cellsTempIt.next().name()))
+                            {
+                                logger.trace("Skipping {}", comparator.getString(currentCell.name()));
+                                cellIt.next();
+                            }
+                            
+                            if (!cellIt.hasNext())
+                            {
+                                nextRow();
+                                continue;
+                            }
+                        }
+                    }
+                    
+                    if (cellIt.hasNext())
+                    {
+                        currentCell = cellIt.next();
+                        return currentCell;
+                    }
+                }
             }
+            
+            private void nextRow()
+            {
+                currentSliceFilter = sliceFilter;
+                currentRow = null;
+                cellIt = null;
+            }
+            
 
+            public DecoratedKey currentKey() 
+            {
+                return currentRow.key;
+            }
+            
             public void close() throws IOException
             {
+                logger.trace("Closing cell iterator");
+                
                 try 
                 {
-                    it.close();
+                    rowIt.close();
                 }
                 catch (Exception ex) 
                 {

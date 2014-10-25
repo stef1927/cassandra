@@ -27,6 +27,7 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.cassandra.db.*;
+import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNameType;
 import org.apache.cassandra.db.composites.Composite;
@@ -34,6 +35,7 @@ import org.apache.cassandra.db.composites.Composites;
 import org.apache.cassandra.db.filter.ExtendedFilter;
 import org.apache.cassandra.db.filter.IDiskAtomFilter;
 import org.apache.cassandra.db.filter.QueryFilter;
+import org.apache.cassandra.db.filter.SliceQueryFilter;
 import org.apache.cassandra.db.index.*;
 import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.Range;
@@ -74,8 +76,6 @@ public class KeysSearcher extends SecondaryIndexSearcher
         assert index != null;
         assert index.getIndexCfs() != null;
         
-        final ColumnFamilyStore.AbstractScanIterator primaryRowsIt = index.getIndexedRows(filter, primary);
-
         if (logger.isDebugEnabled())
             logger.debug("Most-selective indexed predicate is {}",
                          ((AbstractSimplePerColumnSecondaryIndex) index).expressionString(primary));
@@ -91,147 +91,79 @@ public class KeysSearcher extends SecondaryIndexSearcher
         final Composite startKey = range.left instanceof DecoratedKey ? type.make(((DecoratedKey)range.left).getKey()) : Composites.EMPTY;
         final Composite endKey = range.right instanceof DecoratedKey ? type.make(((DecoratedKey)range.right).getKey()) : Composites.EMPTY;
 
+        final int meanColumns = Math.max(index.getIndexCfs().getMeanColumns(), 1);
+        // We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses
+        final int rowsPerQuery = Math.max(Math.min(filter.maxRows(), filter.maxColumns() / meanColumns), 2);
+        
+        final SliceQueryFilter columnFilter = new SliceQueryFilter(startKey, endKey, false, rowsPerQuery);
+        final Range<RowPosition> keyRange = index.getIndexKeysFor(filter, primary);
+
+        final ColumnFamilyStore.AbstractCellIterator cellIt = index.getIndexCfs().getCellIterator(keyRange, columnFilter, filter.timestamp);
+        
         final CellName primaryColumn = baseCfs.getComparator().cellFromByteBuffer(primary.column);
 
         return new ColumnFamilyStore.AbstractScanIterator()
         {
-            private Composite lastSeenKey;
-            private Iterator<Cell> indexColumns;
-            private int columnsRead;
-            private Row primaryRow;
-            private final int meanColumns = Math.max(index.getIndexCfs().getMeanColumns(), 1);
-            
-            // We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses
-            private final int rowsPerQuery = Math.max(Math.min(filter.maxRows(), filter.maxColumns() / meanColumns), 2);
-            
             protected Row computeNext()
             {
-                while (true)
+                while (cellIt.hasNext())
                 {
-                    if (primaryRow == null) 
+                    Cell cell = cellIt.next();
+                    if (!cell.isLive(filter.timestamp))
                     {
-                        if (primaryRowsIt.hasNext())
-                        {
-                            primaryRow = primaryRowsIt.next();
-                            lastSeenKey = startKey;
-                            columnsRead = Integer.MAX_VALUE;
-                        }
-                        else 
-                        {
-                            logger.trace("No more primary keys");
-                            return endOfData();
-                        }
+                        logger.trace("skipping {}", cell.name());
+                        continue;
                     }
-                    
-                    if (indexColumns == null)
+
+                    DecoratedKey dk = baseCfs.partitioner.decorateKey(cell.name().toByteBuffer());
+                    if (!range.right.isMinimum(baseCfs.partitioner) && range.right.compareTo(dk) < 0)
                     {
-                        if (columnsRead < rowsPerQuery)
-                        {
-                            logger.trace("Read only {} (< {}) last page through, must be done", columnsRead, rowsPerQuery);
-                            return endOfData();
-                        }
-
-                        if (logger.isTraceEnabled() && (index instanceof AbstractSimplePerColumnSecondaryIndex))
-                            logger.trace("Scanning index {} starting with {}",
-                                         ((AbstractSimplePerColumnSecondaryIndex)index).expressionString(primary), 
-                                         index.getBaseCfs().metadata.getKeyValidator().getString(startKey.toByteBuffer()));
-                        
-                        //TODO - can we safely get rid of this query given that we already have the primary row?
-                        //ColumnFamily indexRow = primaryRow.cf;
-                        QueryFilter indexFilter = QueryFilter.getSliceFilter(primaryRow.key,
-                                                                             index.getIndexCfs().name,
-                                                                             lastSeenKey,
-                                                                             endKey,
-                                                                             false,
-                                                                             rowsPerQuery,
-                                                                             filter.timestamp);
-                        ColumnFamily indexRow = index.getIndexCfs().getColumnFamily(indexFilter);
-                        logger.trace("fetched {}", indexRow);
-                        if (indexRow == null)
-                        {
-                            logger.trace("no data, moving to next primary key");
-                            primaryRow = null;
-                            continue;
-                        }
-
-                        Collection<Cell> sortedCells = indexRow.getSortedColumns();
-                        columnsRead = sortedCells.size();
-                        indexColumns = sortedCells.iterator();
-                        Cell firstCell = sortedCells.iterator().next();
-
-                        // Paging is racy, so it is possible the first column of a page is not the last seen one.
-                        if (lastSeenKey != startKey && lastSeenKey.equals(firstCell.name()))
-                        {
-                            // skip the row we already saw w/ the last page of results
-                            indexColumns.next();
-                            logger.trace("Skipping {}", baseCfs.metadata.getKeyValidator().getString(firstCell.name().toByteBuffer()));
-                        }
-                        else if (range instanceof Range && indexColumns.hasNext() && firstCell.name().equals(startKey))
-                        {
-                            // skip key excluded by range
-                            indexColumns.next();
-                            logger.trace("Skipping first key as range excludes it");
-                        }
+                        logger.trace("Reached end of assigned scan range");
+                        return endOfData();
                     }
-
-                    while (indexColumns.hasNext())
+                    if (!range.contains(dk))
                     {
-                        Cell cell = indexColumns.next();
-                        lastSeenKey = cell.name();
-                        if (!cell.isLive(filter.timestamp))
-                        {
-                            logger.trace("skipping {}", cell.name());
-                            continue;
-                        }
-
-                        DecoratedKey dk = baseCfs.partitioner.decorateKey(lastSeenKey.toByteBuffer());
-                        if (!range.right.isMinimum(baseCfs.partitioner) && range.right.compareTo(dk) < 0)
-                        {
-                            logger.trace("Reached end of assigned scan range");
-                            return endOfData();
-                        }
-                        if (!range.contains(dk))
-                        {
-                            logger.trace("Skipping entry {} outside of assigned scan range", dk.getToken());
-                            continue;
-                        }
-
-                        logger.trace("Returning index hit for {}", dk);
-                        ColumnFamily data = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, filter.columnFilter(lastSeenKey.toByteBuffer()), filter.timestamp));
-                        // While the column family we'll get in the end should contains the primary clause cell, the initialFilter may not have found it and can thus be null
-                        if (data == null)
-                            data = ArrayBackedSortedColumns.factory.create(baseCfs.metadata);
-
-                        // as in CFS.filter - extend the filter to ensure we include the columns
-                        // from the index expressions, just in case they weren't included in the initialFilter
-                        IDiskAtomFilter extraFilter = filter.getExtraFilter(dk, data);
-                        if (extraFilter != null)
-                        {
-                            ColumnFamily cf = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, extraFilter, filter.timestamp));
-                            if (cf != null)
-                                data.addAll(cf);
-                        }
-
-                        if (((KeysIndex)index).isIndexEntryStale(primaryRow.key.getKey(), data, filter.timestamp))
-                        {
-                            // delete the index entry w/ its own timestamp
-                            Cell dummyCell = new BufferCell(primaryColumn, primaryRow.key.getKey(), cell.timestamp());
-                            ((PerColumnSecondaryIndex)index).delete(dk.getKey(), dummyCell, writeOp);
-                            continue;
-                        }
-                        return new Row(dk, data);
+                        logger.trace("Skipping entry {} outside of assigned scan range", dk.getToken());
+                        continue;
                     }
-                    
-                    if (columnsRead < rowsPerQuery) {
-                        primaryRow = null;
+                    if (range instanceof Range && cell.name().equals(startKey))
+                    {
+                        logger.trace("Skipping start key as range excludes it");
+                        continue;
                     }
-                    indexColumns = null;
-                 }
+
+                    logger.trace("Returning index hit for {}", dk);
+                    ColumnFamily data = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, filter.columnFilter(cell.name().toByteBuffer()), filter.timestamp));
+                    // While the column family we'll get in the end should contains the primary clause cell, the initialFilter may not have found it and can thus be null
+                    if (data == null)
+                        data = ArrayBackedSortedColumns.factory.create(baseCfs.metadata);
+
+                    // as in CFS.filter - extend the filter to ensure we include the columns
+                    // from the index expressions, just in case they weren't included in the initialFilter
+                    IDiskAtomFilter extraFilter = filter.getExtraFilter(dk, data);
+                    if (extraFilter != null)
+                    {
+                        ColumnFamily cf = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, extraFilter, filter.timestamp));
+                        if (cf != null)
+                            data.addAll(cf);
+                    }
+
+                    if (((KeysIndex)index).isIndexEntryStale(cellIt.currentKey().getKey(), data, filter.timestamp))
+                    {
+                        // delete the index entry w/ its own timestamp
+                        Cell dummyCell = new BufferCell(primaryColumn, cellIt.currentKey().getKey(), cell.timestamp());
+                        ((PerColumnSecondaryIndex)index).delete(dk.getKey(), dummyCell, writeOp);
+                        continue;
+                    }
+                    return new Row(dk, data);
+                }
+                
+                return endOfData();
              }
 
             public void close() throws IOException 
             {
-                primaryRowsIt.close();
+                cellIt.close();
             }
         };
     }

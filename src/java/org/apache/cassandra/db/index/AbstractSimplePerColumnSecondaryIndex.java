@@ -67,15 +67,17 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
         return columnDef.type;
     }
 
+    @Override
     public DecoratedKey getIndexKeyFor(ByteBuffer value)
     {
         return new BufferDecoratedKey(new LocalToken(getIndexKeyComparator(), value), value);
     }
     
-    public ColumnFamilyStore.AbstractScanIterator getIndexedRows(ExtendedFilter filter, IndexExpression primary)
+    @Override
+    public Range<RowPosition> getIndexKeysFor(ExtendedFilter filter, IndexExpression primary)
     {
         IndexRange range = new IndexRange(this, filter, primary);        
-        return range.getIndexedRows();
+        return range.getIndexKeysFor();
     }
     
     @Override
@@ -99,9 +101,8 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
             this.primary = primary;
         }
         
-        public ColumnFamilyStore.AbstractScanIterator getIndexedRows() {
-            Range<RowPosition> range = new Range<RowPosition>(minPos(), maxPos());
-            return index.indexCfs.getSequentialIterator(range, filter.timestamp);
+        public Range<RowPosition> getIndexKeysFor() {
+            return new Range<RowPosition>(minPos(), maxPos());
         }
         
         public long estimateResultRows() 

@@ -134,26 +134,6 @@ public class SecondaryIndexCellSizeTest
         {
             return true;
         }
-
-        public DecoratedKey getIndexKeyFor(ByteBuffer value)
-        {
-            ByteBuffer name = columnDefs.iterator().next().name.bytes;
-            return new BufferDecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).type, value), value);
-        }
-
-        public ColumnFamilyStore.AbstractScanIterator getIndexedRows(ExtendedFilter filter, IndexExpression primary)
-        {
-            return new ColumnFamilyStore.AbstractScanIterator() {
-
-                protected Row computeNext()
-                {
-                    return endOfData();
-                }
-                
-                public void close() throws IOException{ }
-                
-            };
-        }
     }
 
 
@@ -230,26 +210,6 @@ public class SecondaryIndexCellSizeTest
         public boolean indexes(CellName name)
         {
             return true;
-        }
-
-        public DecoratedKey getIndexKeyFor(ByteBuffer value)
-        {
-            ByteBuffer name = columnDefs.iterator().next().name.bytes;
-            return new BufferDecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).type, value), value);
-        }
-
-        public ColumnFamilyStore.AbstractScanIterator getIndexedRows(ExtendedFilter filter, IndexExpression primary)
-        {
-            return new ColumnFamilyStore.AbstractScanIterator() {
-
-                protected Row computeNext()
-                {
-                    return endOfData();
-                }
-                
-                public void close() throws IOException{ }
-                
-            };
         }
     }
 }

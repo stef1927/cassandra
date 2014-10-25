@@ -6,9 +6,11 @@ import static org.junit.Assert.*;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
@@ -17,15 +19,19 @@ import org.apache.cassandra.Util;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.config.IndexType;
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.IndexExpression;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.Row;
+import org.apache.cassandra.db.RowPosition;
 import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNameType;
+import org.apache.cassandra.db.filter.IDiskAtomFilter;
 import org.apache.cassandra.db.marshal.LongType;
 import org.apache.cassandra.db.marshal.UTF8Type;
+import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.junit.BeforeClass;
@@ -145,9 +151,7 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
         }
         
         List<Row> rows = search(clause, cfs);
-
-        assertNotNull(rows);
-        assertEquals(expectedValues.size(), rows.size());
+        verifyRows(rows, expectedValues.size());
 
         for (Row row : rows)
         {
@@ -205,9 +209,7 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
         }
         
         List<Row> rows = search(clause, cfs);
-
-        assertNotNull(rows);
-        assertEquals(expectedValues.size(), rows.size());
+        verifyRows(rows, expectedValues.size());
 
         for (Row row : rows)
         {
@@ -232,14 +234,14 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
     }
     
     //Each key will contain the same column with the given values one per key
-    Map<String, Map<String,Long>> makeMapForColumn(String columnName, String [] keys, Long[] values)
+    private Map<String, Map<String,Long>> makeMapForColumn(String columnName, String [] keys, Long[] values)
     {
         Map<String, Map<String,Long>> ret = new LinkedHashMap<String, Map<String,Long>>();
         addKeysForColumn(ret, columnName, keys, values);
         return ret;
     }
     
-    void addKeysForColumn(Map<String, Map<String,Long>> map, String columnName, String [] keys, Long[] values)
+    private void addKeysForColumn(Map<String, Map<String,Long>> map, String columnName, String [] keys, Long[] values)
     {
         int v = 0;
         for (String key : keys) 
@@ -252,6 +254,19 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
             }
             keyMap.put(columnName, values[v++]);
         }
+    }
+    
+    private void verifyRows(List<Row> rows, int expectedNum) 
+    {
+        assertNotNull(rows);
+        assertEquals(expectedNum, rows.size());
+        
+        //make sure no duplicates
+        Set<DecoratedKey> keys = new HashSet<DecoratedKey>();
+        for (Row row : rows)
+            keys.add(row.key);
+
+        assertEquals(rows.size(), keys.size());
     }
     
     @Test
@@ -536,5 +551,74 @@ public class SecondaryIndexSearcherTest extends SchemaLoader
         
         testIndexScanComposite(KS2, KS2_CF_NAME, values, clause, expectedValues);
     }
+    
+    @Test
+    public void testIndexScan_Keys_TwoColumns_Large()
+    {
+        Mutation rm;
+        ColumnFamilyStore cfs = Keyspace.open(KS1).getColumnFamilyStore(KS1_CF_NAME);
+        for (int i = 0; i < 100; i++)
+        {
+            rm = new Mutation(KS1, ByteBufferUtil.bytes("key" + i));
+            rm.add(KS1_CF_NAME, cellname(KS1_INDEXED_COL_NAME), ByteBufferUtil.bytes(34L), 0);
+            rm.add(KS1_CF_NAME, cellname(KS1_NON_INDEXED_COL_NAME), ByteBufferUtil.bytes((long) (i % 2)), 0);
+            rm.applyUnsafe();
+        }
+
+        IndexExpression idxExprEQ = new IndexExpression(ByteBufferUtil.bytes(KS1_INDEXED_COL_NAME), IndexExpression.Operator.EQ, ByteBufferUtil.bytes(34L));
+        IndexExpression idxExprLTE = new IndexExpression(ByteBufferUtil.bytes(KS1_INDEXED_COL_NAME), IndexExpression.Operator.LTE, ByteBufferUtil.bytes(34L));
+        IndexExpression idxExprGTE = new IndexExpression(ByteBufferUtil.bytes(KS1_INDEXED_COL_NAME), IndexExpression.Operator.GTE, ByteBufferUtil.bytes(34L));
+        
+        IndexExpression auxExprEQ = new IndexExpression(ByteBufferUtil.bytes(KS1_NON_INDEXED_COL_NAME), IndexExpression.Operator.EQ, ByteBufferUtil.bytes(1L));
+        IndexExpression auxExprLTE = new IndexExpression(ByteBufferUtil.bytes(KS1_NON_INDEXED_COL_NAME), IndexExpression.Operator.LTE, ByteBufferUtil.bytes(1L));
+        IndexExpression auxExprGTE = new IndexExpression(ByteBufferUtil.bytes(KS1_NON_INDEXED_COL_NAME), IndexExpression.Operator.GTE, ByteBufferUtil.bytes(1L));
+        
+        List<IndexExpression> clause = Arrays.asList(idxExprEQ, auxExprEQ);
+        IDiskAtomFilter filter = new IdentityQueryFilter();
+        Range<RowPosition> range = Util.range("", "");
+        
+        //check EQ + EQ
+        List<Row> rows = cfs.search(range, clause, filter, 100);
+        verifyRows(rows, 50);
+
+        //check EQ + EQ smaller limit
+        rows = cfs.search(range, clause, filter, 10);
+        verifyRows(rows, 10);
+        
+        //check EQ + EQ higher limit
+        rows = cfs.search(range, clause, filter, 10000);
+        verifyRows(rows, 50);
+        
+        //check LTE + EQ
+        clause = Arrays.asList(idxExprLTE, auxExprEQ);
+        rows = cfs.search(range, clause, filter, 100);
+        verifyRows(rows, 50);
+        
+        //check LTE + LTE
+        clause = Arrays.asList(idxExprLTE, auxExprLTE);
+        rows = cfs.search(range, clause, filter, 100);
+        verifyRows(rows, 100);
+        
+        //check LTE + GTE
+        clause = Arrays.asList(idxExprLTE, auxExprGTE);
+        rows = cfs.search(range, clause, filter, 100);
+        verifyRows(rows, 50);
+        
+        //check GTE + EQ
+        clause = Arrays.asList(idxExprGTE, auxExprEQ);
+        rows = cfs.search(range, clause, filter, 100);
+        verifyRows(rows, 50);
+        
+        //check GTE + LTE
+        clause = Arrays.asList(idxExprGTE, auxExprLTE);
+        rows = cfs.search(range, clause, filter, 100);
+        verifyRows(rows, 100);
+        
+        //check GTE + GTE
+        clause = Arrays.asList(idxExprGTE, auxExprGTE);
+        rows = cfs.search(range, clause, filter, 100);
+        verifyRows(rows, 50);
+    }
+   
 
 }

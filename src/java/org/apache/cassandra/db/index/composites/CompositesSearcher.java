@@ -31,6 +31,7 @@ import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.IndexExpression;
 import org.apache.cassandra.db.Row;
 import org.apache.cassandra.db.RowPosition;
+import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
 import org.apache.cassandra.db.composites.CellNameType;
 import org.apache.cassandra.db.composites.Composite;
 import org.apache.cassandra.db.composites.Composites;
@@ -42,6 +43,7 @@ import org.apache.cassandra.db.filter.SliceQueryFilter;
 import org.apache.cassandra.db.index.SecondaryIndexManager;
 import org.apache.cassandra.db.index.SecondaryIndexSearcher;
 import org.apache.cassandra.dht.AbstractBounds;
+import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.concurrent.OpOrder;
 
@@ -96,8 +98,6 @@ public class CompositesSearcher extends SecondaryIndexSearcher
         assert index != null;
         assert index.getIndexCfs() != null;
         
-        final ColumnFamilyStore.AbstractScanIterator primaryRowsIt = index.getIndexedRows(filter, primary);
-
         if (logger.isDebugEnabled())
             logger.debug("Most-selective indexed predicate is {}", index.expressionString(primary));
 
@@ -116,20 +116,20 @@ public class CompositesSearcher extends SecondaryIndexSearcher
 
         final Composite startPrefix = makePrefix(index, startKey, filter, true);
         final Composite endPrefix = makePrefix(index, endKey, filter, false);
+        
+        final int meanColumns = Math.max(index.getIndexCfs().getMeanColumns(), 1);
+        // We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses
+        final int rowsPerQuery = Math.max(Math.min(filter.maxRows(), filter.maxColumns() / meanColumns), 2);
+        
+        final SliceQueryFilter columnFilter = new SliceQueryFilter(startPrefix, endPrefix, false, rowsPerQuery);
+        final Range<RowPosition> keyRange = index.getIndexKeysFor(filter, primary);
+
+        final ColumnFamilyStore.AbstractCellIterator cellIt = index.getIndexCfs().getCellIterator(keyRange, columnFilter, filter.timestamp);
 
         return new ColumnFamilyStore.AbstractScanIterator()
         {
-            private Composite lastSeenPrefix;
-            private Deque<Cell> indexCells;
-            private int columnsRead;
             private final int limit = filter.currentLimit();
             private int columnsCount = 0;
-
-            private final int meanColumns = Math.max(index.getIndexCfs().getMeanColumns(), 1);
-            // We shouldn't fetch only 1 row as this provides buggy paging in case the first row doesn't satisfy all clauses
-            private final int rowsPerQuery = Math.max(Math.min(filter.maxRows(), filter.maxColumns() / meanColumns), 2);
-
-            private Row primaryRow;
             
             public boolean needsFiltering()
             {
@@ -156,187 +156,118 @@ public class CompositesSearcher extends SecondaryIndexSearcher
                 ColumnFamily data = null;
                 Composite previousPrefix = null;
 
-                while (true)
+                while (cellIt.hasNext() && columnsCount <= limit)
                 {
-                    // Did we get more columns that needed to respect the user limit?
-                    // (but we still need to return what has been fetched already)
-                    if (columnsCount >= limit)
-                        return makeReturn(currentKey, data);
-                    
-                    if (primaryRow == null) 
+                    Cell cell = cellIt.peek();
+                    if (!cell.isLive(filter.timestamp))
                     {
-                        if (primaryRowsIt.hasNext())
-                        {
-                            primaryRow = primaryRowsIt.next();
-                            lastSeenPrefix = startPrefix;
-                            columnsRead = Integer.MAX_VALUE;
-                        }
-                        else 
-                        {
-                            logger.trace("No more primary keys");
-                            return makeReturn(currentKey, data);
-                        }
-                    }
-
-                    if (indexCells == null)
-                    {
-                        if (columnsRead < rowsPerQuery)
-                        {
-                            logger.trace("Read only {} (< {}) last page through, must be done", columnsRead, rowsPerQuery);
-                            return makeReturn(currentKey, data);
-                        }
-
-                        if (logger.isTraceEnabled())
-                            logger.trace("Scanning index {} starting with {}",
-                                         index.expressionString(primary), indexComparator.getString(startPrefix));
-
-                        //TODO - can we safely get rid of this query given that we already have the primary row?
-                        //ColumnFamily indexRow = primaryRow.cf;
-                        QueryFilter indexFilter = QueryFilter.getSliceFilter(primaryRow.key,
-                                                                             index.getIndexCfs().name,
-                                                                             lastSeenPrefix,
-                                                                             endPrefix,
-                                                                             false,
-                                                                             rowsPerQuery,
-                                                                             filter.timestamp);
-                        ColumnFamily indexRow = index.getIndexCfs().getColumnFamily(indexFilter);
-                        if (indexRow == null || !indexRow.hasColumns())
-                        {
-                            logger.trace("No data moving to next primary key");
-                            primaryRow = null;
-                            continue;
-                        }
+                        logger.trace("skipping {}", cell.name());
                         
-                        Collection<Cell> sortedCells = indexRow.getSortedColumns();
-                        columnsRead = sortedCells.size();
-                        indexCells = new ArrayDeque<>(sortedCells);
-                        Cell firstCell = sortedCells.iterator().next();
-
-                        // Paging is racy, so it is possible the first column of a page is not the last seen one.
-                        if (lastSeenPrefix != startPrefix && lastSeenPrefix.equals(firstCell.name()))
-                        {
-                            // skip the row we already saw w/ the last page of results
-                            indexCells.poll();
-                            logger.trace("Skipping {}", indexComparator.getString(firstCell.name()));
-                        }
+                        cellIt.next();
+                        continue;
                     }
 
-                    while (!indexCells.isEmpty() && columnsCount <= limit)
+                    CompositesIndex.IndexedEntry entry = index.decodeEntry(cellIt.currentKey(), cell);
+                    DecoratedKey dk = baseCfs.partitioner.decorateKey(entry.indexedKey);
+
+                    // Are we done for this row?
+                    if (currentKey == null)
                     {
-                        Cell cell = indexCells.poll();
-                        lastSeenPrefix = cell.name();
-                        if (!cell.isLive(filter.timestamp))
-                        {
-                            logger.trace("skipping {}", cell.name());
-                            continue;
-                        }
-
-                        CompositesIndex.IndexedEntry entry = index.decodeEntry(primaryRow.key, cell);
-                        DecoratedKey dk = baseCfs.partitioner.decorateKey(entry.indexedKey);
-
-                        // Are we done for this row?
-                        if (currentKey == null)
-                        {
-                            currentKey = dk;
-                        }
-                        else if (!currentKey.equals(dk))
-                        {
-                            DecoratedKey previousKey = currentKey;
-                            currentKey = dk;
-
-                            // We're done with the previous row, return it if it had data, continue otherwise
-                            indexCells.addFirst(cell);
-                            if (data == null)
-                                continue;
-                            else
-                                return makeReturn(previousKey, data);
-                        }
-
-                        if (!range.contains(dk))
-                        {
-                            // Either we're not yet in the range cause the range is start excluding, or we're
-                            // past it.
-                            if (!range.right.isMinimum(baseCfs.partitioner) && range.right.compareTo(dk) < 0)
-                            {
-                                logger.trace("Reached end of assigned scan range");
-                                break;
-                            }
-                            else
-                            {
-                                logger.debug("Skipping entry {} before assigned scan range", dk.getToken());
-                                continue;
-                            }
-                        }
-
-                        // Check if this entry cannot be a hit due to the original cell filter
-                        Composite start = entry.indexedEntryPrefix;
-                        if (!filter.columnFilter(dk.getKey()).maySelectPrefix(baseComparator, start))
-                            continue;
-
-                        // If we've record the previous prefix, it means we're dealing with an index on the collection value. In
-                        // that case, we can have multiple index prefix for the same CQL3 row. In that case, we want to only add
-                        // the CQL3 row once (because requesting the data multiple time would be inefficient but more importantly
-                        // because we shouldn't count the columns multiple times with the lastCounted() call at the end of this
-                        // method).
-                        if (previousPrefix != null && previousPrefix.equals(start))
-                            continue;
-                        else
-                            previousPrefix = null;
-
-                        logger.trace("Adding index hit to current row for {}", indexComparator.getString(cell.name()));
-
-                        // We always query the whole CQL3 row. In the case where the original filter was a name filter this might be
-                        // slightly wasteful, but this probably doesn't matter in practice and it simplify things.
-                        ColumnSlice dataSlice = new ColumnSlice(start, entry.indexedEntryPrefix.end());
-                        // If the table has static columns, we must fetch them too as they may need to be returned too.
-                        // Note that this is potentially wasteful for 2 reasons:
-                        //  1) we will retrieve the static parts for each indexed row, even if we have more than one row in
-                        //     the same partition. If we were to group data queries to rows on the same slice, which would
-                        //     speed up things in general, we would also optimize here since we would fetch static columns only
-                        //     once for each group.
-                        //  2) at this point we don't know if the user asked for static columns or not, so we might be fetching
-                        //     them for nothing. We would however need to ship the list of "CQL3 columns selected" with getRangeSlice
-                        //     to be able to know that.
-                        // TODO: we should improve both point above
-                        ColumnSlice[] slices = baseCfs.metadata.hasStaticColumns()
-                                             ? new ColumnSlice[]{ baseCfs.metadata.comparator.staticPrefix().slice(), dataSlice }
-                                             : new ColumnSlice[]{ dataSlice };
-                        SliceQueryFilter dataFilter = new SliceQueryFilter(slices, false, Integer.MAX_VALUE, baseCfs.metadata.clusteringColumns().size());
-                        ColumnFamily newData = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, dataFilter, filter.timestamp));
-                        if (newData == null || index.isStale(entry, newData, filter.timestamp))
-                        {
-                            index.delete(entry, writeOp);
-                            continue;
-                        }
-
-                        assert newData != null : "An entry with no data should have been considered stale";
-
-                        // We know the entry is not stale and so the entry satisfy the primary clause. So whether
-                        // or not the data satisfies the other clauses, there will be no point to re-check the
-                        // same CQL3 row if we run into another collection value entry for this row.
-                        if (entry.indexedEntryCollectionKey != null)
-                            previousPrefix = start;
-
-                        if (!filter.isSatisfiedBy(dk, newData, entry.indexedEntryPrefix, entry.indexedEntryCollectionKey))
-                            continue;
+                        currentKey = dk;
+                    }
+                    else if (!currentKey.equals(dk))
+                    {
+                        DecoratedKey previousKey = currentKey;
+                        currentKey = dk;
 
                         if (data == null)
-                            data = ArrayBackedSortedColumns.factory.create(baseCfs.metadata);
-                        
-                        data.addAll(newData);
-                        columnsCount += dataFilter.lastCounted();
+                            continue;
+                        else
+                            return makeReturn(previousKey, data);
                     }
+
+                    cellIt.next();
                     
-                    if (columnsRead < rowsPerQuery) {
-                        primaryRow = null;
+                    if (!range.contains(dk))
+                    {
+                        // Either we're not yet in the range cause the range is start excluding, or we're
+                        // past it.
+                        if (!range.right.isMinimum(baseCfs.partitioner) && range.right.compareTo(dk) < 0)
+                        {
+                            logger.trace("Reached end of assigned scan range");
+                            break;
+                        }
+                        else
+                        {
+                            logger.debug("Skipping entry {} before assigned scan range", dk.getToken());
+                            continue;
+                        }
                     }
+
+                    // Check if this entry cannot be a hit due to the original cell filter
+                    Composite start = entry.indexedEntryPrefix;
+                    if (!filter.columnFilter(dk.getKey()).maySelectPrefix(baseComparator, start))
+                        continue;
+
+                    // If we've record the previous prefix, it means we're dealing with an index on the collection value. In
+                    // that case, we can have multiple index prefix for the same CQL3 row. In that case, we want to only add
+                    // the CQL3 row once (because requesting the data multiple time would be inefficient but more importantly
+                    // because we shouldn't count the columns multiple times with the lastCounted() call at the end of this
+                    // method).
+                    if (previousPrefix != null && previousPrefix.equals(start))
+                        continue;
+                    else
+                        previousPrefix = null;
+
+                    logger.trace("Adding index hit to current row for {}", indexComparator.getString(cell.name()));
+
+                    // We always query the whole CQL3 row. In the case where the original filter was a name filter this might be
+                    // slightly wasteful, but this probably doesn't matter in practice and it simplify things.
+                    ColumnSlice dataSlice = new ColumnSlice(start, entry.indexedEntryPrefix.end());
+                    // If the table has static columns, we must fetch them too as they may need to be returned too.
+                    // Note that this is potentially wasteful for 2 reasons:
+                    //  1) we will retrieve the static parts for each indexed row, even if we have more than one row in
+                    //     the same partition. If we were to group data queries to rows on the same slice, which would
+                    //     speed up things in general, we would also optimize here since we would fetch static columns only
+                    //     once for each group.
+                    //  2) at this point we don't know if the user asked for static columns or not, so we might be fetching
+                    //     them for nothing. We would however need to ship the list of "CQL3 columns selected" with getRangeSlice
+                    //     to be able to know that.
+                    // TODO: we should improve both point above
+                    ColumnSlice[] slices = baseCfs.metadata.hasStaticColumns()
+                                         ? new ColumnSlice[]{ baseCfs.metadata.comparator.staticPrefix().slice(), dataSlice }
+                                         : new ColumnSlice[]{ dataSlice };
+                    SliceQueryFilter dataFilter = new SliceQueryFilter(slices, false, Integer.MAX_VALUE, baseCfs.metadata.clusteringColumns().size());
+                    ColumnFamily newData = baseCfs.getColumnFamily(new QueryFilter(dk, baseCfs.name, dataFilter, filter.timestamp));
+                    if (newData == null || index.isStale(entry, newData, filter.timestamp))
+                    {
+                        index.delete(entry, writeOp);
+                        continue;
+                    }
+
+                    assert newData != null : "An entry with no data should have been considered stale";
+
+                    // We know the entry is not stale and so the entry satisfy the primary clause. So whether
+                    // or not the data satisfies the other clauses, there will be no point to re-check the
+                    // same CQL3 row if we run into another collection value entry for this row.
+                    if (entry.indexedEntryCollectionKey != null)
+                        previousPrefix = start;
+
+                    if (!filter.isSatisfiedBy(dk, newData, entry.indexedEntryPrefix, entry.indexedEntryCollectionKey))
+                        continue;
+
+                    if (data == null)
+                        data = ArrayBackedSortedColumns.factory.create(baseCfs.metadata);
                     
-                    indexCells = null;
-                 }
+                    data.addAll(newData);
+                    columnsCount += dataFilter.lastCounted();
+                }
+                
+                return makeReturn(currentKey, data);
              }
 
             public void close() throws IOException {
-                primaryRowsIt.close();
+                cellIt.close();
             }
         };
     }
