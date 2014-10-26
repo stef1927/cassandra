@@ -66,8 +66,10 @@ public class KeysSearcher extends SecondaryIndexSearcher
         }
     }
 
-    private ColumnFamilyStore.AbstractScanIterator getIndexedIterator(final OpOrder.Group writeOp, final ExtendedFilter filter, 
-                                                                       final IndexExpression primary, final SecondaryIndex index)
+    private ColumnFamilyStore.AbstractScanIterator getIndexedIterator(final OpOrder.Group writeOp, 
+                                                                       final ExtendedFilter filter, 
+                                                                       final IndexExpression primary, 
+                                                                       final SecondaryIndex index)
     {
 
         // Start with the most-restrictive indexed clause, then apply remaining clauses

@@ -22,14 +22,12 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -45,15 +43,11 @@ import java.util.concurrent.TimeUnit;
 import com.google.common.base.Function;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
-
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
-
-import static org.junit.Assert.*;
-
-import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+
 import org.apache.cassandra.OrderedJUnit4ClassRunner;
 import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
@@ -103,6 +97,11 @@ import static org.apache.cassandra.Util.column;
 import static org.apache.cassandra.Util.dk;
 import static org.apache.cassandra.Util.rp;
 import static org.apache.cassandra.utils.ByteBufferUtil.bytes;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 
 @RunWith(OrderedJUnit4ClassRunner.class)
 public class ColumnFamilyStoreTest extends SchemaLoader
@@ -118,6 +117,7 @@ public class ColumnFamilyStoreTest extends SchemaLoader
         random.nextBytes(bytes2);
     }
 
+    @Test
     // create two sstables, and verify that we only deserialize data from the most recent one
     public void testTimeSortedQuery()
     {
@@ -729,7 +729,7 @@ public class ColumnFamilyStoreTest extends SchemaLoader
         assert rows != null;
         assert rows.size() == 1 : StringUtils.join(rows, ",");
     }
-    
+
     @Test
     public void testIndexCreate() throws IOException, InterruptedException, ExecutionException
     {
@@ -1423,7 +1423,7 @@ public class ColumnFamilyStoreTest extends SchemaLoader
         // explicitly tell to the KeysSearcher to use column limiting for rowsPerQuery to trigger bogus columnsRead--; (CASSANDRA-3996)
         List<Row> rows = store.search(store.makeExtendedFilter(Util.range("", ""), new IdentityQueryFilter(), Arrays.asList(expr), 10, true, false, System.currentTimeMillis()));
 
-        assertEquals(10, rows.size());
+        assert rows.size() == 10;
     }
 
     @SuppressWarnings("unchecked")

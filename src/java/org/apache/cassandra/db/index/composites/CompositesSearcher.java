@@ -90,7 +90,10 @@ public class CompositesSearcher extends SecondaryIndexSearcher
         return isStart ? prefix.start() : prefix.end();
     }
 
-    private ColumnFamilyStore.AbstractScanIterator getIndexedIterator(final OpOrder.Group writeOp, final ExtendedFilter filter, final IndexExpression primary, final CompositesIndex index)
+    private ColumnFamilyStore.AbstractScanIterator getIndexedIterator(final OpOrder.Group writeOp, 
+                                                                       final ExtendedFilter filter, 
+                                                                       final IndexExpression primary, 
+                                                                       final CompositesIndex index)
     {
         // Start with the most-restrictive indexed clause, then apply remaining clauses
         // to each row matching that clause.

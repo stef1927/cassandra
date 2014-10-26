@@ -2244,7 +2244,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
                 
                 try 
                 {
-                    rowIt.close();
+                    if (rowIt != null)
+                        rowIt.close();
                 }
                 catch (Exception ex) 
                 {
@@ -2255,7 +2256,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
                 {
                     try 
                     {
-                        op.close();
+                        if (op != null)
+                            op.close();
                     }
                     catch (Exception ex) 
                     {

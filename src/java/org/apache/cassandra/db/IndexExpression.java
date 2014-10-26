@@ -23,8 +23,6 @@ import java.nio.ByteBuffer;
 
 import com.google.common.base.Objects;
 
-import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.dht.LocalToken;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
 public class IndexExpression
