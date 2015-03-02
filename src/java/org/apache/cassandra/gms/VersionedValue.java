@@ -65,6 +65,7 @@ public class VersionedValue implements Comparable<VersionedValue>
     public final static String STATUS_LEAVING = "LEAVING";
     public final static String STATUS_LEFT = "LEFT";
     public final static String STATUS_MOVING = "MOVING";
+    public final static String STATUS_MOVED = "MOVED";
 
     public final static String REMOVING_TOKEN = "removing";
     public final static String REMOVED_TOKEN = "removed";
@@ -131,8 +132,7 @@ public class VersionedValue implements Comparable<VersionedValue>
 
         public VersionedValue normal(Collection<Token> tokens)
         {
-            return new VersionedValue(versionString(VersionedValue.STATUS_NORMAL,
-                                                    makeTokenString(tokens)));
+            return new VersionedValue(versionString(VersionedValue.STATUS_NORMAL, makeTokenString(tokens)));
         }
 
         private String makeTokenString(Collection<Token> tokens)
@@ -166,6 +166,11 @@ public class VersionedValue implements Comparable<VersionedValue>
         public VersionedValue moving(Token token)
         {
             return new VersionedValue(VersionedValue.STATUS_MOVING + VersionedValue.DELIMITER + partitioner.getTokenFactory().toString(token));
+        }
+
+        public VersionedValue moved(Collection<Token> tokens)
+        {
+            return new VersionedValue(versionString(VersionedValue.STATUS_MOVED, makeTokenString(tokens)));
         }
 
         public VersionedValue hostId(UUID hostId)

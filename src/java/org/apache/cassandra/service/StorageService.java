@@ -192,7 +192,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
     }
 
     /** This method updates the local token on disk  */
-    public void setTokens(Collection<Token> tokens)
+    public void setTokens(Collection<Token> tokens, boolean moved)
     {
         if (logger.isDebugEnabled())
             logger.debug("Setting tokens to {}", tokens);
@@ -201,7 +201,8 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         Collection<Token> localTokens = getLocalTokens();
         List<Pair<ApplicationState, VersionedValue>> states = new ArrayList<Pair<ApplicationState, VersionedValue>>();
         states.add(Pair.create(ApplicationState.TOKENS, valueFactory.tokens(localTokens)));
-        states.add(Pair.create(ApplicationState.STATUS, valueFactory.normal(localTokens)));
+        states.add(Pair.create(ApplicationState.STATUS,
+                moved ? valueFactory.moved(localTokens) : valueFactory.normal(localTokens)));
         Gossiper.instance.addLocalApplicationStates(states);
         setMode(Mode.NORMAL, false);
     }
@@ -881,7 +882,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         {
             // start participating in the ring.
             SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-            setTokens(bootstrapTokens);
+            setTokens(bootstrapTokens, false);
             // remove the existing info about the replaced node.
             if (!current.isEmpty())
                 for (InetAddress existing : current)
@@ -921,7 +922,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         }
         else if (isSurveyMode)
         {
-            setTokens(SystemKeyspace.getSavedTokens());
+            setTokens(SystemKeyspace.getSavedTokens(), false);
             SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
             isSurveyMode = false;
             logger.info("Leaving write survey mode and joining ring at operator request");
@@ -1396,6 +1397,9 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                 case VersionedValue.STATUS_MOVING:
                     handleStateMoving(endpoint, pieces);
                     break;
+                case VersionedValue.STATUS_MOVED:
+                    handleStateMoved(endpoint);
+                    break;
             }
         }
         else
@@ -1529,6 +1533,13 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             tokenMetadata.updateHostId(Gossiper.instance.getHostId(endpoint), endpoint);
     }
 
+
+    /** Handle node move to normal state after it has been moved to a new token. */
+    private void handleStateMoved(final InetAddress endpoint)
+    {
+        handleStateNormal(endpoint, true);
+    }
+
     /**
      * Handle node move to normal state. That is, node is entering token ring and participating
      * in reads.
@@ -1536,6 +1547,14 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
      * @param endpoint node
      */
     private void handleStateNormal(final InetAddress endpoint)
+    {
+        handleStateNormal(endpoint, false);
+    }
+
+    // TODO - rename and add documentation of what we actually do or, better
+    // refactor it in smaller methods that are called directly from handleStateNormal()
+    // or handleStateMoved()
+    private void handleStateNormal(final InetAddress endpoint, boolean isMoving)
     {
         Collection<Token> tokens;
 
@@ -1559,7 +1578,9 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         {
             UUID hostId = Gossiper.instance.getHostId(endpoint);
             InetAddress existing = tokenMetadata.getEndpointForHostId(hostId);
-            if (DatabaseDescriptor.isReplacing() && Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()) != null && (hostId.equals(Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress()))))
+            if (DatabaseDescriptor.isReplacing() &&
+                    Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()) != null
+                    && (hostId.equals(Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress()))))
                 logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
             else
             {
@@ -1637,8 +1658,8 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             }
         }
 
-        boolean isMoving = tokenMetadata.isMoving(endpoint); // capture because updateNormalTokens clears moving status
         tokenMetadata.updateNormalTokens(tokensToUpdateInMetadata, endpoint);
+
         for (InetAddress ep : endpointsToRemove)
         {
             removeEndpoint(ep);
@@ -3247,7 +3268,8 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         // This doesn't make any sense in a vnodes environment.
         if (getTokenMetadata().getTokens(localAddress).size() > 1)
         {
-            logger.error("Invalid request to move(Token); This node has more than one token and cannot be moved thusly.");
+        	//TODO : unless I remove these lines I am unable to move the node in a single node cluster
+        	logger.error("Invalid request to move(Token); This node has more than one token and cannot be moved thusly.");
             throw new UnsupportedOperationException("This node has more than one token and cannot be moved thusly.");
         }
 
@@ -3286,7 +3308,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             setMode(Mode.MOVING, "No ranges to fetch/stream", true);
         }
 
-        setTokens(Collections.singleton(newToken)); // setting new token as we have everything settled
+        setTokens(Collections.singleton(newToken), true); // setting new token as we have everything settled
 
         if (logger.isDebugEnabled())
             logger.debug("Successfully moved to new token {}", getLocalTokens().iterator().next());
