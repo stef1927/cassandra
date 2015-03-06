@@ -24,6 +24,7 @@ import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 
@@ -31,8 +32,11 @@ import com.google.common.base.Predicate;
 import com.google.common.cache.CacheLoader;
 import com.google.common.collect.*;
 import com.google.common.util.concurrent.Uninterruptibles;
+
 import org.apache.cassandra.metrics.*;
+
 import org.apache.commons.lang3.StringUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -203,7 +207,7 @@ public class StorageProxy implements StorageProxyMBean
                                    ConsistencyLevel consistencyForPaxos,
                                    ConsistencyLevel consistencyForCommit,
                                    ClientState state)
-    throws UnavailableException, IsBootstrappingException, ReadFailureException, ReadTimeoutException, WriteTimeoutException, InvalidRequestException
+    throws UnavailableException, IsBootstrappingException, RequestFailureException, RequestTimeoutException, InvalidRequestException
     {
         final long start = System.nanoTime();
         int contentions = 0;
@@ -272,6 +276,11 @@ public class StorageProxy implements StorageProxyMBean
         catch (WriteTimeoutException|ReadTimeoutException e)
         {
             casWriteMetrics.timeouts.mark();
+            throw e;
+        }
+        catch (WriteFailureException|ReadFailureException e)
+        {
+            casWriteMetrics.failures.mark();
             throw e;
         }
         catch(UnavailableException e)
@@ -346,7 +355,7 @@ public class StorageProxy implements StorageProxyMBean
                                                            ConsistencyLevel consistencyForCommit,
                                                            final boolean isWrite,
                                                            ClientState state)
-    throws WriteTimeoutException
+    throws WriteTimeoutException, WriteFailureException
     {
         long timeout = TimeUnit.MILLISECONDS.toNanos(DatabaseDescriptor.getCasContentionTimeout());
 
@@ -469,7 +478,7 @@ public class StorageProxy implements StorageProxyMBean
         return false;
     }
 
-    private static void commitPaxos(Commit proposal, ConsistencyLevel consistencyLevel) throws WriteTimeoutException
+    private static void commitPaxos(Commit proposal, ConsistencyLevel consistencyLevel) throws WriteTimeoutException, WriteFailureException
     {
         boolean shouldBlock = consistencyLevel != ConsistencyLevel.ANY;
         Keyspace keyspace = Keyspace.open(proposal.update.metadata().ksName);
@@ -511,13 +520,13 @@ public class StorageProxy implements StorageProxyMBean
      * @param consistency_level the consistency level for the operation
      */
     public static void mutate(Collection<? extends IMutation> mutations, ConsistencyLevel consistency_level)
-    throws UnavailableException, OverloadedException, WriteTimeoutException
+    throws UnavailableException, OverloadedException, WriteTimeoutException, WriteFailureException
     {
         Tracing.trace("Determining replicas for mutation");
         final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
 
         long startTime = System.nanoTime();
-        List<AbstractWriteResponseHandler> responseHandlers = new ArrayList<>(mutations.size());
+        List<AbstractWriteResponseHandler<IMutation>> responseHandlers = new ArrayList<>(mutations.size());
 
         try
         {
@@ -542,33 +551,19 @@ public class StorageProxy implements StorageProxyMBean
         }
         catch (WriteTimeoutException ex)
         {
-            if (consistency_level == ConsistencyLevel.ANY)
-            {
-                // hint all the mutations (except counters, which can't be safely retried).  This means
-                // we'll re-hint any successful ones; doesn't seem worth it to track individual success
-                // just for this unusual case.
-                for (IMutation mutation : mutations)
-                {
-                    if (mutation instanceof CounterMutation)
-                        continue;
-
-                    Token tk = StorageService.getPartitioner().getToken(mutation.key());
-                    List<InetAddress> naturalEndpoints = StorageService.instance.getNaturalEndpoints(mutation.getKeyspaceName(), tk);
-                    Collection<InetAddress> pendingEndpoints = StorageService.instance.getTokenMetadata().pendingEndpointsFor(tk, mutation.getKeyspaceName());
-                    for (InetAddress target : Iterables.concat(naturalEndpoints, pendingEndpoints))
-                    {
-                        // local writes can timeout, but cannot be dropped (see LocalMutationRunnable and
-                        // CASSANDRA-6510), so there is no need to hint or retry
-                        if (!target.equals(FBUtilities.getBroadcastAddress()) && shouldHint(target))
-                            submitHint((Mutation) mutation, target, null);
-                    }
-                }
-                Tracing.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
-            }
-            else
+            if (!hintMutations(mutations, consistency_level))
             {
                 writeMetrics.timeouts.mark();
                 Tracing.trace("Write timeout; received {} of {} required replies", ex.received, ex.blockFor);
+                throw ex;
+            }
+        }
+        catch (WriteFailureException ex)
+        {
+            if (!hintMutations(mutations, consistency_level))
+            {
+                writeMetrics.failures.mark();
+                Tracing.trace("Write failure; received {} of {} required replies", ex.received, ex.blockFor);
                 throw ex;
             }
         }
@@ -589,12 +584,46 @@ public class StorageProxy implements StorageProxyMBean
             writeMetrics.addNano(System.nanoTime() - startTime);
         }
     }
+    
+    /** hint all the mutations (except counters, which can't be safely retried).  This means
+      * we'll re-hint any successful ones; doesn't seem worth it to track individual success
+      * just for this unusual case.
+      
+      * @param mutations
+      * @param consistency_level
+      * @return true if the hints were sent, false otherwise
+      */
+    private static boolean hintMutations(Collection<? extends IMutation> mutations, ConsistencyLevel consistency_level)
+    {
+        if (consistency_level != ConsistencyLevel.ANY)
+            return false;
+
+        for (IMutation mutation : mutations)
+        {
+            if (mutation instanceof CounterMutation)
+                continue;
+
+            Token tk = StorageService.getPartitioner().getToken(mutation.key());
+            List<InetAddress> naturalEndpoints = StorageService.instance.getNaturalEndpoints(mutation.getKeyspaceName(), tk);
+            Collection<InetAddress> pendingEndpoints = StorageService.instance.getTokenMetadata().pendingEndpointsFor(tk, mutation.getKeyspaceName());
+            for (InetAddress target : Iterables.concat(naturalEndpoints, pendingEndpoints))
+            {
+                // local writes can timeout, but cannot be dropped (see LocalMutationRunnable and
+                // CASSANDRA-6510), so there is no need to hint or retry
+                if (!target.equals(FBUtilities.getBroadcastAddress()) && shouldHint(target))
+                    submitHint((Mutation) mutation, target, null);
+            }
+        }
+
+        Tracing.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
+        return true;
+    }
 
     @SuppressWarnings("unchecked")
     public static void mutateWithTriggers(Collection<? extends IMutation> mutations,
                                           ConsistencyLevel consistencyLevel,
                                           boolean mutateAtomically)
-    throws WriteTimeoutException, UnavailableException, OverloadedException, InvalidRequestException
+    throws WriteTimeoutException, WriteFailureException, UnavailableException, OverloadedException, InvalidRequestException
     {
         Collection<Mutation> augmented = TriggerExecutor.instance.execute(mutations);
 
@@ -658,6 +687,12 @@ public class StorageProxy implements StorageProxyMBean
             Tracing.trace("Write timeout; received {} of {} required replies", e.received, e.blockFor);
             throw e;
         }
+        catch (WriteFailureException e)
+        {
+            writeMetrics.failures.mark();
+            Tracing.trace("Write failure; received {} of {} required replies", e.received, e.blockFor);
+            throw e;
+        }
         finally
         {
             writeMetrics.addNano(System.nanoTime() - startTime);
@@ -665,7 +700,7 @@ public class StorageProxy implements StorageProxyMBean
     }
 
     private static void syncWriteToBatchlog(Collection<Mutation> mutations, Collection<InetAddress> endpoints, UUID uuid)
-    throws WriteTimeoutException
+    throws WriteTimeoutException, WriteFailureException
     {
         AbstractWriteResponseHandler handler = new WriteResponseHandler(endpoints,
                                                                         Collections.<InetAddress>emptyList(),
@@ -1221,6 +1256,10 @@ public class StorageProxy implements StorageProxyMBean
             catch (WriteTimeoutException e)
             {
                 throw new ReadTimeoutException(consistencyLevel, 0, consistencyLevel.blockFor(Keyspace.open(command.ksName)), false);
+            }
+            catch (WriteFailureException e)
+            {
+                throw new ReadFailureException(consistencyLevel, e.received, e.failures, e.blockFor, false);
             }
 
             rows = fetchRows(commands, consistencyForCommitOrFetch);

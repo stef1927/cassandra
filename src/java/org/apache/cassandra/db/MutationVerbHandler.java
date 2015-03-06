@@ -18,6 +18,7 @@
 package org.apache.cassandra.db;
 
 import java.io.DataInputStream;
+import java.io.IOError;
 import java.io.IOException;
 import java.net.InetAddress;
 
@@ -59,6 +60,7 @@ public class MutationVerbHandler implements IVerbHandler<Mutation>
         catch (IOException e)
         {
             logger.error("Error in mutation", e);
+            throw new IOError(e);
         }
     }
 
