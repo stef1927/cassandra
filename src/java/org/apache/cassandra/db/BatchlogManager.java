@@ -443,7 +443,7 @@ public class BatchlogManager implements BatchlogManagerMBean
             @Override
             public void response(MessageIn<T> m)
             {
-                boolean removed = undelivered.remove(m.from);
+                boolean removed = undelivered.remove(m == null ? FBUtilities.getBroadcastAddress() : m.from);
                 assert removed;
                 super.response(m);
             }

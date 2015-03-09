@@ -33,6 +33,7 @@ import org.apache.cassandra.net.IAsyncCallback;
 import org.apache.cassandra.net.IAsyncCallbackWithFailure;
 import org.apache.cassandra.net.MessageIn;
 import org.apache.cassandra.utils.concurrent.SimpleCondition;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,6 +72,18 @@ public abstract class AbstractWriteResponseHandler<T> implements IAsyncCallbackW
         this.writeType = writeType;
     }
 
+    //TODO - move this in a test utility class
+    private String getStackTrace()
+    {
+        StringBuilder sb = new StringBuilder();
+        for (StackTraceElement element : Thread.currentThread().getStackTrace())
+        {
+            sb.append(element);
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
     public void get() throws WriteTimeoutException, WriteFailureException
     {
         long requestTimeout = writeType == WriteType.COUNTER
@@ -103,9 +116,7 @@ public abstract class AbstractWriteResponseHandler<T> implements IAsyncCallbackW
 
         if (totalBlockFor() + failures > totalEndpoints())
         {
-            WriteFailureException ex = new WriteFailureException(consistencyLevel, ackCount(), failures, totalBlockFor(), writeType);
-            logger.debug("Write failure: {}", ex.toString());
-            throw ex;
+            throw new WriteFailureException(consistencyLevel, ackCount(), failures, totalBlockFor(), writeType);
         }
     }
 
@@ -158,6 +169,8 @@ public abstract class AbstractWriteResponseHandler<T> implements IAsyncCallbackW
     @Override
     public void onFailure(InetAddress from)
     {
+        logger.trace("Got failure from {}", from);
+
         int n = waitingFor(from)
               ? failuresUpdater.incrementAndGet(this)
               : failures;

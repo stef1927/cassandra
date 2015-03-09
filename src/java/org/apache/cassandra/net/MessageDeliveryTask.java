@@ -64,18 +64,21 @@ public class MessageDeliveryTask implements Runnable
         }
         catch (Throwable t)
         {
+
+            logger.error("Mutation failed with {}", t.getMessage());
+
             if (message.doCallbackOnFailure())
             {
+                logger.info("Notifying coordinator of failure");
+
                 MessageOut response = new MessageOut(MessagingService.Verb.INTERNAL_RESPONSE)
                                                     .withParameter(MessagingService.FAILURE_RESPONSE_PARAM, MessagingService.ONE_BYTE);
                 MessagingService.instance().sendReply(response, id, message.from);
             }
 
-            if (t instanceof TombstoneOverwhelmingException)
-                logger.error(t.getMessage());
-            else
-                throw t;
+            //TODO - should we still throw non TOEs here?
         }
+
         if (GOSSIP_VERBS.contains(message.verb))
             Gossiper.instance.setLastProcessedMessageAt(constructionTime);
     }

@@ -1059,8 +1059,16 @@ public class StorageProxy implements StorageProxyMBean
                 IMutation processed = SinkManager.processWriteRequest(mutation);
                 if (processed != null)
                 {
-                    ((Mutation) processed).apply();
-                    responseHandler.response(null);
+                    try 
+                    {
+                        ((Mutation) processed).apply();
+                        responseHandler.response(null);
+                    }
+                    catch(Exception ex)
+                    {
+                        logger.error("Failed to apply mutation locally : {}", ex.getMessage());
+                        responseHandler.onFailure(FBUtilities.getBroadcastAddress());
+                    }
                 }
             }
         });
