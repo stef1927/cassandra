@@ -500,7 +500,7 @@ public class StorageProxy implements StorageProxyMBean
             if (FailureDetector.instance.isAlive(destination))
             {
                 if (shouldBlock)
-                    MessagingService.instance().sendRR(message, destination, responseHandler);
+                    MessagingService.instance().sendRRWithFailure(message, destination, responseHandler);
                 else
                     MessagingService.instance().sendOneWay(message, destination);
             }

@@ -22,25 +22,18 @@ import java.io.IOError;
 import java.io.IOException;
 import java.net.InetAddress;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.io.util.FastByteArrayInputStream;
 import org.apache.cassandra.net.*;
 import org.apache.cassandra.tracing.Tracing;
 
 public class MutationVerbHandler implements IVerbHandler<Mutation>
 {
-    private static final Logger logger = LoggerFactory.getLogger(MutationVerbHandler.class);
     private static final boolean TEST_FAIL_WRITES = System.getProperty("cassandra.test.fail_writes", "false").equalsIgnoreCase("true");
 
     public void doVerb(MessageIn<Mutation> message, int id)
     {
         try
         {
-            if (TEST_FAIL_WRITES)
-                throw new IOException("Testing write failures");
-
             // Check if there were any forwarding headers in this message
             byte[] from = message.parameters.get(Mutation.FORWARD_FROM);
             InetAddress replyTo;
@@ -63,7 +56,6 @@ public class MutationVerbHandler implements IVerbHandler<Mutation>
         }
         catch (IOException e)
         {
-            logger.error("Error in mutation", e);
             throw new IOError(e);
         }
     }
