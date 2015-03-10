@@ -72,18 +72,6 @@ public abstract class AbstractWriteResponseHandler<T> implements IAsyncCallbackW
         this.writeType = writeType;
     }
 
-    //TODO - move this in a test utility class
-    private String getStackTrace()
-    {
-        StringBuilder sb = new StringBuilder();
-        for (StackTraceElement element : Thread.currentThread().getStackTrace())
-        {
-            sb.append(element);
-            sb.append("\n");
-        }
-        return sb.toString();
-    }
-
     public void get() throws WriteTimeoutException, WriteFailureException
     {
         long requestTimeout = writeType == WriteType.COUNTER

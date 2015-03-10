@@ -127,10 +127,10 @@ public abstract class AbstractReplicationStrategy
      */
     public abstract List<InetAddress> calculateNaturalEndpoints(Token searchToken, TokenMetadata tokenMetadata);
 
-    public AbstractWriteResponseHandler getWriteResponseHandler(Collection<InetAddress> naturalEndpoints, 
-                                                                Collection<InetAddress> pendingEndpoints, 
-                                                                ConsistencyLevel consistency_level, 
-                                                                Runnable callback, 
+    public AbstractWriteResponseHandler getWriteResponseHandler(Collection<InetAddress> naturalEndpoints,
+                                                                Collection<InetAddress> pendingEndpoints,
+                                                                ConsistencyLevel consistency_level,
+                                                                Runnable callback,
                                                                 WriteType writeType)
     {
         if (consistency_level.isDatacenterLocal())

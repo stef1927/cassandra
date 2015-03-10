@@ -549,21 +549,27 @@ public class StorageProxy implements StorageProxyMBean
                 responseHandler.get();
             }
         }
-        catch (WriteTimeoutException ex)
+        catch (WriteTimeoutException|WriteFailureException ex)
         {
-            if (!hintMutations(mutations, consistency_level))
+            if (consistency_level == ConsistencyLevel.ANY)
             {
-                writeMetrics.timeouts.mark();
-                Tracing.trace("Write timeout; received {} of {} required replies", ex.received, ex.blockFor);
-                throw ex;
+                hintMutations(mutations, consistency_level);
             }
-        }
-        catch (WriteFailureException ex)
-        {
-            if (!hintMutations(mutations, consistency_level))
+            else
             {
-                writeMetrics.failures.mark();
-                Tracing.trace("Write failure; received {} of {} required replies", ex.received, ex.blockFor);
+                if (ex instanceof WriteFailureException)
+                {
+                    writeMetrics.failures.mark();
+                    WriteFailureException fe = (WriteFailureException)ex;
+                    Tracing.trace("Write failure; received {} of {} required replies, failed {} requests",
+                        new Object[] {fe.received, fe.blockFor, fe.failures});
+                }
+                else
+                {
+                    writeMetrics.timeouts.mark();
+                    WriteTimeoutException te = (WriteTimeoutException)ex;
+                    Tracing.trace("Write timeout; received {} of {} required replies", te.received, te.blockFor);
+                }
                 throw ex;
             }
         }
@@ -588,16 +594,13 @@ public class StorageProxy implements StorageProxyMBean
     /** hint all the mutations (except counters, which can't be safely retried).  This means
       * we'll re-hint any successful ones; doesn't seem worth it to track individual success
       * just for this unusual case.
-      
+
       * @param mutations
       * @param consistency_level
       * @return true if the hints were sent, false otherwise
       */
-    private static boolean hintMutations(Collection<? extends IMutation> mutations, ConsistencyLevel consistency_level)
+    private static void hintMutations(Collection<? extends IMutation> mutations, ConsistencyLevel consistency_level)
     {
-        if (consistency_level != ConsistencyLevel.ANY)
-            return false;
-
         for (IMutation mutation : mutations)
         {
             if (mutation instanceof CounterMutation)
@@ -616,7 +619,6 @@ public class StorageProxy implements StorageProxyMBean
         }
 
         Tracing.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
-        return true;
     }
 
     @SuppressWarnings("unchecked")
@@ -1064,7 +1066,7 @@ public class StorageProxy implements StorageProxyMBean
                         ((Mutation) processed).apply();
                         responseHandler.response(null);
                     }
-                    catch(Exception ex)
+                    catch (Exception ex)
                     {
                         logger.error("Failed to apply mutation locally : {}", ex.getMessage());
                         responseHandler.onFailure(FBUtilities.getBroadcastAddress());

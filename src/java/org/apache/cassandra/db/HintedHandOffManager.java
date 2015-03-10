@@ -466,8 +466,8 @@ public class HintedHandOffManager implements HintedHandOffManagerMBean
                 }
                 catch (WriteTimeoutException|WriteFailureException e)
                 {
-                    logger.info("Failed replaying hints to {}; aborting ({} delivered)", endpoint, rowsReplayed);
-                    logger.info("Failure was : { }", e.getMessage());
+                    logger.info("Failed replaying hints to {}; aborting ({} delivered), error : {}",
+                        endpoint, rowsReplayed, e.getMessage());
                     break delivery;
                 }
             }
