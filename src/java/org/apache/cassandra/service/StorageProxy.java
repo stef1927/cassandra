@@ -553,7 +553,7 @@ public class StorageProxy implements StorageProxyMBean
         {
             if (consistency_level == ConsistencyLevel.ANY)
             {
-                hintMutations(mutations, consistency_level);
+                hintMutations(mutations);
             }
             else
             {
@@ -599,7 +599,7 @@ public class StorageProxy implements StorageProxyMBean
       * @param consistency_level
       * @return true if the hints were sent, false otherwise
       */
-    private static void hintMutations(Collection<? extends IMutation> mutations, ConsistencyLevel consistency_level)
+    private static void hintMutations(Collection<? extends IMutation> mutations)
     {
         for (IMutation mutation : mutations)
         {
