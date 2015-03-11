@@ -17,6 +17,7 @@
  */
 package org.apache.cassandra.service;
 
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -24,6 +25,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.google.common.collect.Iterables;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -106,24 +108,32 @@ public class ClientState
     public final boolean isInternal;
 
     // The remote address of the client - null for internal clients.
-    private final SocketAddress remoteAddress;
+    private final InetSocketAddress remoteAddress;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
     private final AtomicLong lastTimestampMicros = new AtomicLong(0);
+
+    private ClientState(boolean isInternal, InetSocketAddress remoteAddress)
+    {
+        this.isInternal = isInternal;
+        this.remoteAddress = remoteAddress;
+    }
 
     /**
      * Construct a new, empty ClientState for internal calls.
      */
     private ClientState()
     {
-        this.isInternal = true;
-        this.remoteAddress = null;
+        this(true, null);
     }
 
     protected ClientState(SocketAddress remoteAddress)
     {
-        this.isInternal = false;
-        this.remoteAddress = remoteAddress;
+        this(false, 
+             remoteAddress instanceof InetSocketAddress ?
+                     (InetSocketAddress)remoteAddress :
+                     null);
+
         if (!DatabaseDescriptor.getAuthenticator().requireAuthentication())
             this.user = AuthenticatedUser.ANONYMOUS_USER;
     }
@@ -181,7 +191,7 @@ public class ClientState
         return cqlQueryHandler;
     }
 
-    public SocketAddress getRemoteAddress()
+    public InetSocketAddress getRemoteAddress()
     {
         return remoteAddress;
     }
