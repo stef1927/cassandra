@@ -25,6 +25,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
+
 import javax.management.*;
 import javax.management.openmbean.*;
 
@@ -35,7 +36,9 @@ import com.google.common.collect.*;
 import com.google.common.util.concurrent.*;
 
 import org.apache.cassandra.io.FSWriteError;
+
 import org.json.simple.*;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -2623,6 +2626,22 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     public boolean isIndex()
     {
         return partitioner instanceof LocalPartitioner;
+    }
+
+    /** Return the index for which we store the data */
+    public SecondaryIndex parentIndex()
+    {
+        assert isIndex();
+
+        if (metadata.cfName.contains(Directories.SECONDARY_INDEX_NAME_SEPARATOR))
+        {
+            String[] parts = metadata.cfName.split("\\" + Directories.SECONDARY_INDEX_NAME_SEPARATOR, 2);
+            ColumnFamilyStore parentCfs = keyspace.getColumnFamilyStore(parts[0]);
+            return parentCfs.indexManager.getIndexByName(parts[1]);
+        }
+
+        assert false;
+        return null;
     }
 
     public Iterable<ColumnFamilyStore> concatWithIndexes()

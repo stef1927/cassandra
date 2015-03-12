@@ -44,6 +44,7 @@ public class Scrubber implements Closeable
 
     private final CompactionController controller;
     private final boolean isCommutative;
+    private final boolean isIndex;
     private final int expectedBloomFilterSize;
 
     private final RandomAccessReader dataFile;
@@ -97,6 +98,7 @@ public class Scrubber implements Closeable
                         ? new ScrubController(cfs)
                         : new CompactionController(cfs, Collections.singleton(sstable), CompactionManager.getDefaultGcBefore(cfs));
         this.isCommutative = cfs.metadata.isCounter();
+        this.isIndex = cfs.isIndex();
         this.expectedBloomFilterSize = Math.max(cfs.metadata.getMinIndexInterval(), (int)(SSTableReader.getApproximateKeyCount(toScrub)));
 
         // loop through each row, deserializing to check for damage.
@@ -229,7 +231,7 @@ public class Scrubber implements Closeable
                         catch (Throwable th2)
                         {
                             throwIfFatal(th2);
-                            throwIfCommutative(key, th2);
+                            throwIfUnsafeToContinue(key, th2);
 
                             outputHandler.warn("Retry failed too. Skipping to next row (retry's stacktrace follows)", th2);
                             dataFile.seek(nextRowPositionFromIndex);
@@ -238,7 +240,7 @@ public class Scrubber implements Closeable
                     }
                     else
                     {
-                        throwIfCommutative(key, th);
+                        throwIfUnsafeToContinue(key, th);
 
                         outputHandler.warn("Row starting at position " + dataStart + " is unreadable; skipping to next");
                         if (currentIndexKey != null)
@@ -324,8 +326,15 @@ public class Scrubber implements Closeable
             throw (Error) th;
     }
 
-    private void throwIfCommutative(DecoratedKey key, Throwable th)
+    private void throwIfUnsafeToContinue(DecoratedKey key, Throwable th)
     {
+        if (isIndex)
+        {
+            outputHandler.warn(String.format("An error occurred while scrubbing the row with key '%s' for an index table. " +
+                                             "Scrubbing will abort and the index will be rebuilt.", key));
+            throw new IOError(th);
+        }
+
         if (isCommutative && !skipCorrupted)
         {
             outputHandler.warn(String.format("An error occurred while scrubbing the row with key '%s'.  Skipping corrupt " +
