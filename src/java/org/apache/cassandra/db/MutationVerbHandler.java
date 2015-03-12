@@ -30,10 +30,8 @@ public class MutationVerbHandler implements IVerbHandler<Mutation>
 {
     private static final boolean TEST_FAIL_WRITES = System.getProperty("cassandra.test.fail_writes", "false").equalsIgnoreCase("true");
 
-    public void doVerb(MessageIn<Mutation> message, int id)
+    public void doVerb(MessageIn<Mutation> message, int id)  throws IOException
     {
-        try
-        {
             // Check if there were any forwarding headers in this message
             byte[] from = message.parameters.get(Mutation.FORWARD_FROM);
             InetAddress replyTo;
@@ -53,11 +51,6 @@ public class MutationVerbHandler implements IVerbHandler<Mutation>
             WriteResponse response = new WriteResponse();
             Tracing.trace("Enqueuing response to {}", replyTo);
             MessagingService.instance().sendReply(response.createMessage(), id, replyTo);
-        }
-        catch (IOException e)
-        {
-            throw new IOError(e);
-        }
     }
 
     /**
