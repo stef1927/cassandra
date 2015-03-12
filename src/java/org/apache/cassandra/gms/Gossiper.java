@@ -29,11 +29,13 @@ import javax.management.MBeanServer;
 import javax.management.ObjectName;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.Uninterruptibles;
 
 import org.apache.cassandra.utils.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import org.apache.cassandra.concurrent.DebuggableScheduledThreadPoolExecutor;
 import org.apache.cassandra.concurrent.JMXEnabledThreadPoolExecutor;
 import org.apache.cassandra.concurrent.Stage;
@@ -46,8 +48,6 @@ import org.apache.cassandra.net.MessageOut;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.FBUtilities;
-
-import com.google.common.collect.ImmutableList;
 
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
@@ -876,7 +876,7 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
             realMarkAlive(addr, localState);
             return;
         }
-        
+
         if (localState.hasPendingEcho())
         {
             logger.debug("{} has already a pending echo, skipping it", localState);
@@ -900,7 +900,7 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
                 realMarkAlive(addr, localState);
             }
         };
-        
+
         localState.markPendingEcho(true);
         MessagingService.instance().sendRR(echoMessage, addr, echoHandler);
     }
@@ -961,7 +961,7 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
             for (IEndpointStateChangeSubscriber subscriber : subscribers)
                 subscriber.onRestart(ep, localEpState);
         }
-        
+
         if (!isDeadState(epState))
             markAlive(ep, epState);
         else
@@ -1036,7 +1036,7 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
                     }
                     else if (logger.isTraceEnabled())
                             logger.trace("Ignoring remote version " + remoteMaxVersion + " <= " + localMaxVersion + " for " + ep);
-                    
+
                     if (!localEpStatePtr.isAlive() && !isDeadState(localEpStatePtr)) // unless of course, it was dead
                         markAlive(ep, localEpStatePtr);
                 }

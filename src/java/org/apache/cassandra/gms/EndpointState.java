@@ -47,7 +47,7 @@ public class EndpointState
     private volatile long updateTimestamp;
     private volatile boolean isAlive;
     private volatile boolean hasPendingEcho;
-    
+
     EndpointState(HeartBeatState initialHbState)
     {
         hbState = initialHbState;
@@ -114,17 +114,17 @@ public class EndpointState
     {
         isAlive = false;
     }
-    
+
     public boolean hasPendingEcho()
     {
         return hasPendingEcho;
     }
-    
+
     public void markPendingEcho(boolean val)
     {
         hasPendingEcho = val;
     }
-    
+
     public String toString()
     {
         return "EndpointState: HeartBeatState = " + hbState + ", AppStateMap = " + applicationState;
