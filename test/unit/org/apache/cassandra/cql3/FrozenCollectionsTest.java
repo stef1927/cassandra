@@ -793,6 +793,7 @@ public class FrozenCollectionsTest extends CQLTester
         );
     }
 
+    @Test
     public void testFrozenListInMap() throws Throwable
     {
         createTable("CREATE TABLE %s (k int primary key, m map<frozen<list<int>>, int>)");
@@ -801,7 +802,7 @@ public class FrozenCollectionsTest extends CQLTester
         assertRows(execute("SELECT * FROM %s WHERE k = 1"),
                 row(1, map(list(1, 2, 3), 1)));
 
-        execute("UPDATE %s SET m[[1]]=2 WHERE k=1");
+        execute("UPDATE %s SET m[[1, 2, 3]]=2 WHERE k=1");
         assertRows(execute("SELECT * FROM %s WHERE k = 1"),
                 row(1, map(list(1, 2, 3), 2)));
 
@@ -816,6 +817,7 @@ public class FrozenCollectionsTest extends CQLTester
                 row(1, map(list(4, 5, 6), 3)));
     }
 
+    @Test
     public void testFrozenListInSet() throws Throwable
     {
         createTable("CREATE TABLE %s (k int primary key, s set<frozen<list<int>>>)");
@@ -841,6 +843,7 @@ public class FrozenCollectionsTest extends CQLTester
         );
     }
 
+    @Test
     public void testFrozenListInList() throws Throwable
     {
         createTable("CREATE TABLE %s (k int primary key, l list<frozen<list<int>>>)");
@@ -876,6 +879,7 @@ public class FrozenCollectionsTest extends CQLTester
         );
     }
 
+    @Test
     public void testFrozenMapInMap() throws Throwable
     {
         createTable("CREATE TABLE %s (k int primary key, m map<frozen<map<int, int>>, int>)");
@@ -899,6 +903,7 @@ public class FrozenCollectionsTest extends CQLTester
                 row(1, map(map(3, 3, 4, 4), 3)));
     }
 
+    @Test
     public void testFrozenMapInSet() throws Throwable
     {
         createTable("CREATE TABLE %s (k int primary key, s set<frozen<map<int, int>>>)");
@@ -925,6 +930,7 @@ public class FrozenCollectionsTest extends CQLTester
         );
     }
 
+    @Test
     public void testFrozenMapInList() throws Throwable
     {
         createTable("CREATE TABLE %s (k int primary key, l list<frozen<map<int, int>>>)");
@@ -960,6 +966,7 @@ public class FrozenCollectionsTest extends CQLTester
         );
     }
 
+    @Test
     public void testFrozenSetInMap() throws Throwable
     {
         createTable("CREATE TABLE %s (k int primary key, m map<frozen<set<int>>, int>)");
@@ -968,21 +975,22 @@ public class FrozenCollectionsTest extends CQLTester
         assertRows(execute("SELECT * FROM %s WHERE k = 1"),
                 row(1, map(set(1, 2, 3), 1)));
 
-        execute("UPDATE %s SET m[?]=2 WHERE k=1", set(4, 5, 6));
+        execute("UPDATE %s SET m[?]=2 WHERE k=1", set(1, 2, 3));
         assertRows(execute("SELECT * FROM %s WHERE k = 1"),
-                row(1, map(set(4, 5, 6), 2)));
+                row(1, map(set(1, 2, 3), 2)));
 
-        execute("UPDATE %s SET m = m + ? WHERE k=1", map(set(7, 8, 9), 3));
+        execute("UPDATE %s SET m = m + ? WHERE k=1", map(set(4, 5, 6), 3));
         assertRows(execute("SELECT * FROM %s WHERE k = 1"),
                 row(1,
-                    map(set(4, 5, 6), 2,
-                        set(7, 8, 9), 3)));
+                    map(set(1, 2, 3), 2,
+                        set(4, 5, 6), 3)));
 
-        execute("DELETE m[?] FROM %s WHERE k = 1", set(4, 5, 6));
+        execute("DELETE m[?] FROM %s WHERE k = 1", set(1, 2, 3));
         assertRows(execute("SELECT * FROM %s WHERE k = 1"),
-                row(1, map(set(7, 8, 9), 3)));
+                row(1, map(set(4, 5, 6), 3)));
     }
 
+    @Test
     public void testFrozenSetInSet() throws Throwable
     {
         createTable("CREATE TABLE %s (k int primary key, s set<frozen<set<int>>>)");
@@ -1009,6 +1017,7 @@ public class FrozenCollectionsTest extends CQLTester
         );
     }
 
+    @Test
     public void testFrozenSetInList() throws Throwable
     {
         createTable("CREATE TABLE %s (k int primary key, l list<frozen<set<int>>>)");
