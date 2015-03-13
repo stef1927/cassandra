@@ -2780,11 +2780,11 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
     {
         KSMetaData ksMetaData = Schema.instance.getKSMetaData(keyspaceName);
         if (ksMetaData == null)
-            return Collections.emptyList();
+            throw new IllegalArgumentException("Unknown keyspace: " + keyspaceName);
 
         CFMetaData cfMetaData = ksMetaData.cfMetaData().get(cf);
         if (cfMetaData == null)
-            return Collections.emptyList();
+            throw new IllegalArgumentException("Unknown column family: " + cf + " in keyspace: " + keyspaceName);
 
         return getNaturalEndpoints(keyspaceName, getPartitioner().getToken(cfMetaData.getKeyValidator().fromString(key)));
     }
