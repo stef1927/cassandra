@@ -335,7 +335,10 @@ public class CompactionManager implements CompactionManagerMBean
                         logger.info("Rebuilding index for {}", cfs.name);
                         FBUtilities.waitOnFuture(cfs.parentIndex().buildIndexAsync());
                     }
-                    throw ex;
+                    else
+                    {
+                        throw ex;
+                    }
                 }
             }
         });
@@ -922,7 +925,11 @@ public class CompactionManager implements CompactionManagerMBean
     {
         FileUtils.createDirectory(compactionFileLocation);
 
-        return SSTableWriter.create(Descriptor.fromFilename(cfs.getTempSSTablePath(compactionFileLocation)), expectedBloomFilterSize, repairedAt, sstable.getSSTableLevel());
+        return SSTableWriter.create(cfs.metadata,
+                                    Descriptor.fromFilename(cfs.getTempSSTablePath(compactionFileLocation)),
+                                    expectedBloomFilterSize,
+                                    repairedAt,
+                                    sstable.getSSTableLevel());
     }
 
     public static SSTableWriter createWriterForAntiCompaction(ColumnFamilyStore cfs,

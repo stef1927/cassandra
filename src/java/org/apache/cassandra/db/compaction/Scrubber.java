@@ -331,7 +331,7 @@ public class Scrubber implements Closeable
         if (isIndex)
         {
             outputHandler.warn(String.format("An error occurred while scrubbing the row with key '%s' for an index table. " +
-                                             "Scrubbing will abort and the index will be rebuilt.", key));
+                                             "Scrubbing will abort for this table and the index will be rebuilt.", key));
             throw new IOError(th);
         }
 
