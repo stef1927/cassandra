@@ -1184,7 +1184,7 @@ public class NodeCmd
     {
         try 
         {
-            List<InetAddress> endpoints = this.probe.getEndpoints(keySpace, cf, key);
+            List<InetAddress> endpoints = probe.getEndpoints(keySpace, cf, key);
 
             for (InetAddress anEndpoint : endpoints)
             {
@@ -1194,6 +1194,7 @@ public class NodeCmd
         catch (IllegalArgumentException ex)
         {
             output.println(ex.getMessage());
+            probe.failed();
         }
     }
 
