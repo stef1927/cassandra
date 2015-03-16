@@ -43,13 +43,7 @@ import javax.management.openmbean.TabularData;
 
 import com.google.common.base.Predicate;
 import com.google.common.base.Throwables;
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ConcurrentHashMultiset;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Multimap;
-import com.google.common.collect.Multiset;
-import com.google.common.collect.Sets;
+import com.google.common.collect.*;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.RateLimiter;
 import org.slf4j.Logger;
@@ -69,6 +63,7 @@ import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.OnDiskAtom;
 import org.apache.cassandra.db.SystemKeyspace;
 import org.apache.cassandra.db.compaction.CompactionInfo.Holder;
+import org.apache.cassandra.db.index.SecondaryIndex;
 import org.apache.cassandra.db.index.SecondaryIndexBuilder;
 import org.apache.cassandra.dht.Bounds;
 import org.apache.cassandra.dht.Range;
@@ -324,22 +319,7 @@ public class CompactionManager implements CompactionManagerMBean
             @Override
             public void execute(SSTableReader input) throws IOException
             {
-                try
-                {
-                    scrubOne(cfs, input, skipCorrupted);
-                }
-                catch (IOException ex)
-                {
-                    if (cfs.isIndex())
-                    {
-                        logger.info("Rebuilding index for {}", cfs.name);
-                        FBUtilities.waitOnFuture(cfs.parentIndex().buildIndexAsync());
-                    }
-                    else
-                    {
-                        throw ex;
-                    }
-                }
+                scrubOne(cfs, input, skipCorrupted);
             }
         });
     }

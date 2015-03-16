@@ -20,10 +20,8 @@ package org.apache.cassandra.db;
  *
  */
 
-import java.io.File;
-import java.io.IOError;
-import java.io.IOException;
-import java.io.RandomAccessFile;
+import java.io.*;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -36,6 +34,7 @@ import org.apache.cassandra.cql3.Operator;
 import org.apache.cassandra.cql3.QueryProcessor;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNameType;
+import org.apache.cassandra.db.index.SecondaryIndex;
 import org.apache.cassandra.db.marshal.BytesType;
 import org.apache.cassandra.db.marshal.CounterColumnType;
 import org.apache.cassandra.db.marshal.UUIDType;
@@ -138,18 +137,9 @@ public class ScrubTest
         List<Row> rows = cfs.getRangeSlice(Util.range("", ""), null, new IdentityQueryFilter(), 1000);
         assertEquals(2, rows.size());
 
+        overrdeWithGarbage(cfs, ByteBufferUtil.bytes("0"), ByteBufferUtil.bytes("1"));
+
         SSTableReader sstable = cfs.getSSTables().iterator().next();
-
-        // overwrite one row with garbage
-        long row0Start = sstable.getPosition(RowPosition.ForKey.get(ByteBufferUtil.bytes("0"), sstable.partitioner), SSTableReader.Operator.EQ).position;
-        long row1Start = sstable.getPosition(RowPosition.ForKey.get(ByteBufferUtil.bytes("1"), sstable.partitioner), SSTableReader.Operator.EQ).position;
-        long startPosition = row0Start < row1Start ? row0Start : row1Start;
-        long endPosition = row0Start < row1Start ? row1Start : row0Start;
-
-        RandomAccessFile file = new RandomAccessFile(sstable.getFilename(), "rw");
-        file.seek(startPosition);
-        file.writeBytes(StringUtils.repeat('z', (int) (endPosition - startPosition)));
-        file.close();
 
         // with skipCorrupted == false, the scrub is expected to fail
         Scrubber scrubber = new Scrubber(cfs, sstable, false, false);
@@ -276,6 +266,22 @@ public class ScrubTest
         assert rows.size() == 6 : "Got " + rows.size();
     }
 
+    private void overrdeWithGarbage(ColumnFamilyStore cfs, ByteBuffer key1, ByteBuffer key2) throws IOException
+    {
+        SSTableReader sstable = cfs.getSSTables().iterator().next();
+
+        // overwrite one row with garbage
+        long row0Start = sstable.getPosition(RowPosition.ForKey.get(key1, sstable.partitioner), SSTableReader.Operator.EQ).position;
+        long row1Start = sstable.getPosition(RowPosition.ForKey.get(key2, sstable.partitioner), SSTableReader.Operator.EQ).position;
+        long startPosition = row0Start < row1Start ? row0Start : row1Start;
+        long endPosition = row0Start < row1Start ? row1Start : row0Start;
+
+        RandomAccessFile file = new RandomAccessFile(sstable.getFilename(), "rw");
+        file.seek(startPosition);
+        file.writeBytes(StringUtils.repeat('z', (int) (endPosition - startPosition)));
+        file.close();
+    }
+
     private static boolean isRowOrdered(List<Row> rows)
     {
         DecoratedKey prev = null;
@@ -293,7 +299,6 @@ public class ScrubTest
         for (int i = 0; i < rowsPerSSTable; i++)
         {
             String key = String.valueOf(i);
-            // create a row and update the birthdate value, test that the index query fetches the new version
             ColumnFamily cf = ArrayBackedSortedColumns.factory.create(KEYSPACE, CF);
             cf.addColumn(column("c1", "1", 1L));
             cf.addColumn(column("c2", "2", 1L));
@@ -304,13 +309,29 @@ public class ScrubTest
         cfs.forceBlockingFlush();
     }
 
-    protected void fillIndexCF(ColumnFamilyStore cfs, String key, long idxVal, long otherVal)
+    private void fillIndexCF(ColumnFamilyStore cfs, boolean composite, long ... values)
     {
-        ColumnFamily cf = ArrayBackedSortedColumns.factory.create(KEYSPACE, cfs.name);
-        cf.addColumn(column(COL_KEYS_INDEX, idxVal, 1L));
-        cf.addColumn(column(COL_NON_INDEX, otherVal, 1L));
-        Mutation rm = new Mutation(KEYSPACE, ByteBufferUtil.bytes(key), cf);
-        rm.applyUnsafe();
+        assertTrue(values.length % 2 == 0);
+        for (int i = 0; i < values.length; i +=2)
+        {
+            String key = String.valueOf(i);
+            ColumnFamily cf = ArrayBackedSortedColumns.factory.create(KEYSPACE, cfs.name);
+            if (composite)
+            {
+                String clusterKey = "c" + key;
+                cf.addColumn(column(clusterKey, COL_COMPOSITES_INDEX, values[i], 1L));
+                cf.addColumn(column(clusterKey, COL_NON_INDEX, values[i + 1], 1L));
+            }
+            else
+            {
+                cf.addColumn(column(COL_KEYS_INDEX, values[i], 1L));
+                cf.addColumn(column(COL_NON_INDEX, values[i + 1], 1L));
+            }
+            Mutation rm = new Mutation(KEYSPACE, ByteBufferUtil.bytes(key), cf);
+            rm.applyUnsafe();
+        }
+
+        cfs.forceBlockingFlush();
     }
 
     protected void fillCounterCF(ColumnFamilyStore cfs, int rowsPerSSTable) throws WriteTimeoutException
@@ -389,43 +410,68 @@ public class ScrubTest
     }
 
     @Test /* CASSANDRA-5174 */
-    public void testScrubKeysIndex() throws ExecutionException, InterruptedException
+    public void testScrubKeysIndex() throws IOException, ExecutionException, InterruptedException
+    {
+        testScrubIndex(CF_INDEX1, COL_KEYS_INDEX, false, false);
+    }
+
+    @Test /* CASSANDRA-5174 */
+    public void testScrubCompositeIndex() throws IOException, ExecutionException, InterruptedException
+    {
+        testScrubIndex(CF_INDEX2, COL_COMPOSITES_INDEX, true, false);
+    }
+
+    @Test /* CASSANDRA-5174 */
+    public void testFailScrubKeysIndex() throws IOException, ExecutionException, InterruptedException
+    {
+        testScrubIndex(CF_INDEX1, COL_KEYS_INDEX, false, true);
+    }
+
+    @Test /* CASSANDRA-5174 */
+    public void testFailScrubCompositeIndex() throws IOException, ExecutionException, InterruptedException
+    {
+        testScrubIndex(CF_INDEX2, COL_COMPOSITES_INDEX, true, true);
+    }
+
+    private void testScrubIndex(String cfName, String colName, boolean composite, boolean fail)
+            throws IOException, ExecutionException, InterruptedException
     {
         CompactionManager.instance.disableAutoCompaction();
         Keyspace keyspace = Keyspace.open(KEYSPACE);
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF_INDEX1);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfName);
         cfs.clearUnsafe();
 
-        fillIndexCF(cfs, "1", 1, 0);
-        fillIndexCF(cfs, "2", 2, 0);
-        fillIndexCF(cfs, "3", 1, 0);
-        fillIndexCF(cfs, "4", 2, 0);
-        fillIndexCF(cfs, "5", 1, 0);
-        cfs.forceBlockingFlush();
+        int numRows = 1000;
+        long[] colValues = new long [numRows * 2]; // each row has two columns
+        for (int i = 0; i < colValues.length; i+=2)
+        {
+            colValues[i] = (i % 4 == 0 ? 1L : 2L); // index column
+            colValues[i+1] = 3L; //other column
+        }
+        fillIndexCF(cfs, composite, colValues);
 
         // check index
-        IndexExpression expr = new IndexExpression(ByteBufferUtil.bytes(COL_KEYS_INDEX), Operator.EQ, ByteBufferUtil.bytes(1L));
-        List<Row> rows = cfs.search(Util.range("", ""), Arrays.asList(expr), new IdentityQueryFilter(), 100);
+        IndexExpression expr = new IndexExpression(ByteBufferUtil.bytes(colName), Operator.EQ, ByteBufferUtil.bytes(1L));
+        List<Row> rows = cfs.search(Util.range("", ""), Arrays.asList(expr), new IdentityQueryFilter(), numRows);
         assertNotNull(rows);
-        assertEquals(3, rows.size());
+        assertEquals(numRows / 2, rows.size());
 
         // scrub index
         Set<ColumnFamilyStore> indexCfss = cfs.indexManager.getIndexesBackedByCfs();
         assertTrue(indexCfss.size() == 1);
         for(ColumnFamilyStore indexCfs : indexCfss)
         {
-            CompactionManager.instance.performScrub(indexCfs, false);
+            if (fail)
+            {
+                overrdeWithGarbage(indexCfs, ByteBufferUtil.bytes(1L), ByteBufferUtil.bytes(2L));
+            }
+
+            indexCfs.scrub(false, false);
         }
 
         // check index is still working
-        rows = cfs.search(Util.range("", ""), Arrays.asList(expr), new IdentityQueryFilter(), 100);
+        rows = cfs.search(Util.range("", ""), Arrays.asList(expr), new IdentityQueryFilter(), numRows);
         assertNotNull(rows);
-        assertEquals(3, rows.size());
-    }
-
-    @Test /* CASSANDRA-5174 */
-    public void testScrubCompositeIndex() throws ExecutionException, InterruptedException
-    {
-        //TODO
+        assertEquals(numRows / 2, rows.size());
     }
 }

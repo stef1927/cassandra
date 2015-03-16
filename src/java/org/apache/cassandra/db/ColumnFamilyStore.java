@@ -767,6 +767,11 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         logger.info("Done loading load new SSTables for {}/{}", keyspace.getName(), name);
     }
 
+    public void rebuildSecondaryIndex(String idxName)
+    {
+        rebuildSecondaryIndex(keyspace.getName(), metadata.cfName, idxName);
+    }
+
     public static void rebuildSecondaryIndex(String ksName, String cfName, String... idxNames)
     {
         ColumnFamilyStore cfs = Keyspace.open(ksName).getColumnFamilyStore(cfName);
@@ -1390,7 +1395,50 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         // skip snapshot creation during scrub, SEE JIRA 5891
         if(!disableSnapshot)
             snapshotWithoutFlush("pre-scrub-" + System.currentTimeMillis());
-        return CompactionManager.instance.performScrub(ColumnFamilyStore.this, skipCorrupted);
+
+        try
+        {
+            return CompactionManager.instance.performScrub(ColumnFamilyStore.this, skipCorrupted);
+        }
+        catch(Throwable t)
+        {
+            logger.info(t.getMessage());
+            if (!rebuildOnFailedScrub())
+                throw t;
+
+            return CompactionManager.AllSSTableOpStatus.SUCCESSFUL;
+        }
+    }
+
+    /**
+     * CASSANDRA-5174 : For an index cfs we may be able to discard everything and just rebuild
+     * the index when a scrub fails.
+     *
+     * @return true if we are an index cfs and we successfully rebuild the index
+     */
+    public boolean rebuildOnFailedScrub()
+    {
+        if (!isIndex())
+            return false;
+
+        SecondaryIndex index = null;
+        if (metadata.cfName.contains(Directories.SECONDARY_INDEX_NAME_SEPARATOR))
+        {
+            String[] parts = metadata.cfName.split("\\" + Directories.SECONDARY_INDEX_NAME_SEPARATOR, 2);
+            ColumnFamilyStore parentCfs = keyspace.getColumnFamilyStore(parts[0]);
+            index = parentCfs.indexManager.getIndexByName(metadata.cfName);
+            assert index != null;
+        }
+
+        if (index == null)
+            return false;
+
+        truncateBlocking();
+
+        logger.info("Rebuilding index for {}", name);
+        index.getBaseCfs().rebuildSecondaryIndex(index.getIndexName());
+
+        return true;
     }
 
     public CompactionManager.AllSSTableOpStatus sstablesRewrite(boolean excludeCurrentVersion) throws ExecutionException, InterruptedException
@@ -2626,22 +2674,6 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     public boolean isIndex()
     {
         return partitioner instanceof LocalPartitioner;
-    }
-
-    /** Return the index for which we store the data */
-    public SecondaryIndex parentIndex()
-    {
-        assert isIndex();
-
-        if (metadata.cfName.contains(Directories.SECONDARY_INDEX_NAME_SEPARATOR))
-        {
-            String[] parts = metadata.cfName.split("\\" + Directories.SECONDARY_INDEX_NAME_SEPARATOR, 2);
-            ColumnFamilyStore parentCfs = keyspace.getColumnFamilyStore(parts[0]);
-            return parentCfs.indexManager.getIndexByName(parts[1]);
-        }
-
-        assert false;
-        return null;
     }
 
     public Iterable<ColumnFamilyStore> concatWithIndexes()

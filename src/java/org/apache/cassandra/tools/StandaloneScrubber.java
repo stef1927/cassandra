@@ -114,6 +114,11 @@ public class StandaloneScrubber
                         {
                             scrubber.scrub();
                         }
+                        catch (Throwable t)
+                        {
+                            if (!cfs.rebuildOnFailedScrub())
+                                throw t;
+                        }
                         finally
                         {
                             scrubber.close();
