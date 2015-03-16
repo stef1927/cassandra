@@ -325,4 +325,23 @@ public abstract class Sets
             }
         }
     }
+
+    public static class ElementDiscarder extends Operation
+    {
+        public ElementDiscarder(ColumnDefinition column, Term k)
+        {
+            super(column, k);
+        }
+
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
+        {
+            assert column.type.isMultiCell() : "Attempted to delete a single element in a frozen set";
+            Term.Terminal elt = t.bind(params.options);
+            if (elt == null)
+                throw new InvalidRequestException("Invalid null set element");
+
+            CellName cellName = cf.getComparator().create(prefix, column, elt.get(params.options));
+            cf.addColumn(params.makeTombstone(cellName));
+        }
+    }
 }
