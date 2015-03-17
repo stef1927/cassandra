@@ -215,39 +215,40 @@ public class SSTableSimpleUnsortedWriter extends AbstractSSTableSimpleWriter
 
         public void run()
         {
-            SSTableWriter writer = null;
-
-            while (true)
             {
-                try
+                while (true)
                 {
-                    Buffer b = writeQueue.take();
-                    if (b == SENTINEL)
-                        return;
-
-                    writer = getWriter();
-                    boolean first = true;
-                    for (Map.Entry<DecoratedKey, ColumnFamily> entry : b.entrySet())
+                    try
                     {
-                        if (entry.getValue().getColumnCount() > 0)
-                            writer.append(entry.getKey(), entry.getValue());
-                        else if (!first)
-                            throw new AssertionError("Empty partition");
-                        first = false;
-                    }
-                    writer.close();
-                }
-                catch (Throwable e)
-                {
-                    JVMStabilityInspector.inspectThrowable(e);
-                    if (writer != null)
-                        writer.abort();
-                    // Keep only the first exception
-                    if (exception == null)
-                      exception = e;
-                }
-            }
+                        Buffer b = writeQueue.take();
+                        if (b == SENTINEL)
+                            return;
 
+                        try (SSTableWriter writer = getWriter();)
+                        {
+                            boolean first = true;
+                            for (Map.Entry<DecoratedKey, ColumnFamily> entry : b.entrySet())
+                            {
+                                if (entry.getValue().getColumnCount() > 0)
+                                    writer.append(entry.getKey(), entry.getValue());
+                                else if (!first)
+                                    throw new AssertionError("Empty partition");
+                                first = false;
+                            }
+
+                            writer.finishAndClose();
+                        }
+                    }
+                    catch (Throwable e)
+                    {
+                        JVMStabilityInspector.inspectThrowable(e);
+                        // Keep only the first exception
+                        if (exception == null)
+                            exception = e;
+                    }
+                }
+
+            }
         }
     }
 }

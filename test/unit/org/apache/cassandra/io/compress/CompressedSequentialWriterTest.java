@@ -78,30 +78,31 @@ public class CompressedSequentialWriterTest
         try
         {
             MetadataCollector sstableMetadataCollector = new MetadataCollector(new SimpleDenseCellNameType(BytesType.instance)).replayPosition(null);
-            CompressedSequentialWriter writer = new CompressedSequentialWriter(f, filename + ".metadata", new CompressionParameters(compressor), sstableMetadataCollector);
-
             byte[] dataPre = new byte[bytesToTest];
             byte[] rawPost = new byte[bytesToTest];
-            Random r = new Random();
-
-            // Test both write with byte[] and ByteBuffer
-            r.nextBytes(dataPre);
-            r.nextBytes(rawPost);
-            ByteBuffer dataPost = makeBB(bytesToTest);
-            dataPost.put(rawPost);
-            dataPost.flip();
-
-            writer.write(dataPre);
-            FileMark mark = writer.mark();
-
-            // Write enough garbage to transition chunk
-            for (int i = 0; i < CompressionParameters.DEFAULT_CHUNK_LENGTH; i++)
+            try (CompressedSequentialWriter writer = new CompressedSequentialWriter(f, filename + ".metadata", new CompressionParameters(compressor), sstableMetadataCollector);)
             {
-                writer.write((byte)i);
+                Random r = new Random();
+
+                // Test both write with byte[] and ByteBuffer
+                r.nextBytes(dataPre);
+                r.nextBytes(rawPost);
+                ByteBuffer dataPost = makeBB(bytesToTest);
+                dataPost.put(rawPost);
+                dataPost.flip();
+
+                writer.write(dataPre);
+                FileMark mark = writer.mark();
+
+                // Write enough garbage to transition chunk
+                for (int i = 0; i < CompressionParameters.DEFAULT_CHUNK_LENGTH; i++)
+                {
+                    writer.write((byte)i);
+                }
+                writer.resetAndTruncate(mark);
+                writer.write(dataPost);
+                writer.finishAndClose(null);
             }
-            writer.resetAndTruncate(mark);
-            writer.write(dataPost);
-            writer.close();
 
             assert f.exists();
             RandomAccessReader reader = CompressedRandomAccessReader.open(channel, new CompressionMetadata(filename + ".metadata", f.length()));

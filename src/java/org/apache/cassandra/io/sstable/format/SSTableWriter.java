@@ -31,17 +31,20 @@ import org.apache.cassandra.io.sstable.Component;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
+import org.apache.cassandra.io.sstable.metadata.MetadataComponent;
+import org.apache.cassandra.io.sstable.metadata.MetadataType;
 import org.apache.cassandra.io.sstable.metadata.StatsMetadata;
 import org.apache.cassandra.io.util.FileUtils;
-import org.apache.cassandra.utils.Pair;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.cassandra.utils.concurrent.Transactional;
 
 import java.io.DataInput;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
+
+import static org.apache.cassandra.utils.Throwables.maybeFail;
 
 /**
  * This is the API all table writers must implement.
@@ -49,30 +52,28 @@ import java.util.Set;
  * TableWriter.create() is the primary way to create a writer for a particular format.
  * The format information is part of the Descriptor.
  */
-public abstract class SSTableWriter extends SSTable
+public abstract class SSTableWriter extends SSTable implements Transactional
 {
-    private static final Logger logger = LoggerFactory.getLogger(SSTableWriter.class);
-
-    public static enum FinishType
-    {
-        CLOSE(null, true),
-        NORMAL(SSTableReader.OpenReason.NORMAL, true),
-        EARLY(SSTableReader.OpenReason.EARLY, false), // no renaming
-        FINISH_EARLY(SSTableReader.OpenReason.NORMAL, true); // tidy up an EARLY finish
-        public final SSTableReader.OpenReason openReason;
-
-        public final boolean isFinal;
-        FinishType(SSTableReader.OpenReason openReason, boolean isFinal)
-        {
-            this.openReason = openReason;
-            this.isFinal = isFinal;
-        }
-    }
-
-    protected final long repairedAt;
+    protected long repairedAt;
     protected final long keyCount;
     protected final MetadataCollector metadataCollector;
     protected final RowIndexEntry.IndexSerializer rowIndexEntrySerializer;
+    protected final TxnProxy txnproxy = txnProxy();
+
+    protected abstract TxnProxy txnProxy();
+
+    // due to lack of multiple inheritance, we use an inner class to proxy our Transactional implementation details
+    protected abstract class TxnProxy extends AbstractTransactional
+    {
+        protected final void prepare()
+        {
+            checkPrepare();
+            doPrepare();
+            readyToCommit();
+        }
+
+        protected abstract void doPrepare();
+    }
 
     protected SSTableWriter(Descriptor descriptor, long keyCount, long repairedAt, CFMetaData metadata, IPartitioner partitioner, MetadataCollector metadataCollector)
     {
@@ -164,28 +165,104 @@ public abstract class SSTableWriter extends SSTable
 
     public abstract long getOnDiskFilePointer();
 
-    public abstract void isolateReferences();
-
     public abstract void resetAndTruncate();
+
+    public SSTableWriter setRepairedAt(long repairedAt)
+    {
+        if (repairedAt > 0)
+            this.repairedAt = repairedAt;
+        return this;
+    }
+
+    /**
+     * Open the resultant SSTableReader before it has been fully written
+     * @param maxDataAge
+     * @return
+     */
+    public abstract SSTableReader openEarly(long maxDataAge);
+
+    /**
+     * Open the resultant SSTableReader once it has been fully written, but before the
+     * _set_ of tables that are being written together as one atomic operation are all ready
+     * @param maxDataAge
+     * @return
+     */
+    public abstract SSTableReader openFinalEarly(long maxDataAge);
+
+    /**
+     * Open the resultant SSTableReader once it has been fully written, and all related state
+     * is ready to be finalised including other sstables being written involved in the same operation
+     * @param maxDataAge
+     * @return
+     */
+    public abstract SSTableReader openFinal(long maxDataAge);
+
+    // finalise our state on disk, including renaming
+    public final void prepareToCommit()
+    {
+        txnproxy.prepare();
+    }
+
+    public final Throwable commit(Throwable accumulate)
+    {
+        return txnproxy.commit(accumulate);
+    }
+
+    public final Throwable abort(Throwable accumulate)
+    {
+        return txnproxy.abort(accumulate);
+    }
+
+    public final void close()
+    {
+        txnproxy.close();
+    }
+
+    public final void abort()
+    {
+        maybeFail(abort(null));
+    }
+
+    // finish writing all of the metadata and other components to disk, and rename the files
+    public void finish()
+    {
+        if (getFilePointer() > 0)
+        {
+            prepareToCommit();
+            maybeFail(commit(null));
+        }
+    }
+
+    public void finishAndClose()
+    {
+        finish();
+        close();
+    }
 
     public SSTableReader closeAndOpenReader()
     {
-        return closeAndOpenReader(System.currentTimeMillis());
+        return closeAndOpenReader(-1);
     }
 
     public SSTableReader closeAndOpenReader(long maxDataAge)
     {
-        return finish(FinishType.NORMAL, maxDataAge, repairedAt);
+        prepareToCommit();
+        SSTableReader result = openFinal(maxDataAge);
+        maybeFail(commit(null));
+        close();
+        return result;
     }
 
-    public abstract SSTableReader finish(FinishType finishType, long maxDataAge, long repairedAt);
+    protected Map<MetadataType, MetadataComponent> finalizeMetadata()
+    {
+        return metadataCollector.finalizeMetadata(partitioner.getClass().getCanonicalName(),
+                                                  metadata.getBloomFilterFpChance(), repairedAt);
+    }
 
-    public abstract SSTableReader openEarly(long maxDataAge);
-
-    // Close the writer and return the descriptor to the new sstable and it's metadata
-    public abstract Pair<Descriptor, StatsMetadata> close();
-
-
+    protected StatsMetadata statsMetadata()
+    {
+        return (StatsMetadata) finalizeMetadata().get(MetadataType.STATS);
+    }
 
     public static Descriptor rename(Descriptor tmpdesc, Set<Component> components)
     {
@@ -207,12 +284,6 @@ public abstract class SSTableWriter extends SSTable
         // rename it without confirmation because summary can be available for loadNewSSTables but not for closeAndOpenReader
         FileUtils.renameWithOutConfirm(tmpdesc.filenameFor(Component.SUMMARY), newdesc.filenameFor(Component.SUMMARY));
     }
-
-
-    /**
-     * After failure, attempt to close the index writer and data file before deleting all temp components for the sstable
-     */
-    public abstract void abort();
 
 
     public static abstract class Factory

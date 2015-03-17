@@ -34,15 +34,17 @@ import org.apache.cassandra.io.compress.CompressionParameters;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.utils.CLibrary;
+import org.apache.cassandra.utils.concurrent.Transactional;
+
+import static org.apache.cassandra.utils.Throwables.maybeFail;
+import static org.apache.cassandra.utils.Throwables.merge;
 
 /**
  * Adds buffering, mark, and fsyncing to OutputStream.  We always fsync on close; we may also
  * fsync incrementally if Config.trickle_fsync is enabled.
  */
-public class SequentialWriter extends OutputStream implements WritableByteChannel
+public class SequentialWriter extends OutputStream implements WritableByteChannel, Transactional
 {
-    private static final Logger logger = LoggerFactory.getLogger(SequentialWriter.class);
-
     // isDirty - true if this.buffer contains any un-synced bytes
     protected boolean isDirty = false, syncNeeded = false;
 
@@ -70,6 +72,63 @@ public class SequentialWriter extends OutputStream implements WritableByteChanne
     protected long lastFlushOffset;
 
     protected Runnable runPostFlush;
+
+    private final TxnProxy txnProxy = txnProxy();
+
+    // due to lack of multiple-inheritance, we proxy our transactional implementation
+    protected class TxnProxy extends AbstractTransactional
+    {
+        // we don't do anything on abort; deleting the files is up to others (retaining prior behaviour)
+        // TODO: revisit this decision
+
+        @Override
+        protected Throwable doCleanup(Throwable accumulate)
+        {
+            if (directoryFD >= 0)
+            {
+                try { CLibrary.tryCloseFD(directoryFD); }
+                catch (Throwable t) { accumulate = merge(accumulate, t); }
+                directoryFD = -1;
+            }
+
+            // close is idempotent
+            try { channel.close(); }
+            catch (Throwable t) { accumulate = merge(accumulate, t); }
+
+            if (buffer != null)
+            {
+                try { FileUtils.clean(buffer); }
+                catch (Throwable t) { accumulate = merge(accumulate, t); }
+                buffer = null;
+            }
+            return accumulate;
+        }
+
+        protected void doPrepare(Descriptor descriptor)
+        {
+            syncInternal();
+            // we must cleanup our file handles during prepareCommit for Windows compatibility as we cannot rename an open file;
+            // TODO: once we stop file renaming, remove this for clarity
+            releaseFileHandle();
+        }
+
+        protected void prepare(Descriptor descriptor)
+        {
+            checkPrepare();
+            doPrepare(descriptor);
+            readyToCommit();
+        }
+
+        protected Throwable doCommit(Throwable accumulate)
+        {
+            return accumulate;
+        }
+
+        protected Throwable doAbort(Throwable accumulate)
+        {
+            return accumulate;
+        }
+    }
 
     public SequentialWriter(File file, int bufferSize, boolean offheap)
     {
@@ -383,49 +442,49 @@ public class SequentialWriter extends OutputStream implements WritableByteChanne
         return channel.isOpen();
     }
 
+    public void finishAndClose(Descriptor descriptor)
+    {
+        prepareToCommit(descriptor);
+        maybeFail(commit(null));
+        close();
+    }
+
+    public final void prepareToCommit(Descriptor descriptor)
+    {
+        txnProxy.prepare(descriptor);
+    }
+
+    public final Throwable commit(Throwable accumulate)
+    {
+        return txnProxy.commit(accumulate);
+    }
+
+    public final Throwable abort(Throwable accumulate)
+    {
+        return txnProxy.abort(accumulate);
+    }
+
     @Override
     public void close()
     {
-        if (buffer == null)
-            return; // already closed
-
-        syncInternal();
-
-        buffer = null;
-
-        cleanup(true);
+        txnProxy.close();
     }
 
-    public void abort()
+    protected TxnProxy txnProxy()
     {
-        cleanup(false);
+        return new TxnProxy();
     }
 
-    private void cleanup(boolean throwExceptions)
+    public void releaseFileHandle()
     {
-        if (directoryFD >= 0)
+        try
         {
-            try { CLibrary.tryCloseFD(directoryFD); }
-            catch (Throwable t) { handle(t, throwExceptions); }
-            directoryFD = -1;
+            channel.close();
         }
-
-        // close is idempotent
-        try { channel.close(); }
-        catch (Throwable t) { handle(t, throwExceptions); }
-    }
-
-    private void handle(Throwable t, boolean throwExceptions)
-    {
-        if (!throwExceptions)
-            logger.warn("Suppressing exception thrown while aborting writer", t);
-        else
-            throw new FSWriteError(t, getPath());
-    }
-
-    // hack to make life easier for subclasses
-    public void writeFullChecksum(Descriptor descriptor)
-    {
+        catch (IOException e)
+        {
+            throw new FSWriteError(e, filePath);
+        }
     }
 
     /**
