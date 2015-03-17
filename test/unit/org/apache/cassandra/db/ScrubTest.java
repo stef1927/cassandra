@@ -32,17 +32,14 @@ import java.util.concurrent.ExecutionException;
 import org.apache.cassandra.config.KSMetaData;
 import org.apache.cassandra.cql3.Operator;
 import org.apache.cassandra.cql3.QueryProcessor;
-import org.apache.cassandra.db.composites.CellName;
-import org.apache.cassandra.db.composites.CellNameType;
 import org.apache.cassandra.db.index.SecondaryIndex;
-import org.apache.cassandra.db.marshal.BytesType;
-import org.apache.cassandra.db.marshal.CounterColumnType;
-import org.apache.cassandra.db.marshal.UUIDType;
+import org.apache.cassandra.db.marshal.*;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.exceptions.RequestExecutionException;
 import org.apache.cassandra.io.sstable.format.SSTableFormat;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.locator.SimpleStrategy;
+import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.UUIDGen;
 
 import org.apache.commons.lang3.StringUtils;
@@ -255,7 +252,7 @@ public class ScrubTest
         components.add(Component.STATS);
         components.add(Component.SUMMARY);
         components.add(Component.TOC);
-        SSTableReader sstable = SSTableReader.openNoValidation(desc, components, metadata);
+        SSTableReader sstable = SSTableReader.openNoValidation(desc, components, cfs);
 
         Scrubber scrubber = new Scrubber(cfs, sstable, false, true);
         scrubber.scrub();
@@ -410,30 +407,54 @@ public class ScrubTest
     }
 
     @Test /* CASSANDRA-5174 */
+    public void testScrubKeysIndex_preserveOrder() throws IOException, ExecutionException, InterruptedException
+    {
+        //If the partitioner preserves the order then SecondaryIndex uses BytesType comparator,
+        // otherwise it uses LocalByPartitionerType
+        SecondaryIndex.setKeyComparator(BytesType.instance);
+        testScrubIndex(CF_INDEX1, COL_KEYS_INDEX, false, true);
+    }
+
+    @Test /* CASSANDRA-5174 */
+    public void testScrubCompositeIndex_preserveOrder() throws IOException, ExecutionException, InterruptedException
+    {
+        SecondaryIndex.setKeyComparator(BytesType.instance);
+        testScrubIndex(CF_INDEX2, COL_COMPOSITES_INDEX, true, true);
+    }
+
+    @Test /* CASSANDRA-5174 */
     public void testScrubKeysIndex() throws IOException, ExecutionException, InterruptedException
     {
-        testScrubIndex(CF_INDEX1, COL_KEYS_INDEX, false, false);
+        SecondaryIndex.setKeyComparator(new LocalByPartionerType(StorageService.getPartitioner()));
+        testScrubIndex(CF_INDEX1, COL_KEYS_INDEX, false, true);
     }
 
     @Test /* CASSANDRA-5174 */
     public void testScrubCompositeIndex() throws IOException, ExecutionException, InterruptedException
     {
-        testScrubIndex(CF_INDEX2, COL_COMPOSITES_INDEX, true, false);
+        SecondaryIndex.setKeyComparator(new LocalByPartionerType(StorageService.getPartitioner()));
+        testScrubIndex(CF_INDEX2, COL_COMPOSITES_INDEX, true, true);
     }
 
     @Test /* CASSANDRA-5174 */
     public void testFailScrubKeysIndex() throws IOException, ExecutionException, InterruptedException
     {
-        testScrubIndex(CF_INDEX1, COL_KEYS_INDEX, false, true);
+        testScrubIndex(CF_INDEX1, COL_KEYS_INDEX, false, false);
     }
 
     @Test /* CASSANDRA-5174 */
     public void testFailScrubCompositeIndex() throws IOException, ExecutionException, InterruptedException
     {
-        testScrubIndex(CF_INDEX2, COL_COMPOSITES_INDEX, true, true);
+        testScrubIndex(CF_INDEX2, COL_COMPOSITES_INDEX, true, false);
     }
 
-    private void testScrubIndex(String cfName, String colName, boolean composite, boolean fail)
+    @Test /* CASSANDRA-5174 */
+    public void testScrubTwice() throws IOException, ExecutionException, InterruptedException
+    {
+        testScrubIndex(CF_INDEX1, COL_KEYS_INDEX, false, true, true);
+    }
+
+    private void testScrubIndex(String cfName, String colName, boolean composite, boolean ... scrubs)
             throws IOException, ExecutionException, InterruptedException
     {
         CompactionManager.instance.disableAutoCompaction();
@@ -461,13 +482,21 @@ public class ScrubTest
         assertTrue(indexCfss.size() == 1);
         for(ColumnFamilyStore indexCfs : indexCfss)
         {
-            if (fail)
+            for (int i = 0; i < scrubs.length; i++)
             {
-                overrdeWithGarbage(indexCfs, ByteBufferUtil.bytes(1L), ByteBufferUtil.bytes(2L));
+                boolean failure = !scrubs[i];
+                if (failure)
+                { //make sure the next scrub fails
+                    overrdeWithGarbage(indexCfs, ByteBufferUtil.bytes(1L), ByteBufferUtil.bytes(2L));
+                }
+                CompactionManager.AllSSTableOpStatus result = indexCfs.scrub(false, false, true);
+                assertEquals(failure ?
+                             CompactionManager.AllSSTableOpStatus.ABORTED :
+                             CompactionManager.AllSSTableOpStatus.SUCCESSFUL,
+                                result);
             }
-
-            indexCfs.scrub(false, false);
         }
+
 
         // check index is still working
         rows = cfs.search(Util.range("", ""), Arrays.asList(expr), new IdentityQueryFilter(), numRows);

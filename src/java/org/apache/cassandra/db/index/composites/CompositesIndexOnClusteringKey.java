@@ -54,7 +54,7 @@ public class CompositesIndexOnClusteringKey extends CompositesIndex
         // components total (where n is the number of clustering keys)
         int ckCount = baseMetadata.clusteringColumns().size();
         List<AbstractType<?>> types = new ArrayList<AbstractType<?>>(ckCount);
-        types.add(SecondaryIndex.keyComparator);
+        types.add(SecondaryIndex.getKeyComparator());
         for (int i = 0; i < columnDef.position(); i++)
             types.add(baseMetadata.clusteringColumns().get(i).type);
         for (int i = columnDef.position() + 1; i < ckCount; i++)

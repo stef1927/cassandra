@@ -909,7 +909,8 @@ public class CompactionManager implements CompactionManagerMBean
                                     Descriptor.fromFilename(cfs.getTempSSTablePath(compactionFileLocation)),
                                     expectedBloomFilterSize,
                                     repairedAt,
-                                    sstable.getSSTableLevel());
+                                    sstable.getSSTableLevel(),
+                                    cfs.partitioner);
     }
 
     public static SSTableWriter createWriterForAntiCompaction(ColumnFamilyStore cfs,

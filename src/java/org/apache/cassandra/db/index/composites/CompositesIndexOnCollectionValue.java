@@ -50,7 +50,7 @@ public class CompositesIndexOnCollectionValue extends CompositesIndex
     {
         int prefixSize = columnDef.position();
         List<AbstractType<?>> types = new ArrayList<>(prefixSize + 2);
-        types.add(SecondaryIndex.keyComparator);
+        types.add(SecondaryIndex.getKeyComparator());
         for (int i = 0; i < prefixSize; i++)
             types.add(baseMetadata.comparator.subtype(i));
         types.add(((CollectionType)columnDef.type).nameComparator()); // collection key

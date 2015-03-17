@@ -1281,7 +1281,10 @@ public class NodeTool
                     probe.scrub(System.out, disableSnapshot, skipCorrupted, keyspace, cfnames);
                 } catch (Exception e)
                 {
-                    throw new RuntimeException("Error occurred during flushing", e);
+                    if (e instanceof IllegalArgumentException)
+                        throw (IllegalArgumentException)e;
+                    else
+                        throw new RuntimeException("Error occurred during scrubbing", e);
                 }
             }
         }

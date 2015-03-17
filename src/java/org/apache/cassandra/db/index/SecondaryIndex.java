@@ -26,6 +26,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 
 import org.apache.cassandra.io.sstable.format.SSTableReader;
+
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Objects;
 import org.apache.commons.lang3.StringUtils;
 
@@ -81,7 +83,7 @@ public abstract class SecondaryIndex
      */
     public static final String INDEX_ENTRIES_OPTION_NAME = "index_keys_and_values";
 
-    public static final AbstractType<?> keyComparator = StorageService.getPartitioner().preservesOrder()
+    private static AbstractType<?> keyComparator = StorageService.getPartitioner().preservesOrder()
                                                       ? BytesType.instance
                                                       : new LocalByPartionerType(StorageService.getPartitioner());
 
@@ -95,6 +97,17 @@ public abstract class SecondaryIndex
      * The column definitions which this index is responsible for
      */
     protected final Set<ColumnDefinition> columnDefs = Collections.newSetFromMap(new ConcurrentHashMap<ColumnDefinition,Boolean>());
+
+    public static AbstractType<?> getKeyComparator()
+    {
+        return keyComparator;
+    }
+
+    @VisibleForTesting
+    public static void setKeyComparator(AbstractType<?> keyComparator)
+    {
+        SecondaryIndex.keyComparator = keyComparator;
+    }
 
     /**
      * Perform any initialization work
@@ -374,7 +387,7 @@ public abstract class SecondaryIndex
         switch (cdef.getIndexType())
         {
             case KEYS:
-                return new SimpleDenseCellNameType(keyComparator);
+                return new SimpleDenseCellNameType(getKeyComparator());
             case COMPOSITES:
                 return CompositesIndex.getIndexComparator(baseMetadata, cdef);
             case CUSTOM:

@@ -1392,6 +1392,12 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
 
     public CompactionManager.AllSSTableOpStatus scrub(boolean disableSnapshot, boolean skipCorrupted) throws ExecutionException, InterruptedException
     {
+        return scrub(disableSnapshot, skipCorrupted, false);
+    }
+
+    @VisibleForTesting
+    public CompactionManager.AllSSTableOpStatus scrub(boolean disableSnapshot, boolean skipCorrupted, boolean alwaysFail) throws ExecutionException, InterruptedException
+    {
         // skip snapshot creation during scrub, SEE JIRA 5891
         if(!disableSnapshot)
             snapshotWithoutFlush("pre-scrub-" + System.currentTimeMillis());
@@ -1406,7 +1412,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
             if (!rebuildOnFailedScrub())
                 throw t;
 
-            return CompactionManager.AllSSTableOpStatus.SUCCESSFUL;
+            return alwaysFail ? CompactionManager.AllSSTableOpStatus.ABORTED : CompactionManager.AllSSTableOpStatus.SUCCESSFUL;
         }
     }
 
