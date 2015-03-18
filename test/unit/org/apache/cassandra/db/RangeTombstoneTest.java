@@ -703,7 +703,7 @@ public class RangeTombstoneTest
             updates.add(col);
         }
 
-        public void init(){}
+        public void init(boolean loadsstables){}
 
         public void reload(){}
 

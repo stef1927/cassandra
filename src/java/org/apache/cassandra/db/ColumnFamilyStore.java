@@ -343,7 +343,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         for (ColumnDefinition info : metadata.allColumns())
         {
             if (info.getIndexType() != null)
-                indexManager.addIndexedColumn(info);
+                indexManager.addIndexedColumn(info, loadSSTables);
         }
 
         // register the mbean
@@ -434,12 +434,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         return createColumnFamilyStore(keyspace, columnFamily, StorageService.getPartitioner(), Schema.instance.getCFMetaData(keyspace.getName(), columnFamily), loadSSTables);
     }
 
-    public static ColumnFamilyStore createColumnFamilyStore(Keyspace keyspace, String columnFamily, IPartitioner partitioner, CFMetaData metadata)
-    {
-        return createColumnFamilyStore(keyspace, columnFamily, partitioner, metadata, true);
-    }
-
-    private static synchronized ColumnFamilyStore createColumnFamilyStore(Keyspace keyspace,
+    public static synchronized ColumnFamilyStore createColumnFamilyStore(Keyspace keyspace,
                                                                          String columnFamily,
                                                                          IPartitioner partitioner,
                                                                          CFMetaData metadata,

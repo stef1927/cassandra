@@ -112,7 +112,7 @@ public abstract class SecondaryIndex
     /**
      * Perform any initialization work
      */
-    public abstract void init();
+    public abstract void init(boolean loadsstables);
 
     /**
      * Reload an existing index following a change to its configuration,

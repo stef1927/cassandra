@@ -70,8 +70,13 @@ public class StandaloneScrubber
 
             ColumnFamilyStore cfs = null;
             for (ColumnFamilyStore c : keyspace.getValidColumnFamilies(true, false, options.cfName))
-                if(c.name.equals(options.cfName))
+            {
+                if (c.name.equals(options.cfName))
+                {
                     cfs = c;
+                    break;
+                }
+            }
 
             if (cfs == null)
                 throw new IllegalArgumentException(String.format("Unknown table %s.%s",
@@ -125,7 +130,10 @@ public class StandaloneScrubber
                         catch (Throwable t)
                         {
                             if (!cfs.rebuildOnFailedScrub())
+                            {
+                                System.out.println(t.getMessage());
                                 throw t;
+                            }
                         }
                         finally
                         {

@@ -261,12 +261,17 @@ public class SecondaryIndexManager
         SystemKeyspace.setIndexRemoved(baseCfs.metadata.ksName, index.getNameForSystemKeyspace(column));
     }
 
+    public Future<?> addIndexedColumn(ColumnDefinition cdef)
+    {
+        return addIndexedColumn(cdef, true);
+    }
+
     /**
      * Adds and builds a index for a column
      * @param cdef the column definition holding the index data
      * @return a future which the caller can optionally block on signaling the index is built
      */
-    public synchronized Future<?> addIndexedColumn(ColumnDefinition cdef)
+    public synchronized Future<?> addIndexedColumn(ColumnDefinition cdef, boolean loadsstables)
     {
         if (indexesByColumn.containsKey(cdef.name.bytes))
             return null;
@@ -284,7 +289,7 @@ public class SecondaryIndexManager
             if (currentIndex == null)
             {
                 rowLevelIndexMap.put(index.getClass(), index);
-                index.init();
+                index.init(loadsstables);
             }
             else
             {
@@ -298,7 +303,7 @@ public class SecondaryIndexManager
             // TODO: We sould do better than throw a RuntimeException
             if (cdef.getIndexType() == IndexType.CUSTOM && index instanceof AbstractSimplePerColumnSecondaryIndex)
                 throw new RuntimeException("Cannot use a subclass of AbstractSimplePerColumnSecondaryIndex as a CUSTOM index, as they assume they are CFS backed");
-            index.init();
+            index.init(loadsstables);
         }
 
         // link in indexedColumns. this means that writes will add new data to

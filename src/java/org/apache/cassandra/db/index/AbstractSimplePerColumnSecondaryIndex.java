@@ -45,7 +45,7 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
     // TODO: we should fix SecondaryIndex API
     protected ColumnDefinition columnDef;
 
-    public void init()
+    public void init(boolean loadsstables)
     {
         assert baseCfs != null && columnDefs != null && columnDefs.size() == 1;
 
@@ -56,7 +56,8 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
         indexCfs = ColumnFamilyStore.createColumnFamilyStore(baseCfs.keyspace,
                                                              indexedCfMetadata.cfName,
                                                              new LocalPartitioner(getIndexKeyComparator()),
-                                                             indexedCfMetadata);
+                                                             indexedCfMetadata,
+                                                             loadsstables);
     }
 
     protected AbstractType<?> getIndexKeyComparator()

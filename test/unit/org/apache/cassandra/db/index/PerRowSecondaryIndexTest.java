@@ -194,7 +194,7 @@ public class PerRowSecondaryIndexTest
         }
 
         @Override
-        public void init()
+        public void init(boolean loadsstables)
         {
         }
 
