@@ -25,7 +25,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
-
 import javax.management.*;
 import javax.management.openmbean.*;
 
@@ -36,9 +35,7 @@ import com.google.common.collect.*;
 import com.google.common.util.concurrent.*;
 
 import org.apache.cassandra.io.FSWriteError;
-
 import org.json.simple.*;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -1415,7 +1412,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
      * CASSANDRA-5174 : For an index cfs we may be able to discard everything and just rebuild
      * the index when a scrub fails.
      *
-     * @return true if we are an index cfs and we successfully rebuild the index
+     * @return true if we are an index cfs and we successfully rebuilt the index
      */
     public boolean rebuildOnFailedScrub()
     {
