@@ -191,7 +191,7 @@ public class AtomicBTreePartition implements Partition
                     return activeDeletion.isLive() ? null : ArrayBackedRow.emptyDeletedRow(clustering, activeDeletion);
 
                 return row.filter(columns, activeDeletion, true, metadata);
-            }
+    }
         };
     }
 

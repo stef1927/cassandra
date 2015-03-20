@@ -17,7 +17,6 @@
  */
 package org.apache.cassandra.utils;
 
-import java.io.Closeable;
 import java.util.*;
 
 import com.google.common.collect.AbstractIterator;
@@ -41,8 +40,8 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
         if (sources.size() == 1)
         {
             return reducer.trivialReduceIsTrivial()
-                 ? new TrivialOneToOne<>(sources, reducer)
-                 : new OneToOne<>(sources, reducer);
+                   ? new TrivialOneToOne<>(sources, reducer)
+                   : new OneToOne<>(sources, reducer);
         }
         return new ManyToOne<>(sources, comparator, reducer);
     }
@@ -203,7 +202,7 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
 
             reducer.onKeyChange();
             assert !heap[0].equalParent;
-            reducer.reduce(heap[0].idx, heap[0].consume());
+            consume(0);
             final int size = this.size;
             final int sortedSectionSize = Math.min(size, SORTED_SECTION_SIZE);
             int i;
@@ -212,7 +211,7 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
                 {
                     if (!heap[i].equalParent)
                         break consume;
-                    reducer.reduce(heap[i].idx, heap[i].consume());
+                    consume(i);
                 }
                 i = Math.max(i, consumeHeap(i) + 1);
             }
@@ -230,9 +229,27 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
             if (idx >= size || !heap[idx].equalParent)
                 return -1;
 
-            reducer.reduce(heap[idx].idx, heap[idx].consume());
+            consume(idx);
             int nextIdx = (idx << 1) - (SORTED_SECTION_SIZE - 1);
             return Math.max(idx, Math.max(consumeHeap(nextIdx), consumeHeap(nextIdx + 1)));
+        }
+
+        private void consume(int idx)
+        {
+            In val = heap[idx].consume();
+            if (reducer.ignore(idx, val))
+            {
+                In next = heap[idx].peek();
+                if (next != null && heap[idx].compareItems(val, next) == 0)
+                {
+                    heap[idx].advance();
+                    reducer.reduce(heap[idx].idx, heap[idx].consume());
+                }
+            }
+            else
+            {
+                reducer.reduce(heap[idx].idx, val);
+            }
         }
 
         /**
@@ -354,6 +371,7 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
         private final Comparator<? super In> comp;
         private final int idx;
         private In item;
+        private In next;
         boolean equalParent;
 
         public Candidate(int idx, Iterator<? extends In> iter, Comparator<? super In> comp)
@@ -361,21 +379,35 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
             this.iter = iter;
             this.comp = comp;
             this.idx = idx;
+            this.next = iter instanceof  LowerBound ? ((LowerBound<In>)iter).lowerBound() : null;
         }
 
         /** @return this if our iterator had an item, and it is now available, otherwise null */
         protected Candidate<In> advance()
         {
+            if (next != null)
+            {
+                item = next;
+                next = null;
+                return this;
+            }
+
             if (!iter.hasNext())
                 return null;
+
             item = iter.next();
             return this;
         }
 
         public int compareTo(Candidate<In> that)
         {
-            assert item != null && that.item != null;
-            return comp.compare(this.item, that.item);
+            return compareItems(this.item, that.item);
+        }
+
+        public int compareItems(In item1, In item2)
+        {
+            assert item1 != null && item2 != null;
+            return comp.compare(item1, item2);
         }
 
         public In consume()
@@ -384,6 +416,18 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
             item = null;
             assert temp != null;
             return temp;
+        }
+
+        public In peek()
+        {
+            if (next != null)
+                return next;
+
+            if (!iter.hasNext())
+                return null;
+
+            next = iter.next();
+            return next;
         }
 
         public boolean needsAdvance()
@@ -402,6 +446,12 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
         {
             return false;
         }
+
+        /**
+         * @return true if the current value should be ignored and a new one
+         * should be fetched from the same iterator
+         */
+        public boolean ignore(int idx, In current) { return false; }
 
         /**
          * combine this object with the previous ones.
@@ -437,12 +487,12 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
         protected Out computeNext()
         {
             if (!source.hasNext())
-                return endOfData();
-            reducer.onKeyChange();
+                    return endOfData();
+                    reducer.onKeyChange();
             reducer.reduce(0, source.next());
-            return reducer.getReduced();
-        }
-    }
+                    return reducer.getReduced();
+                }
+            }
 
     private static class TrivialOneToOne<In, Out> extends MergeIterator<In, Out>
     {
@@ -458,7 +508,7 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
         protected Out computeNext()
         {
             if (!source.hasNext())
-                return endOfData();
+                    return endOfData();
             return (Out) source.next();
         }
     }

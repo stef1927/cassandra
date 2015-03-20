@@ -1879,6 +1879,12 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
         return sstableMetadata.maxLocalDeletionTime;
     }
 
+    /** sstable contains no tombstones if maxLocalDeletionTime == Integer.MAX_VALUE */
+    public boolean hasTombstones()
+    {
+        return getSSTableMetadata().maxLocalDeletionTime != Integer.MAX_VALUE;
+    }
+
     public int getMinTTL()
     {
         return sstableMetadata.minTTL;
@@ -2033,6 +2039,13 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
         {
             return Longs.compare(o1.onDiskLength(), o2.onDiskLength());
         }
+    }
+
+    public EncodingStats stats()
+    {
+        // We could return sstable.header.stats(), but this may not be as accurate than the actual sstable stats (see
+        // SerializationHeader.make() for details) so we use the latter instead.
+        return new EncodingStats(getMinTimestamp(), getMinLocalDeletionTime(), getMinTTL(), getAvgColumnSetPerRow());
     }
 
     public Ref<SSTableReader> tryRef()

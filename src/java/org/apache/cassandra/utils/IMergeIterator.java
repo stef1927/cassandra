@@ -21,5 +21,10 @@ import java.util.Iterator;
 
 public interface IMergeIterator<In, Out> extends CloseableIterator<Out>
 {
+    interface LowerBound<In>
+    {
+        In lowerBound();
+    }
+
     Iterable<? extends Iterator<In>> iterators();
 }

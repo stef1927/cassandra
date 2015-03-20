@@ -22,11 +22,13 @@ import java.util.*;
 import com.google.common.collect.Iterables;
 
 import org.apache.cassandra.config.CFMetaData;
+import org.apache.cassandra.db.rows.LowerBoundUnfilteredRowIterator;
 import org.apache.cassandra.db.filter.ClusteringIndexSliceFilter;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.db.filter.*;
 import org.apache.cassandra.db.partitions.Partition;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
+import org.apache.cassandra.io.sstable.metadata.StatsMetadata;
 import org.apache.cassandra.metrics.TableMetrics;
 import org.apache.cassandra.thrift.ThriftResultsMerger;
 import org.apache.cassandra.tracing.Tracing;
@@ -100,10 +102,30 @@ public class SinglePartitionSliceCommand extends SinglePartitionReadCommand<Clus
         return new SinglePartitionSliceCommand(isDigestQuery(), isForThrift(), metadata(), nowInSec(), columnFilter(), rowFilter(), limits(), partitionKey(), clusteringIndexFilter());
     }
 
+    private final static class QueryMemtableAndDiskStatus
+    {
+        public final TableMetrics metric;
+        public int sstablesIterated;
+        public int nonIntersectingSSTables;
+        public int includedDueToTombstones;
+        public long mostRecentPartitionTombstone;
+        public long minTimestamp;
+
+        public QueryMemtableAndDiskStatus(ColumnFamilyStore cfs)
+        {
+            this.metric = cfs.metric;
+            this.sstablesIterated = 0;
+            this.nonIntersectingSSTables = 0;
+            this.includedDueToTombstones = 0;
+            this.mostRecentPartitionTombstone = Long.MIN_VALUE;
+            this.minTimestamp = Long.MAX_VALUE;
+        }
+    }
     protected UnfilteredRowIterator queryMemtableAndDiskInternal(ColumnFamilyStore cfs, boolean copyOnHeap)
     {
+        final QueryMemtableAndDiskStatus status = new QueryMemtableAndDiskStatus((cfs));
         Tracing.trace("Acquiring sstable references");
-        ColumnFamilyStore.ViewFragment view = cfs.select(cfs.viewFilter(partitionKey()));
+        final ColumnFamilyStore.ViewFragment view = cfs.select(cfs.viewFilter(partitionKey()));
 
         List<UnfilteredRowIterator> iterators = new ArrayList<>(Iterables.size(view.memtables) + view.sstables.size());
         ClusteringIndexSliceFilter filter = clusteringIndexFilter();
@@ -135,59 +157,48 @@ public class SinglePartitionSliceCommand extends SinglePartitionReadCommand<Clus
              * In other words, iterating in maxTimestamp order allow to do our mostRecentPartitionTombstone elimination
              * in one pass, and minimize the number of sstables for which we read a partition tombstone.
              */
-            int sstablesIterated = 0;
             Collections.sort(view.sstables, SSTableReader.maxTimestampComparator);
-            List<SSTableReader> skippedSSTables = null;
-            long mostRecentPartitionTombstone = Long.MIN_VALUE;
-            long minTimestamp = Long.MAX_VALUE;
-            int nonIntersectingSSTables = 0;
+
+            List<SSTableReader> skippedSSTablesWithTombstones = null;
 
             for (SSTableReader sstable : view.sstables)
             {
-                minTimestamp = Math.min(minTimestamp, sstable.getMinTimestamp());
+                status.minTimestamp = Math.min(status.minTimestamp, sstable.getMinTimestamp());
                 // if we've already seen a partition tombstone with a timestamp greater
                 // than the most recent update to this sstable, we can skip it
-                if (sstable.getMaxTimestamp() < mostRecentPartitionTombstone)
+                if (sstable.getMaxTimestamp() < status.mostRecentPartitionTombstone)
                     break;
 
                 if (!filter.shouldInclude(sstable))
                 {
-                    nonIntersectingSSTables++;
-                    // sstable contains no tombstone if maxLocalDeletionTime == Integer.MAX_VALUE, so we can safely skip those entirely
-                    if (sstable.getSSTableMetadata().maxLocalDeletionTime != Integer.MAX_VALUE)
-                    {
-                        if (skippedSSTables == null)
-                            skippedSSTables = new ArrayList<>();
-                        skippedSSTables.add(sstable);
+                    status.nonIntersectingSSTables++;
+                    if (sstable.hasTombstones())
+                    { // if sstable has tombstones we need to check after one pass if it can be safely skipped
+                        if (skippedSSTablesWithTombstones == null)
+                            skippedSSTablesWithTombstones = new ArrayList<>();
+                        skippedSSTablesWithTombstones.add(sstable);
                     }
                     continue;
                 }
 
-                sstable.incrementReadCount();
-                @SuppressWarnings("resource") // 'iter' is added to iterators which is closed on exception, or through the closing of the final merged iterator
-                UnfilteredRowIterator iter = filter.filter(sstable.iterator(partitionKey(), columnFilter(), filter.isReversed(), isForThrift()));
-                iterators.add(isForThrift() ? ThriftResultsMerger.maybeWrap(iter, nowInSec()) : iter);
-                mostRecentPartitionTombstone = Math.max(mostRecentPartitionTombstone, iter.partitionLevelDeletion().markedForDeleteAt());
-                sstablesIterated++;
+                UnfilteredRowIterator iter = getSSTableLazyIterator(sstable, status);
+                iterators.add(iter);
+                status.mostRecentPartitionTombstone = Math.max(status.mostRecentPartitionTombstone, iter.partitionLevelDeletion().markedForDeleteAt());
             }
 
-            int includedDueToTombstones = 0;
             // Check for partition tombstones in the skipped sstables
-            if (skippedSSTables != null)
+            if (skippedSSTablesWithTombstones != null)
             {
-                for (SSTableReader sstable : skippedSSTables)
+                for (SSTableReader sstable : skippedSSTablesWithTombstones)
                 {
-                    if (sstable.getMaxTimestamp() <= minTimestamp)
+                    if (sstable.getMaxTimestamp() <= status.minTimestamp)
                         continue;
 
-                    sstable.incrementReadCount();
-                    @SuppressWarnings("resource") // 'iter' is either closed right away, or added to iterators which is close on exception, or through the closing of the final merged iterator
-                    UnfilteredRowIterator iter = filter.filter(sstable.iterator(partitionKey(), columnFilter(), filter.isReversed(), isForThrift()));
-                    if (iter.partitionLevelDeletion().markedForDeleteAt() > minTimestamp)
+                    UnfilteredRowIterator iter = getSSTableLazyIterator(sstable, status);
+                    if (iter.partitionLevelDeletion().markedForDeleteAt() > status.minTimestamp)
                     {
                         iterators.add(iter);
-                        includedDueToTombstones++;
-                        sstablesIterated++;
+                        status.includedDueToTombstones++;
                     }
                     else
                     {
@@ -197,24 +208,31 @@ public class SinglePartitionSliceCommand extends SinglePartitionReadCommand<Clus
             }
             if (Tracing.isTracing())
                 Tracing.trace("Skipped {}/{} non-slice-intersecting sstables, included {} due to tombstones",
-                              nonIntersectingSSTables, view.sstables.size(), includedDueToTombstones);
-
-            cfs.metric.updateSSTableIterated(sstablesIterated);
+                              status.nonIntersectingSSTables, view.sstables.size(), status.includedDueToTombstones);
 
             if (iterators.isEmpty())
                 return UnfilteredRowIterators.emptyIterator(cfs.metadata, partitionKey(), filter.isReversed());
 
-            Tracing.trace("Merging data from memtables and {} sstables", sstablesIterated);
+            Tracing.trace("Merging data from memtables and {} sstables", status.sstablesIterated);
 
             @SuppressWarnings("resource") //  Closed through the closing of the result of that method.
-            UnfilteredRowIterator merged = UnfilteredRowIterators.merge(iterators, nowInSec());
+            final UnfilteredRowIterator merged = UnfilteredRowIterators.merge(iterators, nowInSec());
             if (!merged.isEmpty())
             {
                 DecoratedKey key = merged.partitionKey();
                 cfs.metric.samplers.get(TableMetrics.Sampler.READS).addSample(key.getKey(), key.hashCode(), 1);
             }
 
-            return merged;
+            return new WrappingUnfilteredRowIterator(merged)
+            {
+                public void close()
+                {
+                    super.close();
+
+                    cfs.metric.updateSSTableIterated(status.sstablesIterated);
+                    Tracing.trace("Accessed {} sstables", new Object[] {status.sstablesIterated });
+                }
+            };
         }
         catch (RuntimeException | Error e)
         {
@@ -229,4 +247,32 @@ public class SinglePartitionSliceCommand extends SinglePartitionReadCommand<Clus
             throw e;
         }
     }
+
+
+    private UnfilteredRowIterator getSSTableLazyIterator(final SSTableReader sstable, final QueryMemtableAndDiskStatus status)
+    {
+        final ClusteringIndexSliceFilter filter =  clusteringIndexFilter();
+        final StatsMetadata m = sstable.getSSTableMetadata();
+
+        if (m.minClusteringValues.isEmpty() || filter.isReversed() && m.maxClusteringValues.isEmpty())
+        {
+            status.sstablesIterated++;
+            sstable.incrementReadCount();
+
+            @SuppressWarnings("resource") // 'iter' is added to iterators which is closed on exception, or through the closing of the final merged iterator
+            UnfilteredRowIterator iter = filter.filter(sstable.iterator(partitionKey(), columnFilter(), filter.isReversed(), isForThrift()));
+            return isForThrift() ? ThriftResultsMerger.maybeWrap(iter, nowInSec()) : iter;
+        }
+
+        return new LowerBoundUnfilteredRowIterator(partitionKey(), sstable, filter, columnFilter(), isForThrift(), nowInSec())
+        {
+            @Override
+            protected UnfilteredRowIterator initializeIterator()
+            {
+                status.sstablesIterated++;
+                return super.initializeIterator();
+            }
+        };
+    }
+
 }
