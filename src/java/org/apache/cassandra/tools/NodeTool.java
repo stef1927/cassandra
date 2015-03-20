@@ -1279,12 +1279,12 @@ public class NodeTool
                 try
                 {
                     probe.scrub(System.out, disableSnapshot, skipCorrupted, keyspace, cfnames);
+                } catch (IllegalArgumentException e)
+                {
+                    throw e;
                 } catch (Exception e)
                 {
-                    if (e instanceof IllegalArgumentException)
-                        throw (IllegalArgumentException)e;
-                    else
-                        throw new RuntimeException("Error occurred during scrubbing", e);
+                    throw new RuntimeException("Error occurred during scrubbing", e);
                 }
             }
         }

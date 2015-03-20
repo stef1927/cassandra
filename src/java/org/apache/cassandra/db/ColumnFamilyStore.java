@@ -1400,8 +1400,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         }
         catch(Throwable t)
         {
-            logger.info(t.getMessage());
-            if (!rebuildOnFailedScrub())
+            if (!rebuildOnFailedScrub(t))
                 throw t;
 
             return alwaysFail ? CompactionManager.AllSSTableOpStatus.ABORTED : CompactionManager.AllSSTableOpStatus.SUCCESSFUL;
@@ -1414,7 +1413,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
      *
      * @return true if we are an index cfs and we successfully rebuilt the index
      */
-    public boolean rebuildOnFailedScrub()
+    public boolean rebuildOnFailedScrub(Throwable failure)
     {
         if (!isIndex())
             return false;
@@ -1433,9 +1432,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
 
         truncateBlocking();
 
-        logger.info("Rebuilding index for {}", name);
+        logger.warn("Rebuilding index for {} because of <{}>", name, failure.getMessage());
         index.getBaseCfs().rebuildSecondaryIndex(index.getIndexName());
-
         return true;
     }
 

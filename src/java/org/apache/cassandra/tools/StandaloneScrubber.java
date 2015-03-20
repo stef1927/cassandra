@@ -129,7 +129,7 @@ public class StandaloneScrubber
                         }
                         catch (Throwable t)
                         {
-                            if (!cfs.rebuildOnFailedScrub())
+                            if (!cfs.rebuildOnFailedScrub(t))
                             {
                                 System.out.println(t.getMessage());
                                 throw t;
