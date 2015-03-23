@@ -21,6 +21,8 @@ package org.apache.cassandra.db;
  */
 
 import java.io.*;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -409,28 +411,28 @@ public class ScrubTest
     {
         //If the partitioner preserves the order then SecondaryIndex uses BytesType comparator,
         // otherwise it uses LocalByPartitionerType
-        SecondaryIndex.setKeyComparator(BytesType.instance);
+        setKeyComparator(BytesType.instance);
         testScrubIndex(CF_INDEX1, COL_KEYS_INDEX, false, true);
     }
 
     @Test /* CASSANDRA-5174 */
     public void testScrubCompositeIndex_preserveOrder() throws IOException, ExecutionException, InterruptedException
     {
-        SecondaryIndex.setKeyComparator(BytesType.instance);
+        setKeyComparator(BytesType.instance);
         testScrubIndex(CF_INDEX2, COL_COMPOSITES_INDEX, true, true);
     }
 
     @Test /* CASSANDRA-5174 */
     public void testScrubKeysIndex() throws IOException, ExecutionException, InterruptedException
     {
-        SecondaryIndex.setKeyComparator(new LocalByPartionerType(StorageService.getPartitioner()));
+        setKeyComparator(new LocalByPartionerType(StorageService.getPartitioner()));
         testScrubIndex(CF_INDEX1, COL_KEYS_INDEX, false, true);
     }
 
     @Test /* CASSANDRA-5174 */
     public void testScrubCompositeIndex() throws IOException, ExecutionException, InterruptedException
     {
-        SecondaryIndex.setKeyComparator(new LocalByPartionerType(StorageService.getPartitioner()));
+        setKeyComparator(new LocalByPartionerType(StorageService.getPartitioner()));
         testScrubIndex(CF_INDEX2, COL_COMPOSITES_INDEX, true, true);
     }
 
@@ -450,6 +452,33 @@ public class ScrubTest
     public void testScrubTwice() throws IOException, ExecutionException, InterruptedException
     {
         testScrubIndex(CF_INDEX1, COL_KEYS_INDEX, false, true, true);
+    }
+
+    /** The SecondaryIndex class is used for custom indexes so to avoid
+     * making a public final field into a private field with getters
+     * and setters, we resort to this hack in order to test it properly
+     * since it can have two values which influence the scrubbing behavior.
+     * @param comparator - the key comparator we want to test
+     */
+    private void setKeyComparator(AbstractType<?> comparator)
+    {
+        try
+        {
+            Field keyComparator = SecondaryIndex.class.getDeclaredField("keyComparator");
+            keyComparator.setAccessible(true);
+            int modifiers = keyComparator.getModifiers();
+            Field modifierField = keyComparator.getClass().getDeclaredField("modifiers");
+            modifiers = modifiers & ~Modifier.FINAL;
+            modifierField.setAccessible(true);
+            modifierField.setInt(keyComparator, modifiers);
+
+            keyComparator.set(null, comparator);
+        }
+        catch (Exception ex)
+        {
+            fail("Failed to change key comparator in secondary index : " + ex.getMessage());
+            ex.printStackTrace();
+        }
     }
 
     private void testScrubIndex(String cfName, String colName, boolean composite, boolean ... scrubs)

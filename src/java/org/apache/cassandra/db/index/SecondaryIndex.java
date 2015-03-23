@@ -25,12 +25,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 
-import org.apache.cassandra.io.sstable.format.SSTableReader;
-
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Objects;
 import org.apache.commons.lang3.StringUtils;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,6 +47,7 @@ import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.db.marshal.BytesType;
 import org.apache.cassandra.db.marshal.LocalByPartionerType;
 import org.apache.cassandra.exceptions.ConfigurationException;
+import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.ReducingKeyIterator;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.FBUtilities;
@@ -83,7 +80,7 @@ public abstract class SecondaryIndex
      */
     public static final String INDEX_ENTRIES_OPTION_NAME = "index_keys_and_values";
 
-    private static AbstractType<?> keyComparator = StorageService.getPartitioner().preservesOrder()
+    public static final AbstractType<?> keyComparator = StorageService.getPartitioner().preservesOrder()
                                                       ? BytesType.instance
                                                       : new LocalByPartionerType(StorageService.getPartitioner());
 
@@ -98,21 +95,10 @@ public abstract class SecondaryIndex
      */
     protected final Set<ColumnDefinition> columnDefs = Collections.newSetFromMap(new ConcurrentHashMap<ColumnDefinition,Boolean>());
 
-    public static AbstractType<?> getKeyComparator()
-    {
-        return keyComparator;
-    }
-
-    @VisibleForTesting
-    public static void setKeyComparator(AbstractType<?> keyComparator)
-    {
-        SecondaryIndex.keyComparator = keyComparator;
-    }
-
     /**
      * Perform any initialization work
      */
-    public abstract void init(boolean loadsstables);
+    public abstract void init();
 
     /**
      * Reload an existing index following a change to its configuration,
@@ -387,7 +373,7 @@ public abstract class SecondaryIndex
         switch (cdef.getIndexType())
         {
             case KEYS:
-                return new SimpleDenseCellNameType(getKeyComparator());
+                return new SimpleDenseCellNameType(keyComparator);
             case COMPOSITES:
                 return CompositesIndex.getIndexComparator(baseMetadata, cdef);
             case CUSTOM:

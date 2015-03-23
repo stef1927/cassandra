@@ -51,7 +51,7 @@ public class CompositesIndexOnRegular extends CompositesIndex
     {
         int prefixSize = columnDef.position();
         List<AbstractType<?>> types = new ArrayList<AbstractType<?>>(prefixSize + 1);
-        types.add(SecondaryIndex.getKeyComparator());
+        types.add(SecondaryIndex.keyComparator);
         for (int i = 0; i < prefixSize; i++)
             types.add(baseMetadata.comparator.subtype(i));
         return new CompoundDenseCellNameType(types);

@@ -18,7 +18,6 @@
 */
 package org.apache.cassandra.db;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -703,7 +702,7 @@ public class RangeTombstoneTest
             updates.add(col);
         }
 
-        public void init(boolean loadsstables){}
+        public void init(){}
 
         public void reload(){}
 

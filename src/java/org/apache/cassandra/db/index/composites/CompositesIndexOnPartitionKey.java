@@ -53,7 +53,7 @@ public class CompositesIndexOnPartitionKey extends CompositesIndex
     {
         int ckCount = baseMetadata.clusteringColumns().size();
         List<AbstractType<?>> types = new ArrayList<AbstractType<?>>(ckCount + 1);
-        types.add(SecondaryIndex.getKeyComparator());
+        types.add(SecondaryIndex.keyComparator);
         for (int i = 0; i < ckCount; i++)
             types.add(baseMetadata.comparator.subtype(i));
         return new CompoundDenseCellNameType(types);

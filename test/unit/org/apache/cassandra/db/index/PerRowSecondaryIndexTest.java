@@ -18,7 +18,6 @@
 package org.apache.cassandra.db.index;
 
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
@@ -194,7 +193,7 @@ public class PerRowSecondaryIndexTest
         }
 
         @Override
-        public void init(boolean loadsstables)
+        public void init()
         {
         }
 

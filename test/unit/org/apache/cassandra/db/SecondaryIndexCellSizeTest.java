@@ -70,7 +70,7 @@ public class SecondaryIndexCellSizeTest
 
     private class MockRowIndex extends PerRowSecondaryIndex
     {
-        public void init(boolean loadsstables)
+        public void init()
         {
         }
 
@@ -140,7 +140,7 @@ public class SecondaryIndexCellSizeTest
     private class MockColumnIndex extends PerColumnSecondaryIndex
     {
         @Override
-        public void init(boolean loadsstables)
+        public void init()
         {
         }
 

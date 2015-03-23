@@ -53,7 +53,7 @@ public abstract class CompositesIndexIncludingCollectionKey extends CompositesIn
     {
         int count = 1 + baseMetadata.clusteringColumns().size(); // row key + clustering prefix
         List<AbstractType<?>> types = new ArrayList<AbstractType<?>>(count);
-        types.add(SecondaryIndex.getKeyComparator());
+        types.add(SecondaryIndex.keyComparator);
         for (int i = 0; i < count - 1; i++)
             types.add(baseMetadata.comparator.subtype(i));
         return new CompoundDenseCellNameType(types);
