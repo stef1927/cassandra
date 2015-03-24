@@ -78,7 +78,6 @@ public class VersionedValue implements Comparable<VersionedValue>
     // values for ApplicationState.REMOVAL_COORDINATOR
     public final static String REMOVAL_COORDINATOR = "REMOVER";
 
-    public final static String RPC_READY =  "RPC_READY";
     public final int version;
     public final String value;
 
