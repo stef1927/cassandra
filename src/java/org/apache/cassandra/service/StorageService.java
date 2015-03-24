@@ -638,6 +638,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             appStates.put(ApplicationState.HOST_ID, valueFactory.hostId(localHostId));
             appStates.put(ApplicationState.RPC_ADDRESS, valueFactory.rpcaddress(DatabaseDescriptor.getBroadcastRpcAddress()));
             appStates.put(ApplicationState.RELEASE_VERSION, valueFactory.releaseVersion());
+            appStates.put(ApplicationState.RPC_READY, valueFactory.rpcReady(false));
             logger.info("Starting up server gossip");
             Gossiper.instance.register(this);
             Gossiper.instance.start(SystemKeyspace.incrementAndGetGeneration(), appStates); // needed for node-ring gathering.
@@ -1541,6 +1542,10 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                 case HOST_ID:
                     SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value.value));
                     break;
+                case RPC_READY:
+                    if (Boolean.parseBoolean(epState.getApplicationState(ApplicationState.RPC_READY).value))
+                        notifyJoined(endpoint);
+                    break;
             }
         }
     }
@@ -1585,6 +1590,17 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
     {
         String vvalue = Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(appstate).value;
         return vvalue.getBytes(ISO_8859_1);
+    }
+
+    private void notifyJoined(InetAddress endpoint)
+    {
+        for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
+            subscriber.onJoinCluster(endpoint);
+    }
+
+    public void setRpcReady(boolean value)
+    {
+        Gossiper.instance.addLocalApplicationState(ApplicationState.RPC_READY, valueFactory.rpcReady(value));
     }
 
     private Collection<Token> getTokensFor(InetAddress endpoint)
@@ -1759,10 +1775,12 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
                 subscriber.onMove(endpoint);
         }
-        else
+
+        if (MessagingService.instance().getVersion(endpoint) < MessagingService.VERSION_30 ||
+                (Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.RPC_READY) != null
+                        && Boolean.parseBoolean(Arrays.toString(getApplicationStateValue(endpoint, ApplicationState.RPC_READY)))))
         {
-            for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-                subscriber.onJoinCluster(endpoint);
+            notifyJoined(endpoint);
         }
 
         PendingRangeCalculatorService.instance.update();

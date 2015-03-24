@@ -78,6 +78,7 @@ public class VersionedValue implements Comparable<VersionedValue>
     // values for ApplicationState.REMOVAL_COORDINATOR
     public final static String REMOVAL_COORDINATOR = "REMOVER";
 
+    public final static String RPC_READY =  "RPC_READY";
     public final int version;
     public final String value;
 
@@ -210,6 +211,11 @@ public class VersionedValue implements Comparable<VersionedValue>
         public VersionedValue hibernate(boolean value)
         {
             return new VersionedValue(VersionedValue.HIBERNATE + VersionedValue.DELIMITER + value);
+        }
+
+        public VersionedValue rpcReady(boolean value)
+        {
+            return new VersionedValue(String.valueOf(value));
         }
 
         public VersionedValue datacenter(String dcId)
