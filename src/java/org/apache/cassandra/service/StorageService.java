@@ -1605,7 +1605,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
     private void notifyUp(InetAddress endpoint)
     {
-        if (!isRpcReady(endpoint))
+        if (!isRpcReady(endpoint) || !Gossiper.instance.isAlive(endpoint))
             return;
 
         for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
