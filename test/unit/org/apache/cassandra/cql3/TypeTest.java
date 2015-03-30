@@ -18,7 +18,9 @@
 package org.apache.cassandra.cql3;
 
 import org.apache.cassandra.SchemaLoader;
+import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.ConsistencyLevel;
+import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.exceptions.RequestExecutionException;
 import org.apache.cassandra.exceptions.RequestValidationException;
@@ -174,5 +176,19 @@ public class TypeTest
             fail("Expected error for ALTER statement");
         }
         catch (ConfigurationException e) { }
+    }
+
+    @Test
+    // tests CASSANDRA-7976
+    public void testAlterIndexInterval() throws Throwable
+    {
+        executeSchemaChange("CREATE TABLE IF NOT EXISTS %s.songs (id uuid, album text, artist text, data blob, PRIMARY KEY (id))");
+        ColumnFamilyStore cfs = Keyspace.open(keyspace).getColumnFamilyStore("songs");
+
+        executeSchemaChange("ALTER TABLE %s.songs WITH index_interval=256");
+        assertEquals(256, cfs.metadata.getIndexInterval());
+
+        executeSchemaChange("ALTER TABLE %s.songs WITH caching = 'none'");
+        assertEquals(256, cfs.metadata.getIndexInterval());
     }
 }
