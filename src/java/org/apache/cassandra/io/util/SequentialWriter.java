@@ -34,6 +34,7 @@ import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.utils.CLibrary;
 import org.apache.cassandra.utils.concurrent.Transactional;
+import org.apache.cassandra.utils.memory.BufferPool;
 
 import static org.apache.cassandra.utils.Throwables.merge;
 import org.apache.cassandra.utils.SyncUtil;
@@ -156,7 +157,7 @@ public class SequentialWriter extends OutputStream implements WritableByteChanne
 
     public static ChecksummedSequentialWriter open(File file, File crcPath)
     {
-        return new ChecksummedSequentialWriter(file, RandomAccessReader.DEFAULT_BUFFER_SIZE, crcPath);
+        return new ChecksummedSequentialWriter(file, BufferPool.DEFAULT_BUFFER_SIZE, crcPath);
     }
 
     public static CompressedSequentialWriter open(String dataFilePath,

@@ -36,6 +36,7 @@ public abstract class MemoryUtil
     private static final long DIRECT_BYTE_BUFFER_CAPACITY_OFFSET;
     private static final long DIRECT_BYTE_BUFFER_LIMIT_OFFSET;
     private static final long DIRECT_BYTE_BUFFER_POSITION_OFFSET;
+    private static final long DIRECT_BYTE_BUFFER_ATTACHMENT_OFFSET;
     private static final Class<?> BYTE_BUFFER_CLASS;
     private static final long BYTE_BUFFER_OFFSET_OFFSET;
     private static final long BYTE_BUFFER_HB_OFFSET;
@@ -62,6 +63,7 @@ public abstract class MemoryUtil
             DIRECT_BYTE_BUFFER_CAPACITY_OFFSET = unsafe.objectFieldOffset(Buffer.class.getDeclaredField("capacity"));
             DIRECT_BYTE_BUFFER_LIMIT_OFFSET = unsafe.objectFieldOffset(Buffer.class.getDeclaredField("limit"));
             DIRECT_BYTE_BUFFER_POSITION_OFFSET = unsafe.objectFieldOffset(Buffer.class.getDeclaredField("position"));
+            DIRECT_BYTE_BUFFER_ATTACHMENT_OFFSET = unsafe.objectFieldOffset(Class.forName("java.nio.DirectByteBuffer").getDeclaredField("att"));
             DIRECT_BYTE_BUFFER_CLASS = clazz;
 
             clazz = ByteBuffer.allocate(0).getClass();
@@ -75,6 +77,16 @@ public abstract class MemoryUtil
         {
             throw new AssertionError(e);
         }
+    }
+
+    public static int pageSize()
+    {
+        return unsafe.pageSize();
+    }
+
+    public static long getAddress(ByteBuffer buffer)
+    {
+        return unsafe.getLong(buffer, DIRECT_BYTE_BUFFER_ADDRESS_OFFSET);
     }
 
     public static long allocate(long size)
@@ -175,6 +187,12 @@ public abstract class MemoryUtil
         unsafe.putLong(instance, DIRECT_BYTE_BUFFER_ADDRESS_OFFSET, address);
         unsafe.putInt(instance, DIRECT_BYTE_BUFFER_CAPACITY_OFFSET, length);
         unsafe.putInt(instance, DIRECT_BYTE_BUFFER_LIMIT_OFFSET, length);
+    }
+
+    public static boolean setAttachment(ByteBuffer instance, Object prev, Object next)
+    {
+        assert (instance.isDirect());
+        return unsafe.compareAndSwapObject(instance, DIRECT_BYTE_BUFFER_ATTACHMENT_OFFSET, prev, next);
     }
 
     public static ByteBuffer duplicateDirectByteBuffer(ByteBuffer source, ByteBuffer hollowBuffer)

@@ -18,10 +18,9 @@
  *
  */
 package org.apache.cassandra.io.util;
-
-import org.apache.cassandra.service.FileCacheService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.SyncUtil;
+import org.apache.cassandra.utils.memory.BufferPool;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -30,10 +29,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.util.Arrays;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.cassandra.Util.expectEOF;
 import static org.apache.cassandra.Util.expectException;
@@ -69,7 +64,7 @@ public class BufferedRandomAccessFileTest
         r.close();
 
         // writing buffer bigger than page size, which will trigger reBuffer()
-        byte[] bigData = new byte[RandomAccessReader.DEFAULT_BUFFER_SIZE + 10];
+        byte[] bigData = new byte[BufferPool.DEFAULT_BUFFER_SIZE + 10];
 
         for (int i = 0; i < bigData.length; i++)
             bigData[i] = 'd';
@@ -139,13 +134,13 @@ public class BufferedRandomAccessFileTest
         SequentialWriter w = SequentialWriter.open(tmpFile);
 
         // Fully write the file and sync..
-        byte[] in = generateByteArray(RandomAccessReader.DEFAULT_BUFFER_SIZE);
+        byte[] in = generateByteArray(BufferPool.DEFAULT_BUFFER_SIZE);
         w.write(in);
 
         RandomAccessReader r = RandomAccessReader.open(w);
 
         // Read it into a same size array.
-        byte[] out = new byte[RandomAccessReader.DEFAULT_BUFFER_SIZE];
+        byte[] out = new byte[BufferPool.DEFAULT_BUFFER_SIZE];
         r.read(out);
 
         // Cannot read any more.
@@ -165,7 +160,7 @@ public class BufferedRandomAccessFileTest
 
         // write a chunk smaller then our buffer, so will not be flushed
         // to disk
-        byte[] lessThenBuffer = generateByteArray(RandomAccessReader.DEFAULT_BUFFER_SIZE / 2);
+        byte[] lessThenBuffer = generateByteArray(BufferPool.DEFAULT_BUFFER_SIZE / 2);
         w.write(lessThenBuffer);
         assertEquals(lessThenBuffer.length, w.length());
 
@@ -174,7 +169,7 @@ public class BufferedRandomAccessFileTest
         assertEquals(lessThenBuffer.length, w.length());
 
         // write more then the buffer can hold and check length
-        byte[] biggerThenBuffer = generateByteArray(RandomAccessReader.DEFAULT_BUFFER_SIZE * 2);
+        byte[] biggerThenBuffer = generateByteArray(BufferPool.DEFAULT_BUFFER_SIZE * 2);
         w.write(biggerThenBuffer);
         assertEquals(biggerThenBuffer.length + lessThenBuffer.length, w.length());
 
@@ -191,7 +186,7 @@ public class BufferedRandomAccessFileTest
     {
         final SequentialWriter w = createTempFile("brafReadBytes");
 
-        byte[] data = new byte[RandomAccessReader.DEFAULT_BUFFER_SIZE + 10];
+        byte[] data = new byte[BufferPool.DEFAULT_BUFFER_SIZE + 10];
 
         for (int i = 0; i < data.length; i++)
         {
@@ -231,7 +226,7 @@ public class BufferedRandomAccessFileTest
     public void testSeek() throws Exception
     {
         SequentialWriter w = createTempFile("brafSeek");
-        byte[] data = generateByteArray(RandomAccessReader.DEFAULT_BUFFER_SIZE + 20);
+        byte[] data = generateByteArray(BufferPool.DEFAULT_BUFFER_SIZE + 20);
         w.write(data);
         w.finish();
 
@@ -271,7 +266,7 @@ public class BufferedRandomAccessFileTest
     public void testSkipBytes() throws IOException
     {
         SequentialWriter w = createTempFile("brafSkipBytes");
-        w.write(generateByteArray(RandomAccessReader.DEFAULT_BUFFER_SIZE * 2));
+        w.write(generateByteArray(BufferPool.DEFAULT_BUFFER_SIZE * 2));
         w.finish();
 
         RandomAccessReader file = RandomAccessReader.open(w);
@@ -344,7 +339,7 @@ public class BufferedRandomAccessFileTest
             {
                 File file1 = writeTemporaryFile(new byte[16]);
                 try (final ChannelProxy channel = new ChannelProxy(file1);
-                     final RandomAccessReader file = RandomAccessReader.open(channel, bufferSize, null))
+                     final RandomAccessReader file = RandomAccessReader.open(channel, bufferSize, -1L))
                 {
                     expectEOF(new Callable<Object>()
                     {
@@ -362,7 +357,7 @@ public class BufferedRandomAccessFileTest
             {
                 File file1 = writeTemporaryFile(new byte[16]);
                 try (final ChannelProxy channel = new ChannelProxy(file1);
-                     final RandomAccessReader file = RandomAccessReader.open(channel, bufferSize, null))
+                     final RandomAccessReader file = RandomAccessReader.open(channel, bufferSize, -1L))
                 {
                     expectEOF(new Callable<Object>()
                     {
@@ -391,7 +386,7 @@ public class BufferedRandomAccessFileTest
     {
         SequentialWriter w = createTempFile("brafBytesRemaining");
 
-        int toWrite = RandomAccessReader.DEFAULT_BUFFER_SIZE + 10;
+        int toWrite = BufferPool.DEFAULT_BUFFER_SIZE + 10;
 
         w.write(generateByteArray(toWrite));
 
@@ -440,7 +435,7 @@ public class BufferedRandomAccessFileTest
     {
         final SequentialWriter w = createTempFile("brafClose");
 
-        byte[] data = generateByteArray(RandomAccessReader.DEFAULT_BUFFER_SIZE + 20);
+        byte[] data = generateByteArray(BufferPool.DEFAULT_BUFFER_SIZE + 20);
 
         w.write(data);
         w.finish();
@@ -526,71 +521,6 @@ public class BufferedRandomAccessFileTest
                 r.seek(0);
                 r.bytesPastMark();
             }
-        }
-    }
-
-    @Test
-    public void testFileCacheService() throws IOException, InterruptedException
-    {
-        //see https://issues.apache.org/jira/browse/CASSANDRA-7756
-
-        final FileCacheService.CacheKey cacheKey = new FileCacheService.CacheKey();
-        final int THREAD_COUNT = 40;
-        ExecutorService executorService = Executors.newFixedThreadPool(THREAD_COUNT);
-
-        SequentialWriter w1 = createTempFile("fscache1");
-        SequentialWriter w2 = createTempFile("fscache2");
-
-        w1.write(new byte[30]);
-        w1.finish();
-
-        w2.write(new byte[30]);
-        w2.finish();
-
-        for (int i = 0; i < 20; i++)
-        {
-
-
-            RandomAccessReader r1 = RandomAccessReader.open(w1);
-            RandomAccessReader r2 = RandomAccessReader.open(w2);
-
-
-            FileCacheService.instance.put(cacheKey, r1);
-            FileCacheService.instance.put(cacheKey, r2);
-
-            final CountDownLatch finished = new CountDownLatch(THREAD_COUNT);
-            final AtomicBoolean hadError = new AtomicBoolean(false);
-
-            for (int k = 0; k < THREAD_COUNT; k++)
-            {
-                executorService.execute( new Runnable()
-                {
-                    @Override
-                    public void run()
-                    {
-                        try
-                        {
-                            long size = FileCacheService.instance.sizeInBytes();
-
-                            while (size > 0)
-                                size = FileCacheService.instance.sizeInBytes();
-                        }
-                        catch (Throwable t)
-                        {
-                            t.printStackTrace();
-                            hadError.set(true);
-                        }
-                        finally
-                        {
-                            finished.countDown();
-                        }
-                    }
-                });
-
-            }
-
-            finished.await();
-            assert !hadError.get();
         }
     }
 

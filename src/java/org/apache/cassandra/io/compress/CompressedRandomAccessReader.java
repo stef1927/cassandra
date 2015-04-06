@@ -32,6 +32,7 @@ import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.io.sstable.CorruptSSTableException;
 import org.apache.cassandra.io.util.*;
 import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.memory.BufferPool;
 
 /**
  * CRAR extends RAR to transparently uncompress blocks from the file into RAR.buffer.  Most of the RAR
@@ -41,26 +42,12 @@ public class CompressedRandomAccessReader extends RandomAccessReader
 {
     public static CompressedRandomAccessReader open(ChannelProxy channel, CompressionMetadata metadata)
     {
-        try
-        {
-            return new CompressedRandomAccessReader(channel, metadata, null);
-        }
-        catch (FileNotFoundException e)
-        {
-            throw new RuntimeException(e);
-        }
+        return new CompressedRandomAccessReader(channel, metadata, null);
     }
 
     public static CompressedRandomAccessReader open(ICompressedFile file)
     {
-        try
-        {
-            return new CompressedRandomAccessReader(file.channel(), file.getMetadata(), file);
-        }
-        catch (FileNotFoundException e)
-        {
-            throw new RuntimeException(e);
-        }
+        return new CompressedRandomAccessReader(file.channel(), file.getMetadata(), file);
     }
 
     private final TreeMap<Long, MappedByteBuffer> chunkSegments;
@@ -76,9 +63,9 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     // raw checksum bytes
     private ByteBuffer checksumBytes;
 
-    protected CompressedRandomAccessReader(ChannelProxy channel, CompressionMetadata metadata, ICompressedFile file) throws FileNotFoundException
+    protected CompressedRandomAccessReader(ChannelProxy channel, CompressionMetadata metadata, ICompressedFile file)
     {
-        super(channel, metadata.chunkLength(), metadata.compressedFileLength, metadata.compressor().preferredBufferType(), file instanceof PoolingSegmentedFile ? (PoolingSegmentedFile) file : null);
+        super(channel, metadata.chunkLength(), metadata.compressedFileLength, metadata.compressor().preferredBufferType());
         this.metadata = metadata;
         checksum = new Adler32();
 
@@ -94,13 +81,13 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     protected ByteBuffer allocateBuffer(int bufferSize, BufferType bufferType)
     {
         assert Integer.bitCount(bufferSize) == 1;
-        return bufferType.allocate(bufferSize);
+        return BufferPool.get(bufferSize, bufferType);
     }
 
     @Override
-    public void deallocate()
+    public void close()
     {
-        super.deallocate();
+        super.close();
         if (compressed != null)
             FileUtils.clean(compressed);
         compressed = null;
