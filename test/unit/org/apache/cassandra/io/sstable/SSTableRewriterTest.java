@@ -22,10 +22,8 @@ import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
-import javax.annotation.Nullable;
-
-import com.google.common.base.Function;
 import com.google.common.collect.Sets;
+import org.apache.cassandra.io.util.FileUtils;
 import org.junit.After;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -50,9 +48,8 @@ import org.apache.cassandra.metrics.StorageMetrics;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.Pair;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+
+import static org.junit.Assert.*;
 
 public class SSTableRewriterTest extends SchemaLoader
 {
@@ -75,8 +72,8 @@ public class SSTableRewriterTest extends SchemaLoader
         Keyspace keyspace = Keyspace.open(KEYSPACE);
         ColumnFamilyStore store = keyspace.getColumnFamilyStore(CF);
         store.truncateBlocking();
+        SSTableDeletingTask.waitForDeletions();
     }
-
 
     @Test
     public void basicTest() throws InterruptedException
@@ -107,8 +104,9 @@ public class SSTableRewriterTest extends SchemaLoader
             }
         }
         Collection<SSTableReader> newsstables = writer.finish();
-        cfs.getDataTracker().markCompactedSSTablesReplaced(sstables, newsstables , OperationType.COMPACTION);
-        Thread.sleep(100);
+        cfs.getDataTracker().markCompactedSSTablesReplaced(sstables, newsstables, OperationType.COMPACTION);
+        SSTableDeletingTask.waitForDeletions();
+
         validateCFS(cfs);
         int filecounts = assertFileCounts(sstables.iterator().next().descriptor.directory.list(), 0, 0);
         assertEquals(1, filecounts);
@@ -140,7 +138,8 @@ public class SSTableRewriterTest extends SchemaLoader
         }
         Collection<SSTableReader> newsstables = writer.finish();
         cfs.getDataTracker().markCompactedSSTablesReplaced(sstables, newsstables, OperationType.COMPACTION);
-        Thread.sleep(100);
+        SSTableDeletingTask.waitForDeletions();
+
         validateCFS(cfs);
         int filecounts = assertFileCounts(sstables.iterator().next().descriptor.directory.list(), 0, 0);
         assertEquals(1, filecounts);
@@ -194,12 +193,14 @@ public class SSTableRewriterTest extends SchemaLoader
         assertTrue(checked);
         Collection<SSTableReader> newsstables = writer.finish();
         cfs.getDataTracker().markCompactedSSTablesReplaced(sstables, newsstables, OperationType.COMPACTION);
-        Thread.sleep(100);
+        SSTableDeletingTask.waitForDeletions();
+
         validateCFS(cfs);
         int filecounts = assertFileCounts(sstables.iterator().next().descriptor.directory.list(), 0, 0);
         assertEquals(1, filecounts);
         cfs.truncateBlocking();
-        Thread.sleep(1000); // make sure the deletion tasks have run etc
+        SSTableDeletingTask.waitForDeletions();
+
         validateCFS(cfs);
     }
 
@@ -229,10 +230,12 @@ public class SSTableRewriterTest extends SchemaLoader
             s.markObsolete();
             s.selfRef().release();
             s2.selfRef().release();
-            Thread.sleep(1000);
-            assertFileCounts(dir.list(), 0, 2);
+            //These checks no longer work on Windows because the writer has the channel still
+            //open till .abort() is called (via the builder)
+            //SSTableDeletingTask.waitForDeletions();
+            //assertFileCounts(dir.list(), 0, 2);
             writer.abort();
-            Thread.sleep(1000);
+            SSTableDeletingTask.waitForDeletions();
             int datafiles = assertFileCounts(dir.list(), 0, 0);
             assertEquals(datafiles, 0);
             validateCFS(cfs);
@@ -286,7 +289,8 @@ public class SSTableRewriterTest extends SchemaLoader
         assertEquals(startStorageMetricsLoad - s.bytesOnDisk() + sum, StorageMetrics.load.getCount());
         assertEquals(files, sstables.size());
         assertEquals(files, cfs.getSSTables().size());
-        Thread.sleep(1000);
+        SSTableDeletingTask.waitForDeletions();
+
         // tmplink and tmp files should be gone:
         assertEquals(sum, cfs.metric.totalDiskSpaceUsed.getCount());
         assertFileCounts(s.descriptor.directory.list(), 0, 0);
@@ -322,23 +326,24 @@ public class SSTableRewriterTest extends SchemaLoader
                     assertEquals(cfs.getSSTables().size(), files); // we have one original file plus the ones we have switched out.
                 }
             }
-
-            List<SSTableReader> sstables = rewriter.finish();
-            assertEquals(files, sstables.size());
-            assertEquals(files, cfs.getSSTables().size());
-            assertEquals(1, cfs.getDataTracker().getView().shadowed.size());
-            cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, sstables, OperationType.COMPACTION);
-            assertEquals(files, cfs.getSSTables().size());
-            assertEquals(0, cfs.getDataTracker().getView().shadowed.size());
-            Thread.sleep(1000);
-            assertFileCounts(s.descriptor.directory.list(), 0, 0);
-            validateCFS(cfs);
         }
         catch (Throwable t)
         {
             rewriter.abort();
             throw t;
         }
+
+        List<SSTableReader> sstables = rewriter.finish();
+        assertEquals(files, sstables.size());
+        assertEquals(files, cfs.getSSTables().size());
+        assertEquals(1, cfs.getDataTracker().getView().shadowed.size());
+        cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, sstables, OperationType.COMPACTION);
+        assertEquals(files, cfs.getSSTables().size());
+        assertEquals(0, cfs.getDataTracker().getView().shadowed.size());
+        SSTableDeletingTask.waitForDeletions();
+
+        assertFileCounts(s.descriptor.directory.list(), 0, 0);
+        validateCFS(cfs);
     }
 
 
@@ -449,7 +454,8 @@ public class SSTableRewriterTest extends SchemaLoader
             throw t;
         }
 
-        Thread.sleep(1000);
+        SSTableDeletingTask.waitForDeletions();
+
         assertEquals(startSize, cfs.metric.liveDiskSpaceUsed.getCount());
         assertEquals(1, cfs.getSSTables().size());
         assertFileCounts(s.descriptor.directory.list(), 0, 0);
@@ -494,17 +500,18 @@ public class SSTableRewriterTest extends SchemaLoader
                     break;
                 }
             }
-
-            Thread.sleep(1000);
-            assertEquals(files - 1, cfs.getSSTables().size()); // we never wrote anything to the last file
-            assertFileCounts(s.descriptor.directory.list(), 0, 0);
-            validateCFS(cfs);
         }
         catch (Throwable t)
         {
             rewriter.abort();
             throw t;
         }
+
+        SSTableDeletingTask.waitForDeletions();
+
+        assertEquals(files - 1, cfs.getSSTables().size()); // we never wrote anything to the last file
+        assertFileCounts(s.descriptor.directory.list(), 0, 0);
+        validateCFS(cfs);
     }
 
     @Test
@@ -536,20 +543,20 @@ public class SSTableRewriterTest extends SchemaLoader
                     assertEquals(cfs.getSSTables().size(), files); // we have one original file plus the ones we have switched out.
                 }
             }
-
-            List<SSTableReader> sstables = rewriter.finish();
-            cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, sstables, OperationType.COMPACTION);
-            Thread.sleep(1000);
-            assertFileCounts(s.descriptor.directory.list(), 0, 0);
-            cfs.truncateBlocking();
-            Thread.sleep(1000); // make sure the deletion tasks have run etc
-            validateCFS(cfs);
         }
         catch (Throwable t)
         {
             rewriter.abort();
             throw t;
         }
+
+        List<SSTableReader> sstables = rewriter.finish();
+        cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, sstables, OperationType.COMPACTION);
+        SSTableDeletingTask.waitForDeletions();
+        assertFileCounts(s.descriptor.directory.list(), 0, 0);
+        cfs.truncateBlocking();
+        SSTableDeletingTask.waitForDeletions();
+        validateCFS(cfs);
     }
 
     @Test
@@ -581,21 +588,23 @@ public class SSTableRewriterTest extends SchemaLoader
                     files++;
                 }
             }
-
-            List<SSTableReader> sstables = rewriter.finish();
-            cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, sstables, OperationType.COMPACTION);
-            assertEquals(files, sstables.size());
-            assertEquals(files, cfs.getSSTables().size());
-            Thread.sleep(1000);
-            assertFileCounts(s.descriptor.directory.list(), 0, 0);
-            validateCFS(cfs);
         }
         catch (Throwable t)
         {
             rewriter.abort();
             throw t;
         }
+
+        List<SSTableReader> sstables = rewriter.finish();
+        cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, sstables, OperationType.COMPACTION);
+        assertEquals(files, sstables.size());
+        assertEquals(files, cfs.getSSTables().size());
+        SSTableDeletingTask.waitForDeletions();
+        assertFileCounts(s.descriptor.directory.list(), 0, 0);
+
+        validateCFS(cfs);
     }
+
     @Test
     public void testSSTableSplit() throws InterruptedException
     {
@@ -607,12 +616,16 @@ public class SSTableRewriterTest extends SchemaLoader
         cfs.getDataTracker().markCompacting(Arrays.asList(s), true, false);
         SSTableSplitter splitter = new SSTableSplitter(cfs, s, 10);
         splitter.split();
-        Thread.sleep(1000);
+
         assertFileCounts(s.descriptor.directory.list(), 0, 0);
+
+        s.selfRef().release();
+        SSTableDeletingTask.waitForDeletions();
+
         for (File f : s.descriptor.directory.listFiles())
         {
             // we need to clear out the data dir, otherwise tests running after this breaks
-            f.delete();
+            FileUtils.deleteRecursive(f);
         }
     }
 
@@ -676,8 +689,12 @@ public class SSTableRewriterTest extends SchemaLoader
         finally
         {
             cfs.getDataTracker().unmarkCompacting(compacting);
+            if (offline)
+                s.selfRef().release();
         }
-        Thread.sleep(1000);
+
+        SSTableDeletingTask.waitForDeletions();
+
         int filecount = assertFileCounts(s.descriptor.directory.list(), 0, 0);
         assertEquals(filecount, 1);
         if (!offline)
@@ -686,7 +703,8 @@ public class SSTableRewriterTest extends SchemaLoader
             validateCFS(cfs);
         }
         cfs.truncateBlocking();
-        Thread.sleep(1000);
+        SSTableDeletingTask.waitForDeletions();
+
         filecount = assertFileCounts(s.descriptor.directory.list(), 0, 0);
         if (offline)
         {
@@ -694,13 +712,12 @@ public class SSTableRewriterTest extends SchemaLoader
             assertEquals(1, filecount);
             for (File f : s.descriptor.directory.listFiles())
             {
-                f.delete();
+                FileUtils.deleteRecursive(f);
             }
             filecount = assertFileCounts(s.descriptor.directory.list(), 0, 0);
         }
 
         assertEquals(0, filecount);
-
     }
 
     @Test
@@ -756,7 +773,7 @@ public class SSTableRewriterTest extends SchemaLoader
             }
         }
         validateKeys(keyspace);
-        Thread.sleep(1000);
+        SSTableDeletingTask.waitForDeletions();
         validateCFS(cfs);
     }
 
