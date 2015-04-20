@@ -361,23 +361,14 @@ public class BigTableWriter extends SSTableWriter
         {
             Map<MetadataType, MetadataComponent> metadataComponents = finalizeMetadata();
 
-            iwriter.summary.prepareToCommit();
-            iwriter.flushBf();
-
-            // truncate index file
-            long position = iwriter.indexFile.getFilePointer();
-            iwriter.indexFile.prepareToCommit(descriptor);
-            FileUtils.truncate(iwriter.indexFile.getPath(), position);
+            iwriter.prepareToCommit();
 
             // write sstable statistics
             dataFile.prepareToCommit(descriptor);
             writeMetadata(descriptor, metadataComponents);
+
             // save the table of components
             SSTable.appendTOC(descriptor, components);
-            try (IndexSummary summary = iwriter.summary.build(partitioner))
-            {
-                SSTableReader.saveSummary(descriptor, first, last, iwriter.builder, dbuilder, summary);
-            }
 
             // rename to final
             rename(descriptor, components);
@@ -385,24 +376,21 @@ public class BigTableWriter extends SSTableWriter
 
         protected Throwable doCommit(Throwable accumulate)
         {
-            accumulate = iwriter.indexFile.commit(accumulate);
             accumulate = dataFile.commit(accumulate);
+            accumulate = iwriter.commit(accumulate);
             return accumulate;
         }
 
         protected Throwable doCleanup(Throwable accumulate)
         {
-            accumulate = iwriter.summary.close(accumulate);
-            accumulate = iwriter.bf.close(accumulate);
-            accumulate = iwriter.builder.close(accumulate);
             accumulate = dbuilder.close(accumulate);
             return accumulate;
         }
 
         protected Throwable doAbort(Throwable accumulate)
         {
+            accumulate = iwriter.abort(accumulate);
             accumulate = dataFile.abort(accumulate);
-            accumulate = iwriter.indexFile.abort(accumulate);
 
             Set<Component> components = SSTable.componentsFor(descriptor);
             try
@@ -447,7 +435,7 @@ public class BigTableWriter extends SSTableWriter
     /**
      * Encapsulates writing the index and filter for an SSTable. The state of this object is not valid until it has been closed.
      */
-    class IndexWriter
+    class IndexWriter extends AbstractTransactional implements Transactional
     {
         private final SequentialWriter indexFile;
         public final SegmentedFile.Builder builder;
@@ -542,6 +530,44 @@ public class BigTableWriter extends SSTableWriter
             // we can't reset dbuilder either, but that is the last thing called in afterappend so
             // we assume that if that worked then we won't be trying to reset.
             indexFile.resetAndTruncate(mark);
+        }
+
+        protected void prepareToCommit()
+        {
+            checkPrepare();
+
+            flushBf();
+
+            // truncate index file
+            long position = iwriter.indexFile.getFilePointer();
+            iwriter.indexFile.prepareToCommit(descriptor);
+            FileUtils.truncate(iwriter.indexFile.getPath(), position);
+
+            // save summary
+            summary.prepareToCommit();
+            try (IndexSummary summary = iwriter.summary.build(partitioner))
+            {
+                SSTableReader.saveSummary(descriptor, first, last, iwriter.builder, dbuilder, summary);
+            }
+            readyToCommit();
+        }
+
+        protected Throwable doCommit(Throwable accumulate)
+        {
+            return indexFile.commit(accumulate);
+        }
+
+        protected Throwable doAbort(Throwable accumulate)
+        {
+            return indexFile.abort(accumulate);
+        }
+
+        protected Throwable doCleanup(Throwable accumulate)
+        {
+            accumulate = summary.close(accumulate);
+            accumulate = bf.close(accumulate);
+            accumulate = builder.close(accumulate);
+            return accumulate;
         }
     }
 }
