@@ -345,7 +345,7 @@ public class SSTableImport
                 break;
         }
 
-        writer.closeAndOpenReader();
+        writer.finish().finished();
 
         return importedKeys;
     }
@@ -423,7 +423,7 @@ public class SSTableImport
 
             }
 
-            writer.closeAndOpenReader();
+            writer.finish().finished();
 
             return importedKeys;
         }

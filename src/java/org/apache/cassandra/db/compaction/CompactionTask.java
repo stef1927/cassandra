@@ -191,7 +191,7 @@ public class CompactionTask extends AbstractCompactionTask
                     }
 
                     // don't replace old sstables yet, as we need to mark the compaction finished in the system table
-                    newSStables = writer.finish();
+                    newSStables = writer.finish().finished();
                 }
                 finally
                 {

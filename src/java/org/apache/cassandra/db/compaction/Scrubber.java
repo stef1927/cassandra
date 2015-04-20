@@ -260,7 +260,7 @@ public class Scrubber implements Closeable
                 {
                     for (Row row : outOfOrderRows)
                         inOrderWriter.append(row.key, row.cf);
-                    newInOrderSstable = inOrderWriter.closeAndOpenReader(sstable.maxDataAge);
+                    newInOrderSstable = inOrderWriter.setMaxDataAge(sstable.maxDataAge).finish().finished();
                 }
                 if (!isOffline)
                     cfs.getDataTracker().addSSTables(Collections.singleton(newInOrderSstable));
@@ -268,12 +268,11 @@ public class Scrubber implements Closeable
             }
 
             // finish obsoletes the old sstable
-            List<SSTableReader> finished = writer.prepareToCommit(badRows > 0 ? ActiveRepairService.UNREPAIRED_SSTABLE : sstable.getSSTableMetadata().repairedAt);
+            List<SSTableReader> finished = writer.setRepairedAt(badRows > 0 ? ActiveRepairService.UNREPAIRED_SSTABLE : sstable.getSSTableMetadata().repairedAt).finish().finished();
             if (!finished.isEmpty())
                 newSstable = finished.get(0);
             if (!isOffline)
                 cfs.getDataTracker().markCompactedSSTablesReplaced(oldSSTable, finished, OperationType.SCRUB);
-            writer.commit();
         }
         catch (IOException e)
         {

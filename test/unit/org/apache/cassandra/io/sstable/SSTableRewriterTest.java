@@ -104,7 +104,7 @@ public class SSTableRewriterTest extends SchemaLoader
                 AbstractCompactedRow row = new LazilyCompactedRow(controller, Arrays.asList(scanner.next()));
                 writer.append(row);
             }
-            Collection<SSTableReader> newsstables = writer.finish();
+            Collection<SSTableReader> newsstables = writer.finish().finished();
             cfs.getDataTracker().markCompactedSSTablesReplaced(sstables, newsstables , OperationType.COMPACTION);
         }
         SSTableDeletingTask.waitForDeletions();
@@ -137,7 +137,7 @@ public class SSTableRewriterTest extends SchemaLoader
                 AbstractCompactedRow row = new LazilyCompactedRow(controller, Arrays.asList(scanner.next()));
                 writer.append(row);
             }
-            Collection<SSTableReader> newsstables = writer.finish();
+            Collection<SSTableReader> newsstables = writer.finish().finished();
             cfs.getDataTracker().markCompactedSSTablesReplaced(sstables, newsstables, OperationType.COMPACTION);
         }
         SSTableDeletingTask.waitForDeletions();
@@ -192,7 +192,7 @@ public class SSTableRewriterTest extends SchemaLoader
                 }
             }
             assertTrue(checked);
-            Collection<SSTableReader> newsstables = writer.finish();
+            Collection<SSTableReader> newsstables = writer.finish().finished();
             cfs.getDataTracker().markCompactedSSTablesReplaced(sstables, newsstables, OperationType.COMPACTION);
         }
         SSTableDeletingTask.waitForDeletions();
@@ -221,12 +221,12 @@ public class SSTableRewriterTest extends SchemaLoader
         {
             for (int i = 0; i < 1000; i++)
                 writer.append(StorageService.getPartitioner().decorateKey(random(i, 10)), cf);
-            SSTableReader s = writer.openEarly(1000);
+            SSTableReader s = writer.setMaxDataAge(1000).openEarly();
             assert s != null;
             assertFileCounts(dir.list(), 2, 2);
             for (int i = 1000; i < 2000; i++)
                 writer.append(StorageService.getPartitioner().decorateKey(random(i, 10)), cf);
-            SSTableReader s2 = writer.openEarly(1000);
+            SSTableReader s2 = writer.setMaxDataAge(1000).openEarly();
             assertTrue(s.last.compareTo(s2.last) < 0);
             assertFileCounts(dir.list(), 2, 2);
             s.markObsolete();
@@ -280,7 +280,7 @@ public class SSTableRewriterTest extends SchemaLoader
 
                 }
             }
-            sstables = rewriter.finish();
+            sstables = rewriter.finish().finished();
             cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, sstables, OperationType.COMPACTION);
             assertEquals(files, sstables.size());
         }
@@ -329,7 +329,7 @@ public class SSTableRewriterTest extends SchemaLoader
                     assertEquals(cfs.getSSTables().size(), files); // we have one original file plus the ones we have switched out.
                 }
             }
-            sstables = rewriter.finish();
+            sstables = rewriter.finish().finished();
         }
 
         assertEquals(files, sstables.size());
@@ -488,7 +488,7 @@ public class SSTableRewriterTest extends SchemaLoader
                 if (files == 3)
                 {
                     //testing to finish when we have nothing written in the new file
-                    List<SSTableReader> sstables = rewriter.finish();
+                    List<SSTableReader> sstables = rewriter.finish().finished();
                     cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, sstables, OperationType.COMPACTION);
                     break;
                 }
@@ -533,7 +533,7 @@ public class SSTableRewriterTest extends SchemaLoader
                 }
             }
 
-            sstables = rewriter.finish();
+            sstables = rewriter.finish().finished();
             cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, sstables, OperationType.COMPACTION);
         }
 
@@ -575,7 +575,7 @@ public class SSTableRewriterTest extends SchemaLoader
                 }
             }
 
-            sstables = rewriter.finish();
+            sstables = rewriter.finish().finished();
             cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, sstables, OperationType.COMPACTION);
         }
 
@@ -661,7 +661,8 @@ public class SSTableRewriterTest extends SchemaLoader
             }
             try
             {
-                rewriter.prepareToCommitAndThrow(earlyException);
+                rewriter.throwDuringPrepare(earlyException);
+                rewriter.prepareToCommit();
             }
             catch (Throwable t)
             {
@@ -746,7 +747,7 @@ public class SSTableRewriterTest extends SchemaLoader
             }
             try
             {
-                cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, rewriter.finish(), OperationType.COMPACTION);
+                cfs.getDataTracker().markCompactedSSTablesReplaced(compacting, rewriter.finish().finished(), OperationType.COMPACTION);
                 cfs.getDataTracker().unmarkCompacting(compacting);
             }
             catch (Throwable t)
@@ -781,7 +782,7 @@ public class SSTableRewriterTest extends SchemaLoader
         {
             for (int i = 0; i < count * 5; i++)
                 writer.append(StorageService.getPartitioner().decorateKey(ByteBufferUtil.bytes(i)), cf);
-            return writer.closeAndOpenReader();
+            return writer.finish().finished();
         }
     }
 

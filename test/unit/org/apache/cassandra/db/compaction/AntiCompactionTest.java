@@ -160,7 +160,7 @@ public class AntiCompactionTest
         {
             for (int i = 0; i < count * 5; i++)
                 writer.append(StorageService.getPartitioner().decorateKey(ByteBufferUtil.bytes(i)), cf);
-            return writer.closeAndOpenReader();
+            return writer.finish().finished();
         }
     }
 

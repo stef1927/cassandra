@@ -29,8 +29,6 @@ import org.apache.cassandra.io.sstable.SSTableRewriter;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.utils.concurrent.Transactional;
 
-import static org.apache.cassandra.utils.Throwables.maybeFail;
-
 
 /**
  * Class that abstracts away the actual writing of files to make it possible to use CompactionTask for more
@@ -80,23 +78,25 @@ public abstract class CompactionAwareWriter extends Transactional.AbstractTransa
         return sstableWriter.commit(accumulate);
     }
 
-    protected List<SSTableReader> prepareToCommit()
+    @Override
+    protected void doPrepare()
     {
-        checkPrepare();
-        List<SSTableReader> result = sstableWriter.prepareToCommit(-1);
-        readyToCommit();
-        return result;
+        sstableWriter.prepareToCommit();
     }
 
     /**
      * we are done, return the finished sstables so that the caller can mark the old ones as compacted
      * @return all the written sstables sstables
      */
-    public List<SSTableReader> finish()
+    @Override
+    public CompactionAwareWriter finish()
     {
-        List<SSTableReader> result = prepareToCommit();
-        maybeFail(commit(null));
-        return result;
+        return (CompactionAwareWriter) super.finish();
+    }
+
+    public List<SSTableReader> finished()
+    {
+        return sstableWriter.finished();
     }
 
     /**

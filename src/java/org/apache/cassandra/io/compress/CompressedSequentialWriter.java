@@ -28,14 +28,11 @@ import java.util.zip.Adler32;
 import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.io.sstable.CorruptSSTableException;
-import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.io.util.DataIntegrityMetadata;
 import org.apache.cassandra.io.util.FileMark;
 import org.apache.cassandra.io.util.SequentialWriter;
 import org.apache.cassandra.utils.FBUtilities;
-
-import static org.apache.cassandra.utils.Throwables.maybeFail;
 
 public class CompressedSequentialWriter extends SequentialWriter
 {
@@ -284,14 +281,14 @@ public class CompressedSequentialWriter extends SequentialWriter
         }
 
         @Override
-        protected void doPrepare(Descriptor descriptor)
+        protected void doPrepare()
         {
             syncInternal();
             if (descriptor != null)
                 crcMetadata.writeFullChecksum(descriptor);
             releaseFileHandle();
             sstableMetadataCollector.addCompressionRatio(compressedSize, uncompressedSize);
-            metadataWriter.prepareToCommit(current(), chunkCount);
+            metadataWriter.finalizeLength(current(), chunkCount).prepareToCommit();
         }
     }
 

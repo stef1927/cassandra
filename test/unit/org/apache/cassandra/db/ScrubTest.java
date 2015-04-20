@@ -235,7 +235,7 @@ public class ScrubTest
         writer.append(Util.dk("c"), cf);
         writer.append(Util.dk("y"), cf);
         writer.append(Util.dk("d"), cf);
-        writer.closeAndOpenReader();
+        writer.finish().finished();
         */
 
         String root = System.getProperty("corrupt-sstable-root");

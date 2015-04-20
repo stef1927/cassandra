@@ -236,7 +236,7 @@ public class SSTableSimpleUnsortedWriter extends AbstractSSTableSimpleWriter
                                 first = false;
                             }
 
-                            writer.finishAndClose();
+                            writer.finish();
                         }
                     }
                     catch (Throwable e)

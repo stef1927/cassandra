@@ -27,7 +27,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import com.google.common.base.Throwables;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.SSTableWriter;
@@ -370,7 +369,7 @@ public class Memtable
                 if (writer.getFilePointer() > 0)
                 {
                     // temp sstables should contain non-repaired data.
-                    ssTable = writer.closeAndOpenReader();
+                    ssTable = writer.finish().finished();
                     logger.info(String.format("Completed flushing %s (%d bytes) for commitlog position %s",
                                               ssTable.getFilename(), new File(ssTable.getFilename()).length(), context));
                 }

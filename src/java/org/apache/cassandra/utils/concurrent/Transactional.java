@@ -60,7 +60,7 @@ public interface Transactional extends AutoCloseable
      * If the implementation wraps any internal Transactional objects, it must proxy every
      * commit() and abort() call onto each internal object to ensure correct behaviour
      */
-    public static abstract class AbstractTransactional
+    public static abstract class AbstractTransactional implements Transactional
     {
         public static enum State
         {
@@ -83,6 +83,15 @@ public interface Transactional extends AutoCloseable
         // Transactional objects will perform cleanup in the commit() or abort() calls
         protected abstract Throwable doCleanup(Throwable accumulate);
 
+        /**
+         * Do any preparatory work prior to commit. This method should throw any exceptions that can be encountered
+         * during the finalization of the behaviour.
+         */
+        protected abstract void doPrepare();
+
+        /**
+         * commit any effects of this transaction object graph, then cleanup; delegates first to doCommit, then to doCleanup
+         */
         public final Throwable commit(Throwable accumulate)
         {
             if (state != State.READY_TO_COMMIT)
@@ -93,6 +102,9 @@ public interface Transactional extends AutoCloseable
             return accumulate;
         }
 
+        /**
+         * rollback any effects of this transaction object graph; delegates first to doCleanup, then to doAbort
+         */
         public final Throwable abort(Throwable accumulate)
         {
             if (state == State.ABORTED)
@@ -115,32 +127,55 @@ public interface Transactional extends AutoCloseable
             return accumulate;
         }
 
+        // if we are committed or aborted, then we are done; otherwise abort
         public final void close()
         {
             switch (state)
             {
                 case COMMITTED:
-                    maybeFail(doCleanup(null));
-                    break;
                 case ABORTED:
                     break;
                 default:
-                    maybeFail(abort(null));
+                    abort();
             }
         }
 
-        // implementers must call this at the beginning of a prepareToCommit() call
-        protected void checkPrepare()
+        /**
+         * The first phase of commit: delegates to doPrepare(), with valid state transition enforcement.
+         * This call should be propagated onto any child objects participating in the transaction
+         */
+        public final void prepareToCommit()
         {
             if (state != State.IN_PROGRESS)
                 throw new IllegalStateException("Cannot prepare to commit unless IN_PROGRESS; state is " + state);
+
+            doPrepare();
+            state = State.READY_TO_COMMIT;
         }
 
-        // implementers must call this at the end of a prepareToCommit() call
-        protected void readyToCommit()
+        /**
+         * convenience method to both prepareToCommit() and commit() in one operation;
+         * only of use to outer-most transactional object of an object graph
+         */
+        public Transactional finish()
         {
-            checkPrepare();
-            state = State.READY_TO_COMMIT;
+            prepareToCommit();
+            commit();
+            return this;
+        }
+
+        // convenience method wrapping abort, and throwing any exception encountered
+        // only of use to (and to be used by) outer-most object in a transactional graph
+        public final void abort()
+        {
+            maybeFail(abort(null));
+        }
+
+        // convenience method wrapping commit, and throwing any exception encountered
+        // only of use to (and to be used by) outer-most object in a transactional graph
+        public final void commit()
+        {
+            maybeFail(commit(null));
         }
 
         public final State state()
@@ -156,4 +191,5 @@ public interface Transactional extends AutoCloseable
     // release any resources, then rollback all state changes (unless commit() has already been invoked)
     public Throwable abort(Throwable accumulate);
 
+    public void prepareToCommit();
 }

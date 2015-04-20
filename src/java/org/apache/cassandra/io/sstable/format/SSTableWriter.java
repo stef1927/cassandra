@@ -55,6 +55,7 @@ import static org.apache.cassandra.utils.Throwables.maybeFail;
 public abstract class SSTableWriter extends SSTable implements Transactional
 {
     protected long repairedAt;
+    protected long maxDataAge = -1;
     protected final long keyCount;
     protected final MetadataCollector metadataCollector;
     protected final RowIndexEntry.IndexSerializer rowIndexEntrySerializer;
@@ -65,14 +66,8 @@ public abstract class SSTableWriter extends SSTable implements Transactional
     // due to lack of multiple inheritance, we use an inner class to proxy our Transactional implementation details
     protected abstract class TransactionalProxy extends AbstractTransactional
     {
-        protected final void prepare()
-        {
-            checkPrepare();
-            doPrepare();
-            readyToCommit();
-        }
-
-        protected abstract void doPrepare();
+        // should be set during doPrepare()
+        protected SSTableReader finalReader;
     }
 
     protected SSTableWriter(Descriptor descriptor, long keyCount, long repairedAt, CFMetaData metadata, IPartitioner partitioner, MetadataCollector metadataCollector)
@@ -174,33 +169,38 @@ public abstract class SSTableWriter extends SSTable implements Transactional
         return this;
     }
 
+    public SSTableWriter setMaxDataAge(long maxDataAge)
+    {
+        this.maxDataAge = maxDataAge;
+        return this;
+    }
+
     /**
      * Open the resultant SSTableReader before it has been fully written
-     * @param maxDataAge
-     * @return
      */
-    public abstract SSTableReader openEarly(long maxDataAge);
+    public abstract SSTableReader openEarly();
 
     /**
      * Open the resultant SSTableReader once it has been fully written, but before the
      * _set_ of tables that are being written together as one atomic operation are all ready
-     * @param maxDataAge
-     * @return
      */
-    public abstract SSTableReader openFinalEarly(long maxDataAge);
+    public abstract SSTableReader openFinalEarly();
 
     /**
      * Open the resultant SSTableReader once it has been fully written, and all related state
      * is ready to be finalised including other sstables being written involved in the same operation
-     * @param maxDataAge
-     * @return
      */
-    public abstract SSTableReader openFinal(long maxDataAge);
+    public SSTableReader finished()
+    {
+        assert txnProxy.state() == AbstractTransactional.State.READY_TO_COMMIT || txnProxy.state() == AbstractTransactional.State.COMMITTED;
+        assert txnProxy.finalReader != null;
+        return txnProxy.finalReader;
+    }
 
     // finalise our state on disk, including renaming
     public final void prepareToCommit()
     {
-        txnProxy.prepare();
+        txnProxy.prepareToCommit();
     }
 
     public final Throwable commit(Throwable accumulate)
@@ -220,37 +220,13 @@ public abstract class SSTableWriter extends SSTable implements Transactional
 
     public final void abort()
     {
-        maybeFail(abort(null));
+        txnProxy.abort();
     }
 
-    // finish writing all of the metadata and other components to disk, and rename the files
-    public void finish()
+    public final SSTableWriter finish()
     {
-        if (getFilePointer() > 0)
-        {
-            prepareToCommit();
-            maybeFail(commit(null));
-        }
-    }
-
-    public void finishAndClose()
-    {
-        finish();
-        close();
-    }
-
-    public SSTableReader closeAndOpenReader()
-    {
-        return closeAndOpenReader(-1);
-    }
-
-    public SSTableReader closeAndOpenReader(long maxDataAge)
-    {
-        prepareToCommit();
-        SSTableReader result = openFinal(maxDataAge);
-        maybeFail(commit(null));
-        close();
-        return result;
+        txnProxy.finish();
+        return this;
     }
 
     protected Map<MetadataType, MetadataComponent> finalizeMetadata()

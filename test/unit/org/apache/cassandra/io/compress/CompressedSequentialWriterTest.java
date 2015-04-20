@@ -101,7 +101,7 @@ public class CompressedSequentialWriterTest
                 }
                 writer.resetAndTruncate(mark);
                 writer.write(dataPost);
-                writer.finishAndClose(null);
+                writer.finish();
             }
 
             assert f.exists();

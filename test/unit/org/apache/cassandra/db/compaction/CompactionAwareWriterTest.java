@@ -182,7 +182,7 @@ public class CompactionAwareWriterTest
                     rowsWritten++;
             }
         }
-        Collection<SSTableReader> newSSTables = writer.finish();
+        Collection<SSTableReader> newSSTables = writer.finish().finished();
         cfs.getDataTracker().markCompactedSSTablesReplaced(sstables, newSSTables, OperationType.COMPACTION);
         return rowsWritten;
     }

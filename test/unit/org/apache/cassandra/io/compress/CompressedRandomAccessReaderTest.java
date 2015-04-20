@@ -81,7 +81,7 @@ public class CompressedRandomAccessReaderTest
 
             for (int i = 0; i < 20; i++)
                 writer.write("x".getBytes());
-            writer.finishAndClose(null);
+            writer.finish();
 
             CompressedRandomAccessReader reader = CompressedRandomAccessReader.open(channel, new CompressionMetadata(filename + ".metadata", f.length()));
             String res = reader.readLine();
@@ -124,7 +124,7 @@ public class CompressedRandomAccessReaderTest
 
             writer.resetAndTruncate(mark);
             writer.write("brown fox jumps over the lazy dog".getBytes());
-            writer.finishAndClose(null);
+            writer.finish();
 
             assert f.exists();
             RandomAccessReader reader = compressed
@@ -164,7 +164,7 @@ public class CompressedRandomAccessReaderTest
         try (SequentialWriter writer = new CompressedSequentialWriter(file, metadata.getPath(), new CompressionParameters(SnappyCompressor.instance), sstableMetadataCollector))
         {
             writer.write(CONTENT.getBytes());
-            writer.finishAndClose(null);
+            writer.finish();
         }
 
         ChannelProxy channel = new ChannelProxy(file);

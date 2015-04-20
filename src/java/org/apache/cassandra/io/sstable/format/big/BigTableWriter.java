@@ -50,7 +50,6 @@ import org.apache.cassandra.utils.IFilter;
 import org.apache.cassandra.utils.StreamingHistogram;
 import org.apache.cassandra.utils.concurrent.Transactional;
 
-import static org.apache.cassandra.utils.Throwables.maybeFail;
 import static org.apache.cassandra.utils.Throwables.merge;
 
 public class BigTableWriter extends SSTableWriter
@@ -285,7 +284,7 @@ public class BigTableWriter extends SSTableWriter
         return link;
     }
 
-    public SSTableReader openEarly(long maxDataAge)
+    public SSTableReader openEarly()
     {
         // find the max (exclusive) readable key
         IndexSummaryBuilder.ReadableBoundary boundary = iwriter.getMaxReadable();
@@ -310,21 +309,15 @@ public class BigTableWriter extends SSTableWriter
         return sstable;
     }
 
-    public SSTableReader openFinalEarly(long maxDataAge)
+    public SSTableReader openFinalEarly()
     {
         // we must ensure the data is completely flushed to disk
         dataFile.sync();
         iwriter.indexFile.sync();
-        return openFinal(maxDataAge, makeTmpLinks(), SSTableReader.OpenReason.EARLY);
+        return openFinal(makeTmpLinks(), SSTableReader.OpenReason.EARLY);
     }
 
-    public SSTableReader openFinal(long maxDataAge)
-    {
-        assert txnProxy.state() == AbstractTransactional.State.READY_TO_COMMIT;
-        return openFinal(maxDataAge, descriptor.asType(Descriptor.Type.FINAL), SSTableReader.OpenReason.NORMAL);
-    }
-
-    private SSTableReader openFinal(long maxDataAge, Descriptor desc, SSTableReader.OpenReason openReason)
+    private SSTableReader openFinal(Descriptor desc, SSTableReader.OpenReason openReason)
     {
         if (maxDataAge < 0)
             maxDataAge = System.currentTimeMillis();
@@ -364,7 +357,7 @@ public class BigTableWriter extends SSTableWriter
             iwriter.prepareToCommit();
 
             // write sstable statistics
-            dataFile.prepareToCommit(descriptor);
+            dataFile.setDescriptor(descriptor).prepareToCommit();
             writeMetadata(descriptor, metadataComponents);
 
             // save the table of components
@@ -372,6 +365,8 @@ public class BigTableWriter extends SSTableWriter
 
             // rename to final
             rename(descriptor, components);
+
+            finalReader = openFinal(descriptor.asType(Descriptor.Type.FINAL), SSTableReader.OpenReason.NORMAL);
         }
 
         protected Throwable doCommit(Throwable accumulate)
@@ -414,8 +409,8 @@ public class BigTableWriter extends SSTableWriter
         try (SequentialWriter out = SequentialWriter.open(file);)
         {
             desc.getMetadataSerializer().serialize(components, out.stream);
-            out.finishAndClose(desc);
-            }
+            out.setDescriptor(desc).finish();
+        }
         catch (IOException e)
         {
             throw new FSWriteError(e, file.getPath());
@@ -532,15 +527,13 @@ public class BigTableWriter extends SSTableWriter
             indexFile.resetAndTruncate(mark);
         }
 
-        protected void prepareToCommit()
+        protected void doPrepare()
         {
-            checkPrepare();
-
             flushBf();
 
             // truncate index file
             long position = iwriter.indexFile.getFilePointer();
-            iwriter.indexFile.prepareToCommit(descriptor);
+            iwriter.indexFile.setDescriptor(descriptor).prepareToCommit();
             FileUtils.truncate(iwriter.indexFile.getPath(), position);
 
             // save summary
@@ -549,7 +542,6 @@ public class BigTableWriter extends SSTableWriter
             {
                 SSTableReader.saveSummary(descriptor, first, last, iwriter.builder, dbuilder, summary);
             }
-            readyToCommit();
         }
 
         protected Throwable doCommit(Throwable accumulate)

@@ -407,7 +407,7 @@ public class CompactionsTest
             writer.append(Util.dk("1"), cf);
             writer.append(Util.dk("3"), cf);
 
-            cfs.addSSTable(writer.closeAndOpenReader());
+            cfs.addSSTable(writer.finish().finished());
         }
 
         try (SSTableWriter writer = SSTableWriter.create(Descriptor.fromFilename(cfs.getTempSSTablePath(dir.getDirectoryForNewSSTables())), 0, 0, 0);)
@@ -416,7 +416,7 @@ public class CompactionsTest
             writer.append(Util.dk("1"), cf);
             writer.append(Util.dk("2"), cf);
             writer.append(Util.dk("3"), cf);
-            cfs.addSSTable(writer.closeAndOpenReader());
+            cfs.addSSTable(writer.finish().finished());
         }
 
 

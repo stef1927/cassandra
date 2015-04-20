@@ -74,7 +74,7 @@ public class SSTableSimpleWriter extends AbstractSSTableSimpleWriter
         {
             if (currentKey != null)
                 writeRow(currentKey, columnFamily);
-            writer.finishAndClose();
+            writer.finish();
         }
         catch (Throwable t)
         {

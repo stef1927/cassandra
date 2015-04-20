@@ -274,6 +274,9 @@ public class CompressionMetadata
         private SafeMemory offsets = new SafeMemory(maxCount * 8L);
         private int count = 0;
 
+        // provided by user when setDescriptor
+        private long dataLength, chunkCount;
+
         private Writer(CompressionParameters parameters, String path)
         {
             this.parameters = parameters;
@@ -320,10 +323,17 @@ public class CompressionMetadata
             }
         }
 
-        public void prepareToCommit(long dataLength, int chunkCount)
+        // we've written everything; wire up some final metadata state
+        public Writer finalizeLength(long dataLength, int chunkCount)
+        {
+            this.dataLength = dataLength;
+            this.chunkCount = chunkCount;
+            return this;
+        }
+
+        public void doPrepare()
         {
             assert chunkCount == count;
-            checkPrepare();
 
             // finalize the size of memory used if it won't now change;
             // unnecessary if already correct size
@@ -351,8 +361,6 @@ public class CompressionMetadata
             {
                 FileUtils.closeQuietly(out);
             }
-
-            readyToCommit();
         }
 
         public CompressionMetadata open(long dataLength, long compressedLength)

@@ -24,8 +24,6 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.StandardOpenOption;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.io.FSWriteError;
@@ -36,7 +34,6 @@ import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.utils.CLibrary;
 import org.apache.cassandra.utils.concurrent.Transactional;
 
-import static org.apache.cassandra.utils.Throwables.maybeFail;
 import static org.apache.cassandra.utils.Throwables.merge;
 
 /**
@@ -74,6 +71,7 @@ public class SequentialWriter extends OutputStream implements WritableByteChanne
     protected Runnable runPostFlush;
 
     private final TransactionalProxy txnProxy = txnProxy();
+    protected Descriptor descriptor;
 
     // due to lack of multiple-inheritance, we proxy our transactional implementation
     protected class TransactionalProxy extends AbstractTransactional
@@ -104,19 +102,12 @@ public class SequentialWriter extends OutputStream implements WritableByteChanne
             return accumulate;
         }
 
-        protected void doPrepare(Descriptor descriptor)
+        protected void doPrepare()
         {
             syncInternal();
             // we must cleanup our file handles during prepareCommit for Windows compatibility as we cannot rename an open file;
             // TODO: once we stop file renaming, remove this for clarity
             releaseFileHandle();
-        }
-
-        protected void prepare(Descriptor descriptor)
-        {
-            checkPrepare();
-            doPrepare(descriptor);
-            readyToCommit();
         }
 
         protected Throwable doCommit(Throwable accumulate)
@@ -442,16 +433,15 @@ public class SequentialWriter extends OutputStream implements WritableByteChanne
         return channel.isOpen();
     }
 
-    public void finishAndClose(Descriptor descriptor)
+    public SequentialWriter setDescriptor(Descriptor descriptor)
     {
-        prepareToCommit(descriptor);
-        maybeFail(commit(null));
-        close();
+        this.descriptor = descriptor;
+        return this;
     }
 
-    public final void prepareToCommit(Descriptor descriptor)
+    public final void prepareToCommit()
     {
-        txnProxy.prepare(descriptor);
+        txnProxy.prepareToCommit();
     }
 
     public final Throwable commit(Throwable accumulate)
@@ -465,9 +455,14 @@ public class SequentialWriter extends OutputStream implements WritableByteChanne
     }
 
     @Override
-    public void close()
+    public final void close()
     {
         txnProxy.close();
+    }
+
+    public final void finish()
+    {
+        txnProxy.finish();
     }
 
     protected TransactionalProxy txnProxy()

@@ -35,7 +35,6 @@ import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.concurrent.Refs;
 import org.apache.cassandra.utils.concurrent.Transactional;
 
-import static org.apache.cassandra.utils.Throwables.maybeFail;
 import static org.apache.cassandra.utils.Throwables.merge;
 
 /**
@@ -74,6 +73,7 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
     private final ColumnFamilyStore cfs;
 
     private final long maxAge;
+    private long repairedAt = -1;
     // the set of final readers we will expose on commit
     private final List<SSTableReader> preparedForCommit = new ArrayList<>();
     private final Set<SSTableReader> rewriting; // the readers we are rewriting (updated as they are replaced)
@@ -92,6 +92,9 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
 
     private SSTableWriter writer;
     private Map<DecoratedKey, RowIndexEntry> cachedKeys = new HashMap<>();
+
+    // for testing (TODO: remove when have byteman setup)
+    private boolean throwEarly, throwLate;
 
     public SSTableRewriter(ColumnFamilyStore cfs, Set<SSTableReader> rewriting, long maxAge, boolean isOffline)
     {
@@ -170,7 +173,7 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
             }
             else
             {
-                SSTableReader reader = writer.openEarly(maxAge);
+                SSTableReader reader = writer.setMaxDataAge(maxAge).openEarly();
                 if (reader != null)
                 {
                     replaceEarlyOpenedFile(currentlyOpenedEarly, reader);
@@ -238,16 +241,6 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
     {
         // we have no state of our own to cleanup; Transactional objects cleanup their own state in abort or commit
         return accumulate;
-    }
-
-    public void abort()
-    {
-        maybeFail(abort(null));
-    }
-
-    public void commit()
-    {
-        maybeFail(commit(null));
     }
 
     /**
@@ -361,7 +354,7 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
         if (preemptiveOpenInterval != Long.MAX_VALUE)
         {
             // we leave it as a tmp file, but we open it and add it to the dataTracker
-            reader = writer.openFinalEarly(maxAge);
+            reader = writer.setMaxDataAge(maxAge).openFinalEarly();
             replaceEarlyOpenedFile(currentlyOpenedEarly, reader);
             moveStarts(reader, reader.last, false);
         }
@@ -372,16 +365,15 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
         writer = newWriter;
     }
 
-    public List<SSTableReader> finish()
+    /**
+     * @param repairedAt the repair time, -1 if we should use the time we supplied when we created
+     *                   the SSTableWriter (and called rewriter.switchWriter(..)), actual time if we want to override the
+     *                   repair time.
+     */
+    public SSTableRewriter setRepairedAt(long repairedAt)
     {
-        return finish(-1L);
-    }
-
-    public List<SSTableReader> finish(long repairedAt)
-    {
-        List<SSTableReader> result = prepareToCommit(repairedAt);
-        maybeFail(commit(null));
-        return result;
+        this.repairedAt = repairedAt;
+        return this;
     }
 
     /**
@@ -395,25 +387,20 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
      * gymnastics (ie, call DataTracker#markCompactedSSTablesReplaced(..))
      *
      *
-     * @param repairedAt the repair time, -1 if we should use the time we supplied when we created
-     *                   the SSTableWriter (and called rewriter.switchWriter(..)), actual time if we want to override the
-     *                   repair time.
      */
-    public List<SSTableReader> prepareToCommit(long repairedAt)
+    public SSTableRewriter finish()
     {
-        return prepareToCommitAndMaybeThrow(repairedAt, false, false);
+        return (SSTableRewriter) super.finish();
     }
 
-    @VisibleForTesting
-    void prepareToCommitAndThrow(boolean throwEarly)
+    public List<SSTableReader> finished()
     {
-        prepareToCommitAndMaybeThrow(-1, throwEarly, !throwEarly);
+        assert state() == State.COMMITTED || state() == State.READY_TO_COMMIT;
+        return preparedForCommit;
     }
 
-    private List<SSTableReader> prepareToCommitAndMaybeThrow(long repairedAt, boolean throwEarly, boolean throwLate)
+    protected void doPrepare()
     {
-        checkPrepare();
-
         switchWriter(null);
 
         if (throwEarly)
@@ -425,8 +412,8 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
             if (f.reader != null)
                 discard.add(f.reader);
 
-            f.writer.setRepairedAt(repairedAt).prepareToCommit();
-            SSTableReader newReader = f.writer.openFinal(maxAge);
+            f.writer.setRepairedAt(repairedAt).setMaxDataAge(maxAge).prepareToCommit();
+            SSTableReader newReader = f.writer.finished();
 
             if (f.reader != null)
                 f.reader.setReplacedBy(newReader);
@@ -436,9 +423,13 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
 
         if (throwLate)
             throw new RuntimeException("exception thrown after all sstables finished, for testing");
+    }
 
-        readyToCommit();
-        return preparedForCommit;
+    @VisibleForTesting
+    void throwDuringPrepare(boolean throwEarly)
+    {
+        this.throwEarly = throwEarly;
+        this.throwLate = !throwEarly;
     }
 
     // cleanup all our temporary readers and swap in our new ones

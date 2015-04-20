@@ -20,10 +20,6 @@ package org.apache.cassandra.io.util;
 import java.io.File;
 import java.nio.ByteBuffer;
 
-import org.apache.cassandra.io.sstable.Descriptor;
-
-import static org.apache.cassandra.utils.Throwables.maybeFail;
-
 public class ChecksummedSequentialWriter extends SequentialWriter
 {
     private final SequentialWriter crcWriter;
@@ -61,12 +57,12 @@ public class ChecksummedSequentialWriter extends SequentialWriter
         }
 
         @Override
-        protected void doPrepare(Descriptor descriptor)
+        protected void doPrepare()
         {
             syncInternal();
             if (descriptor != null)
                 crcMetadata.writeFullChecksum(descriptor);
-            crcWriter.prepareToCommit(descriptor);
+            crcWriter.setDescriptor(descriptor).prepareToCommit();
             // we must cleanup our file handles during prepareCommit for Windows compatibility as we cannot rename an open file;
             // TODO: once we stop file renaming, remove this for clarity
             releaseFileHandle();
