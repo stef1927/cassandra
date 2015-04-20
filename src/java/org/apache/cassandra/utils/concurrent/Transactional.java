@@ -86,7 +86,7 @@ public interface Transactional extends AutoCloseable
         public final Throwable commit(Throwable accumulate)
         {
             if (state != State.READY_TO_COMMIT)
-                throw new IllegalStateException("Commit commit without preceding preparation to commit");
+                throw new IllegalStateException("Commit attempted before prepared to commit");
             accumulate = doCommit(accumulate);
             accumulate = doCleanup(accumulate);
             state = State.COMMITTED;

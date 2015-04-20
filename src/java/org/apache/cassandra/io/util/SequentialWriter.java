@@ -73,10 +73,10 @@ public class SequentialWriter extends OutputStream implements WritableByteChanne
 
     protected Runnable runPostFlush;
 
-    private final TxnProxy txnProxy = txnProxy();
+    private final TransactionalProxy txnProxy = txnProxy();
 
     // due to lack of multiple-inheritance, we proxy our transactional implementation
-    protected class TxnProxy extends AbstractTransactional
+    protected class TransactionalProxy extends AbstractTransactional
     {
         // we don't do anything on abort; deleting the files is up to others (retaining prior behaviour)
         // TODO: revisit this decision
@@ -470,9 +470,9 @@ public class SequentialWriter extends OutputStream implements WritableByteChanne
         txnProxy.close();
     }
 
-    protected TxnProxy txnProxy()
+    protected TransactionalProxy txnProxy()
     {
-        return new TxnProxy();
+        return new TransactionalProxy();
     }
 
     public void releaseFileHandle()

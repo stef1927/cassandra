@@ -46,7 +46,7 @@ public class ChecksummedSequentialWriter extends SequentialWriter
         crcMetadata.appendDirect(toAppend, false);
     }
 
-    protected class TxnProxy extends SequentialWriter.TxnProxy
+    protected class TransactionalProxy extends SequentialWriter.TransactionalProxy
     {
         @Override
         protected Throwable doCommit(Throwable accumulate)
@@ -74,8 +74,8 @@ public class ChecksummedSequentialWriter extends SequentialWriter
     }
 
     @Override
-    protected SequentialWriter.TxnProxy txnProxy()
+    protected SequentialWriter.TransactionalProxy txnProxy()
     {
-        return new TxnProxy();
+        return new TransactionalProxy();
     }
 }

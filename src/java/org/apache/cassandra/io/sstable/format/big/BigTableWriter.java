@@ -320,7 +320,7 @@ public class BigTableWriter extends SSTableWriter
 
     public SSTableReader openFinal(long maxDataAge)
     {
-        assert txnproxy.state() == AbstractTransactional.State.READY_TO_COMMIT;
+        assert txnProxy.state() == AbstractTransactional.State.READY_TO_COMMIT;
         return openFinal(maxDataAge, descriptor.asType(Descriptor.Type.FINAL), SSTableReader.OpenReason.NORMAL);
     }
 
@@ -349,12 +349,12 @@ public class BigTableWriter extends SSTableWriter
         return sstable;
     }
 
-    protected SSTableWriter.TxnProxy txnProxy()
+    protected SSTableWriter.TransactionalProxy txnProxy()
     {
-        return new TxnProxy();
+        return new TransactionalProxy();
     }
 
-    class TxnProxy extends SSTableWriter.TxnProxy
+    class TransactionalProxy extends SSTableWriter.TransactionalProxy
     {
         // finalise our state on disk, including renaming
         protected void doPrepare()

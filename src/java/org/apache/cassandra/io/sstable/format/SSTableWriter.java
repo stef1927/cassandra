@@ -58,12 +58,12 @@ public abstract class SSTableWriter extends SSTable implements Transactional
     protected final long keyCount;
     protected final MetadataCollector metadataCollector;
     protected final RowIndexEntry.IndexSerializer rowIndexEntrySerializer;
-    protected final TxnProxy txnproxy = txnProxy();
+    protected final TransactionalProxy txnProxy = txnProxy();
 
-    protected abstract TxnProxy txnProxy();
+    protected abstract TransactionalProxy txnProxy();
 
     // due to lack of multiple inheritance, we use an inner class to proxy our Transactional implementation details
-    protected abstract class TxnProxy extends AbstractTransactional
+    protected abstract class TransactionalProxy extends AbstractTransactional
     {
         protected final void prepare()
         {
@@ -200,22 +200,22 @@ public abstract class SSTableWriter extends SSTable implements Transactional
     // finalise our state on disk, including renaming
     public final void prepareToCommit()
     {
-        txnproxy.prepare();
+        txnProxy.prepare();
     }
 
     public final Throwable commit(Throwable accumulate)
     {
-        return txnproxy.commit(accumulate);
+        return txnProxy.commit(accumulate);
     }
 
     public final Throwable abort(Throwable accumulate)
     {
-        return txnproxy.abort(accumulate);
+        return txnProxy.abort(accumulate);
     }
 
     public final void close()
     {
-        txnproxy.close();
+        txnProxy.close();
     }
 
     public final void abort()

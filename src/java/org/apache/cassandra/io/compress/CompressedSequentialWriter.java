@@ -269,7 +269,7 @@ public class CompressedSequentialWriter extends SequentialWriter
         }
     }
 
-    protected class TxnProxy extends SequentialWriter.TxnProxy
+    protected class TransactionalProxy extends SequentialWriter.TransactionalProxy
     {
         @Override
         protected Throwable doCommit(Throwable accumulate)
@@ -296,9 +296,9 @@ public class CompressedSequentialWriter extends SequentialWriter
     }
 
     @Override
-    protected SequentialWriter.TxnProxy txnProxy()
+    protected SequentialWriter.TransactionalProxy txnProxy()
     {
-        return new TxnProxy();
+        return new TransactionalProxy();
     }
 
     /**
