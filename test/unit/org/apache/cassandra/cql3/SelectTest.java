@@ -17,12 +17,14 @@
  */
 package org.apache.cassandra.cql3;
 
+import java.util.UUID;
+
 import org.junit.Test;
 
 /**
  * Test column ranges and ordering with static column in table
  */
-public class StaticColumnsQueryTest extends CQLTester
+public class SelectTest extends CQLTester
 {
     @Test
     public void testSingleClustering() throws Throwable
@@ -276,5 +278,82 @@ public class StaticColumnsQueryTest extends CQLTester
             row("p1", "k2", "sv1", "v2"),
             row("p1", "k1", "sv1", "v1")
         );
+    }
+
+    /**
+     * Check query with KEY IN clause
+     * migrated from cql_tests.py:TestCQL.select_key_in_test()
+     */
+    @Test
+    public void testSelectKeyIn() throws Throwable
+    {
+        createTable("CREATE TABLE %s (userid uuid PRIMARY KEY, firstname text, lastname text, age int)");
+
+        UUID id1 = UUID.fromString("550e8400-e29b-41d4-a716-446655440000");
+        UUID id2 = UUID.fromString("f47ac10b-58cc-4372-a567-0e02b2c3d479");
+
+        execute("INSERT INTO %s (userid, firstname, lastname, age) VALUES (?, 'Frodo', 'Baggins', 32)", id1);
+        execute("INSERT INTO %s (userid, firstname, lastname, age) VALUES (?, 'Samwise', 'Gamgee', 33)", id2);
+
+        assertRowCount(execute("SELECT firstname, lastname FROM %s WHERE userid IN (?, ?)", id1, id2), 2);
+    }
+
+    /**
+     * Check query with KEY IN clause for wide row tables
+     * migrated from cql_tests.py:TestCQL.in_clause_wide_rows_test()
+     */
+    @Test
+    public void testSelectKeyInForWideRows() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int, c int, v int, PRIMARY KEY (k, c)) WITH COMPACT STORAGE");
+
+        for (int i = 0; i < 10; i++)
+            execute("INSERT INTO %s (k, c, v) VALUES (0, ?, ?)", i, i);
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0 AND c IN (5, 2, 8)"),
+                   row(2), row(5), row(8));
+
+        createTable("CREATE TABLE %s (k int, c1 int, c2 int, v int, PRIMARY KEY (k, c1, c2)) WITH COMPACT STORAGE");
+
+        for (int i = 0; i < 10; i++)
+            execute("INSERT INTO %s (k, c1, c2, v) VALUES (0, 0, ?, ?)", i, i);
+
+        assertEmpty(execute("SELECT v FROM %s WHERE k = 0 AND c1 IN (5, 2, 8) AND c2 = 3"));
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0 AND c1 = 0 AND c2 IN (5, 2, 8)"),
+                   row(2), row(5), row(8));
+    }
+
+    /**
+     * Check SELECT respects inclusive and exclusive bounds
+     * migrated from cql_tests.py:TestCQL.select_key_in_test()
+     */
+    @Test
+    public void testSelectBounds() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int, c int, v int, PRIMARY KEY (k, c)) WITH COMPACT STORAGE");
+
+        for (int i = 0; i < 10; i++)
+            execute("INSERT INTO %s (k, c, v) VALUES (0, ?, ?)", i, i);
+
+        assertRowCount(execute("SELECT v FROM %s WHERE k = 0"), 10);
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0 AND c >= 2 AND c <= 6"),
+                   row(2), row(3), row(4), row(5), row(6));
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0 AND c > 2 AND c <= 6"),
+                   row(3), row(4), row(5), row(6));
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0 AND c >= 2 AND c < 6"),
+                   row(2), row(3), row(4), row(5));
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0 AND c > 2 AND c < 6"),
+                   row(3), row(4), row(5));
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0 AND c > 2 AND c <= 6 LIMIT 2"),
+                   row(3), row(4));
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0 AND c >= 2 AND c < 6 ORDER BY c DESC LIMIT 2"),
+                   row(5), row(4));
     }
 }

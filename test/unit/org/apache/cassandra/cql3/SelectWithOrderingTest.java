@@ -19,9 +19,8 @@ package org.apache.cassandra.cql3;
 
 import org.junit.Test;
 
-public class SelectionOrderingTest extends CQLTester
+public class SelectWithOrderingTest extends CQLTester
 {
-
     @Test
     public void testNormalSelectionOrderSingleClustering() throws Throwable
     {
@@ -109,7 +108,7 @@ public class SelectionOrderingTest extends CQLTester
                     row(2), row(1), row(0));
 
             assertRows(execute("SELECT blobAsInt(intAsBlob(c.a)) FROM %s WHERE a=? ORDER BY b DESC", 0),
-                    row(2), row(1), row(0));
+                       row(2), row(1), row(0));
             dropTable("DROP TABLE %s");
         }
     }
@@ -202,9 +201,9 @@ public class SelectionOrderingTest extends CQLTester
 
         // select and order by b
         assertRows(execute("SELECT blobAsInt(intAsBlob(b)) FROM %s WHERE a=? ORDER BY b ASC", 0),
-                row(0), row(0), row(0), row(1), row(1), row(1));
+                   row(0), row(0), row(0), row(1), row(1), row(1));
         assertRows(execute("SELECT blobAsInt(intAsBlob(b)) FROM %s WHERE a=? ORDER BY b DESC", 0),
-                row(1), row(1), row(1), row(0), row(0), row(0));
+                   row(1), row(1), row(1), row(0), row(0), row(0));
 
         assertRows(execute("SELECT b, blobAsInt(intAsBlob(b)) FROM %s WHERE a=? ORDER BY b ASC", 0),
                 row(0, 0), row(0, 0), row(0, 0), row(1, 1), row(1, 1), row(1, 1));
@@ -228,6 +227,162 @@ public class SelectionOrderingTest extends CQLTester
                 row(0), row(1), row(2), row(3), row(4), row(5));
         assertRows(execute("SELECT blobAsInt(intAsBlob(d)) FROM %s WHERE a=? ORDER BY b DESC, c DESC", 0),
                 row(5), row(4), row(3), row(2), row(1), row(0));
+
+    }
+
+    /**
+     * Check ORDER BY support in SELECT statement
+     * migrated from cql_tests.py:TestCQL.order_by_test()
+     */
+    @Test
+    public void testSimpleOrderBy() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int, c int, v int, PRIMARY KEY (k, c)) WITH COMPACT STORAGE");
+
+        for (int i = 0; i < 10; i++)
+            execute("INSERT INTO %s (k, c, v) VALUES (0, ?, ?)", i, i);
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0 ORDER BY c DESC"),
+                   row(9), row(8), row(7), row(6), row(5), row(4), row(3), row(2), row(1), row(0));
+
+        createTable("CREATE TABLE %s (k int, c1 int, c2 int, v int, PRIMARY KEY (k, c1, c2)) WITH COMPACT STORAGE");
+
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 2; j++)
+                execute("INSERT INTO %s (k, c1, c2, v) VALUES (0, ?, ?, ?)", i, j, i * 2 + j);
+
+        assertInvalid("SELECT v FROM %s WHERE k = 0 ORDER BY c DESC");
+        assertInvalid("SELECT v FROM %s WHERE k = 0 ORDER BY c2 DESC");
+        assertInvalid("SELECT v FROM %s WHERE k = 0 ORDER BY k DESC");
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0 ORDER BY c1 DESC"),
+                   row(7), row(6), row(5), row(4), row(3), row(2), row(1), row(0));
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0 ORDER BY c1"),
+                   row(0), row(1), row(2), row(3), row(4), row(5), row(6), row(7));
+    }
+
+    /**
+     * More ORDER BY checks (#4160)
+     * migrated from cql_tests.py:TestCQL.more_order_by_test()
+     */
+    @Test
+    public void testMoreOrderBy() throws Throwable
+    {
+        createTable("CREATE TABLE %s (row text, number int, string text, PRIMARY KEY(row, number)) WITH COMPACT STORAGE ");
+
+        execute("INSERT INTO %s (row, number, string) VALUES ('row', 1, 'one')");
+        execute("INSERT INTO %s (row, number, string) VALUES ('row', 2, 'two')");
+        execute("INSERT INTO %s (row, number, string) VALUES ('row', 3, 'three')");
+        execute("INSERT INTO %s (row, number, string) VALUES ('row', 4, 'four')");
+
+        assertRows(execute("SELECT number FROM %s WHERE row='row' AND number < 3 ORDER BY number ASC"),
+                   row(1), row(2));
+
+        assertRows(execute("SELECT number FROM %s WHERE row='row' AND number >= 3 ORDER BY number ASC"),
+                   row(3), row(4));
+
+        assertRows(execute("SELECT number FROM %s WHERE row='row' AND number < 3 ORDER BY number DESC"),
+                   row(2), row(1));
+
+        assertRows(execute("SELECT number FROM %s WHERE row='row' AND number >= 3 ORDER BY number DESC"),
+                   row(4), row(3));
+
+        assertRows(execute("SELECT number FROM %s WHERE row='row' AND number > 3 ORDER BY number DESC"),
+                   row(4));
+
+        assertRows(execute("SELECT number FROM %s WHERE row='row' AND number <= 3 ORDER BY number DESC"),
+                   row(3), row(2), row(1));
+    }
+
+    /**
+     * Check we don't allow order by on row key (#4246)
+     * migrated from cql_tests.py:TestCQL.order_by_validation_test()
+     */
+    @Test
+    public void testInvalidOrderBy() throws Throwable
+    {
+        createTable("CREATE TABLE %s( k1 int, k2 int, v int, PRIMARY KEY (k1, k2))");
+
+        execute("INSERT INTO %s (k1, k2, v) VALUES (?, ?, ?)", 0, 0, 0);
+        execute("INSERT INTO %s (k1, k2, v) VALUES (?, ?, ?)", 1, 1, 1);
+        execute("INSERT INTO %s (k1, k2, v) VALUES (?, ?, ?)", 2, 2, 2);
+
+        assertInvalid("SELECT * FROM %s ORDER BY k2");
+    }
+
+    /**
+     * Check that order-by works with IN (#4327)
+     * migrated from cql_tests.py:TestCQL.order_by_with_in_test()
+     */
+    @Test
+    public void testOrderByForInClause() throws Throwable
+    {
+        createTable("CREATE TABLE %s (my_id varchar, col1 int, value varchar, PRIMARY KEY (my_id, col1))");
+
+        execute("INSERT INTO %s (my_id, col1, value) VALUES ( 'key1', 1, 'a')");
+        execute("INSERT INTO %s (my_id, col1, value) VALUES ( 'key2', 3, 'c')");
+        execute("INSERT INTO %s (my_id, col1, value) VALUES ( 'key3', 2, 'b')");
+        execute("INSERT INTO %s (my_id, col1, value) VALUES ( 'key4', 4, 'd')");
+
+        assertRows(execute("SELECT col1 FROM %s WHERE my_id in('key1', 'key2', 'key3') ORDER BY col1"),
+                   row(1), row(2), row(3));
+
+        assertRows(execute("SELECT col1, my_id FROM %s WHERE my_id in('key1', 'key2', 'key3') ORDER BY col1"),
+                   row(1, "key1"), row(2, "key3"), row(3, "key2"));
+
+        assertRows(execute("SELECT my_id, col1 FROM %s WHERE my_id in('key1', 'key2', 'key3') ORDER BY col1"),
+                   row("key1", 1), row("key3", 2), row("key2", 3));
+    }
+
+    /**
+     * Test reversed comparators
+     * migrated from cql_tests.py:TestCQL.reversed_comparator_test()
+     */
+    @Test
+    public void testReversedComparator() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int, c int, v int, PRIMARY KEY (k, c)) WITH CLUSTERING ORDER BY (c DESC);");
+
+        for(int i =0; i < 10; i++)
+            execute("INSERT INTO %s (k, c, v) VALUES (0, ?, ?)", i, i);
+
+        assertRows(execute("SELECT c, v FROM %s WHERE k = 0 ORDER BY c ASC"),
+                   row(0, 0), row(1, 1), row(2, 2), row(3, 3), row(4, 4),
+                   row(5, 5), row(6, 6), row(7, 7), row(8, 8), row(9, 9));
+
+        assertRows(execute("SELECT c, v FROM %s WHERE k = 0 ORDER BY c DESC"),
+                   row(9, 9), row(8, 8), row(7, 7), row(6, 6), row(5, 5),
+                   row(4, 4), row(3, 3), row(2, 2), row(1, 1), row(0, 0));
+
+        createTable("CREATE TABLE %s (k int, c1 int, c2 int, v text, PRIMARY KEY (k, c1, c2)) WITH CLUSTERING ORDER BY (c1 ASC, c2 DESC)");
+
+        for(int i = 0; i < 10; i++)
+            for(int j = 0; j < 10; j++)
+                execute("INSERT INTO %s (k, c1, c2, v) VALUES (0, ?, ?, ?)", i, j, String.format("%d%d", i, j));
+
+        assertInvalid("SELECT c1, c2, v FROM %s WHERE k = 0 ORDER BY c1 ASC, c2 ASC");
+        assertInvalid("SELECT c1, c2, v FROM %s WHERE k = 0 ORDER BY c1 DESC, c2 DESC");
+
+        Object[][] expectedRows = new Object[100][];
+        for(int i = 0; i < 10; i++)
+            for(int j = 9; j >= 0; j--)
+                expectedRows[i * 10 + (9 - j)] = row(i, j, String.format("%d%d", i, j));
+
+        assertRows(execute("SELECT c1, c2, v FROM %s WHERE k = 0 ORDER BY c1 ASC"),
+                   expectedRows);
+
+        assertRows(execute("SELECT c1, c2, v FROM %s WHERE k = 0 ORDER BY c1 ASC, c2 DESC"),
+                   expectedRows);
+
+        for(int i = 9; i >= 0; i--)
+            for(int j = 0; j < 10; j++)
+                expectedRows[(9 - i) * 10 + j] = row(i, j, String.format("%d%d", i, j));
+
+        assertRows(execute("SELECT c1, c2, v FROM %s WHERE k = 0 ORDER BY c1 DESC, c2 ASC"),
+                   expectedRows);
+
+        assertInvalid("SELECT c1, c2, v FROM %s WHERE k = 0 ORDER BY c2 DESC, c1 ASC");
 
     }
 }

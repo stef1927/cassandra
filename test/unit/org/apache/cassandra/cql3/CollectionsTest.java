@@ -17,6 +17,9 @@
  */
 package org.apache.cassandra.cql3;
 
+import java.util.UUID;
+
+import org.junit.Ignore;
 import org.junit.Test;
 
 public class CollectionsTest extends CQLTester
@@ -85,26 +88,26 @@ public class CollectionsTest extends CQLTester
         execute("DELETE s[?] FROM %s WHERE k = 0", "v1");
 
         assertRows(execute("SELECT s FROM %s WHERE k = 0"),
-            row(set("v2", "v3", "v4"))
+                   row(set("v2", "v3", "v4"))
         );
 
         // Full overwrite
         execute("UPDATE %s SET s = ? WHERE k = 0", set("v6", "v5"));
 
         assertRows(execute("SELECT s FROM %s WHERE k = 0"),
-            row(set("v5", "v6"))
+                   row(set("v5", "v6"))
         );
 
         execute("UPDATE %s SET s = s + ? WHERE k = 0", set("v7"));
 
         assertRows(execute("SELECT s FROM %s WHERE k = 0"),
-            row(set("v5", "v6", "v7"))
+                   row(set("v5", "v6", "v7"))
         );
 
         execute("UPDATE %s SET s = s - ? WHERE k = 0", set("v6", "v5"));
 
         assertRows(execute("SELECT s FROM %s WHERE k = 0"),
-            row(set("v7"))
+                   row(set("v7"))
         );
 
         execute("DELETE s[?] FROM %s WHERE k = 0", set("v7"));
@@ -115,7 +118,7 @@ public class CollectionsTest extends CQLTester
         execute("DELETE s FROM %s WHERE k = 0");
 
         assertRows(execute("SELECT s FROM %s WHERE k = 0"),
-            row((Object)null)
+                   row((Object) null)
         );
     }
 
@@ -146,38 +149,38 @@ public class CollectionsTest extends CQLTester
         execute("UPDATE %s SET m = ? WHERE k = 0", map("v6", 6, "v5", 5));
 
         assertRows(execute("SELECT m FROM %s WHERE k = 0"),
-            row(map("v5", 5, "v6", 6))
+                   row(map("v5", 5, "v6", 6))
         );
 
         execute("UPDATE %s SET m = m + ? WHERE k = 0", map("v7", 7));
 
         assertRows(execute("SELECT m FROM %s WHERE k = 0"),
-            row(map("v5", 5, "v6", 6, "v7", 7))
+                   row(map("v5", 5, "v6", 6, "v7", 7))
         );
 
         execute("DELETE m[?] FROM %s WHERE k = 0", "v7");
 
         assertRows(execute("SELECT m FROM %s WHERE k = 0"),
-            row(map("v5", 5, "v6", 6))
+                   row(map("v5", 5, "v6", 6))
         );
 
         execute("DELETE m[?] FROM %s WHERE k = 0", "v6");
 
         assertRows(execute("SELECT m FROM %s WHERE k = 0"),
-            row(map("v5", 5))
+                   row(map("v5", 5))
         );
 
         execute("DELETE m[?] FROM %s WHERE k = 0", "v5");
 
         assertRows(execute("SELECT m FROM %s WHERE k = 0"),
-            row((Object)null)
+                   row((Object) null)
         );
 
         // Deleting a non-existing key should succeed
         execute("DELETE m[?] FROM %s WHERE k = 0", "v5");
 
         assertRows(execute("SELECT m FROM %s WHERE k = 0"),
-            row((Object) null)
+                   row((Object) null)
         );
 
         // The empty map is parsed as an empty set (because we don't have enough info at parsing
@@ -257,7 +260,7 @@ public class CollectionsTest extends CQLTester
         // test unset variables in a map update operaiotn, should not delete the contents
         execute("UPDATE %s SET m['k'] = ? WHERE k = 10", unset());
         assertRows(execute("SELECT m FROM %s WHERE k = 10"),
-                row(m)
+                   row(m)
         );
         assertInvalidMessage("Invalid unset map key", "UPDATE %s SET m[?] = 'foo' WHERE k = 10", unset());
 
@@ -273,7 +276,7 @@ public class CollectionsTest extends CQLTester
         Object l = list("foo", "foo");
         execute("INSERT INTO %s (k, l) VALUES (10, ?)", l);
         assertRows(execute("SELECT l FROM %s WHERE k = 10"),
-                row(l)
+                   row(l)
         );
 
         // replace list with unset value
@@ -285,7 +288,7 @@ public class CollectionsTest extends CQLTester
         // add to position
         execute("UPDATE %s SET l[1] = ? WHERE k = 10", unset());
         assertRows(execute("SELECT l FROM %s WHERE k = 10"),
-                row(l)
+                   row(l)
         );
 
         // set in index
@@ -294,13 +297,13 @@ public class CollectionsTest extends CQLTester
         // remove element by index
         execute("DELETE l[?] FROM %s WHERE k = 10", unset());
         assertRows(execute("SELECT l FROM %s WHERE k = 10"),
-                row(l)
+                   row(l)
         );
 
         // remove all occurrences of element
         execute("UPDATE %s SET l = l - ? WHERE k = 10", unset());
         assertRows(execute("SELECT l FROM %s WHERE k = 10"),
-                row(l)
+                   row(l)
         );
 
         // select with in clause
@@ -316,7 +319,7 @@ public class CollectionsTest extends CQLTester
         Object s = set("bar", "baz", "foo");
         execute("INSERT INTO %s (k, s) VALUES (10, ?)", s);
         assertRows(execute("SELECT s FROM %s WHERE k = 10"),
-                row(s)
+                   row(s)
         );
 
         // replace set with unset value
@@ -334,7 +337,291 @@ public class CollectionsTest extends CQLTester
         // remove all occurrences of element
         execute("UPDATE %s SET s = s - ? WHERE k = 10", unset());
         assertRows(execute("SELECT s FROM %s WHERE k = 10"),
-                row(s)
+                   row(s)
         );
+    }
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.set_test()
+     */
+    @Test
+    public void testSet() throws Throwable
+    {
+        createTable("CREATE TABLE %s ( fn text, ln text, tags set<text>, PRIMARY KEY (fn, ln) )");
+
+        execute("UPDATE %s SET tags = tags + { 'foo' } WHERE fn='Tom' AND ln='Bombadil'");
+        execute("UPDATE %s SET tags = tags + { 'bar' } WHERE fn='Tom' AND ln='Bombadil'");
+        execute("UPDATE %s SET tags = tags + { 'foo' } WHERE fn='Tom' AND ln='Bombadil'");
+        execute("UPDATE %s SET tags = tags + { 'foobar' } WHERE fn='Tom' AND ln='Bombadil'");
+        execute("UPDATE %s SET tags = tags - { 'bar' } WHERE fn='Tom' AND ln='Bombadil'");
+
+        assertRows(execute("SELECT tags FROM %s"),
+                   row(set("foo", "foobar")));
+
+        execute("UPDATE %s SET tags = { 'a', 'c', 'b' } WHERE fn='Bilbo' AND ln='Baggins'");
+        assertRows(execute("SELECT tags FROM %s WHERE fn='Bilbo' AND ln='Baggins'"),
+                   row(set("a", "b", "c")));
+
+        execute("UPDATE %s SET tags = { 'm', 'n' } WHERE fn='Bilbo' AND ln='Baggins'");
+        assertRows(execute("SELECT tags FROM %s WHERE fn='Bilbo' AND ln='Baggins'"),
+                   row(set("m", "n")));
+
+        execute("DELETE tags['m'] FROM %s WHERE fn='Bilbo' AND ln='Baggins'");
+        assertRows(execute("SELECT tags FROM %s WHERE fn='Bilbo' AND ln='Baggins'"),
+                   row(set("n")));
+
+        execute("DELETE tags FROM %s WHERE fn='Bilbo' AND ln='Baggins'");
+        assertEmpty(execute("SELECT tags FROM %s WHERE fn='Bilbo' AND ln='Baggins'"));
+    }
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.map_test()
+     */
+    @Test
+    public void testMap() throws Throwable
+    {
+        createTable("CREATE TABLE %s (fn text, ln text, m map<text, int>, PRIMARY KEY (fn, ln))");
+
+        execute("UPDATE %s SET m['foo'] = 3 WHERE fn='Tom' AND ln='Bombadil'");
+        execute("UPDATE %s SET m['bar'] = 4 WHERE fn='Tom' AND ln='Bombadil'");
+        execute("UPDATE %s SET m['woot'] = 5 WHERE fn='Tom' AND ln='Bombadil'");
+        execute("UPDATE %s SET m['bar'] = 6 WHERE fn='Tom' AND ln='Bombadil'");
+        execute("DELETE m['foo'] FROM %s WHERE fn='Tom' AND ln='Bombadil'");
+
+        assertRows(execute("SELECT m FROM %s"),
+                   row(map("bar", 6, "woot", 5)));
+
+        execute("UPDATE %s SET m = { 'a' : 4 , 'c' : 3, 'b' : 2 } WHERE fn='Bilbo' AND ln='Baggins'");
+        assertRows(execute("SELECT m FROM %s WHERE fn='Bilbo' AND ln='Baggins'"),
+                   row(map("a", 4, "b", 2, "c", 3)));
+
+        execute("UPDATE %s SET m =  { 'm' : 4 , 'n' : 1, 'o' : 2 } WHERE fn='Bilbo' AND ln='Baggins'");
+        assertRows(execute("SELECT m FROM %s WHERE fn='Bilbo' AND ln='Baggins'"),
+                   row(map("m", 4, "n", 1, "o", 2)));
+
+        execute("UPDATE %s SET m = {} WHERE fn='Bilbo' AND ln='Baggins'");
+        assertEmpty(execute("SELECT m FROM %s WHERE fn='Bilbo' AND ln='Baggins'"));
+    }
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.list_test()
+     */
+    @Test
+    public void testList() throws Throwable
+    {
+        createTable("CREATE TABLE %s (fn text, ln text, tags list<text>, PRIMARY KEY (fn, ln))");
+
+        execute("UPDATE %s SET tags = tags + [ 'foo' ] WHERE fn='Tom' AND ln='Bombadil'");
+        execute("UPDATE %s SET tags = tags + [ 'bar' ] WHERE fn='Tom' AND ln='Bombadil'");
+        execute("UPDATE %s SET tags = tags + [ 'foo' ] WHERE fn='Tom' AND ln='Bombadil'");
+        execute("UPDATE %s SET tags = tags + [ 'foobar' ] WHERE fn='Tom' AND ln='Bombadil'");
+
+        assertRows(execute("SELECT tags FROM %s"),
+                   row(list("foo", "bar", "foo", "foobar")));
+
+        execute("UPDATE %s SET tags = [ 'a', 'c', 'b', 'c' ] WHERE fn='Bilbo' AND ln='Baggins'");
+        assertRows(execute("SELECT tags FROM %s WHERE fn='Bilbo' AND ln='Baggins'"),
+                   row(list("a", "c", "b", "c")));
+
+        execute("UPDATE %s SET tags = [ 'm', 'n' ] + tags WHERE fn='Bilbo' AND ln='Baggins'");
+        assertRows(execute("SELECT tags FROM %s WHERE fn='Bilbo' AND ln='Baggins'"),
+                   row(list("m", "n", "a", "c", "b", "c")));
+
+        execute("UPDATE %s SET tags[2] = 'foo', tags[4] = 'bar' WHERE fn='Bilbo' AND ln='Baggins'");
+        assertRows(execute("SELECT tags FROM %s WHERE fn='Bilbo' AND ln='Baggins'"),
+                   row(list("m", "n", "foo", "c", "bar", "c")));
+
+        execute("DELETE tags[2] FROM %s WHERE fn='Bilbo' AND ln='Baggins'");
+        assertRows(execute("SELECT tags FROM %s WHERE fn='Bilbo' AND ln='Baggins'"),
+                   row(list("m", "n", "c", "bar", "c")));
+
+        execute("UPDATE %s SET tags = tags - [ 'bar' ] WHERE fn='Bilbo' AND ln='Baggins'");
+        assertRows(execute("SELECT tags FROM %s WHERE fn='Bilbo' AND ln='Baggins'"),
+                   row(list("m", "n", "c", "c")));
+    }
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.multi_collection_test()
+     */
+    @Test
+    public void testMultiCollections() throws Throwable
+    {
+        UUID id = UUID.fromString("b017f48f-ae67-11e1-9096-005056c00008");
+
+        createTable("CREATE TABLE %s (k uuid PRIMARY KEY, L list<int>, M map<text, int>, S set<int> )");
+
+        execute("UPDATE %s SET L = [1, 3, 5] WHERE k = ?", id);
+        execute("UPDATE %s SET L = L + [7, 11, 13] WHERE k = ?;", id);
+        execute("UPDATE %s SET S = {1, 3, 5} WHERE k = ?", id);
+        execute("UPDATE %s SET S = S + {7, 11, 13} WHERE k = ?", id);
+        execute("UPDATE %s SET M = {'foo': 1, 'bar' : 3} WHERE k = ?", id);
+        execute("UPDATE %s SET M = M + {'foobar' : 4} WHERE k = ?", id);
+
+        assertRows(execute("SELECT L, M, S FROM %s WHERE k = ?", id),
+                   row(list(1, 3, 5, 7, 11, 13),
+                       map("bar", 3, "foo", 1, "foobar", 4),
+                       set(1, 3, 5, 7, 11, 13)));
+    }
+
+    /**
+     * Tests for CASSANDRA-7396,
+     * migrated from cql_tests.py:TestCQL.select_map_key_single_row_test()
+     */
+    @Ignore // CASSANDRA-7396 not yet delivered
+    public void testSelectMapKeySingleRow() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, v map<int, text>)");
+        execute("INSERT INTO %s (k, v) VALUES ( 0, {1:'a', 2:'b', 3:'c', 4:'d'})");
+
+        assertRows(execute("SELECT v[1] FROM %s WHERE k = 0"), row("a"));
+        assertRows(execute("SELECT v[5] FROM %s WHERE k = 0"), row((Object) null));
+        assertRows(execute("SELECT v[1] FROM %s WHERE k = 1"), row((Object)null));
+
+        assertRows(execute("SELECT v[1..3] FROM %s WHERE k = 0"), row("a", "b", "c"));
+        assertRows(execute("SELECT v[3..5] FROM %s WHERE k = 0"), row("c", "d"));
+        assertInvalid("SELECT v[3..1] FROM %s WHERE k = 0");
+
+        assertRows(execute("SELECT v[..2] FROM %s WHERE k = 0"), row("a", "b"));
+        assertRows(execute("SELECT v[3..] FROM %s WHERE k = 0"), row("c", "d"));
+        assertRows(execute("SELECT v[0..] FROM %s WHERE k = 0"), row("a", "b", "c", "d"));
+        assertRows(execute("SELECT v[..5] FROM %s WHERE k = 0"), row("a", "b", "c", "d"));
+
+        assertRows(execute("SELECT sizeof(v) FROM %s where k = 0"), row(4L));
+    }
+
+    /**
+     * Tests for CASSANDRA-7396,
+     * migrated from cql_tests.py:TestCQL.select_set_key_single_row_test()
+     */
+    @Ignore // CASSANDRA-7396 not yet delivered
+    public void testSelectSetKeySingleRow() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, v set<text>)");
+        execute("INSERT INTO %s (k, v) VALUES ( 0, {'e', 'a', 'd', 'b'})");
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0"), row(set("a", "b", "d", "e")));
+        assertRows(execute("SELECT v['a'] FROM %s WHERE k = 0"), row(true));
+        assertRows(execute("SELECT v['c'] FROM %s WHERE k = 0"), row(false));
+        assertRows(execute("SELECT v['a'] FROM %s WHERE k = 1"), row((Object)null));
+
+        assertRows(execute("SELECT v['b'..'d'] FROM %s WHERE k = 0"), row(set("b", "d")));
+        assertRows(execute("SELECT v['b'..'e'] FROM %s WHERE k = 0"), row(set("b", "d", "e")));
+        assertRows(execute("SELECT v['a'..'d'] FROM %s WHERE k = 0"), row(set("a", "b", "d")));
+        assertRows(execute("SELECT v['b'..'f'] FROM %s WHERE k = 0"), row(set("b", "d", "e")));
+        assertInvalid("SELECT v['d'..'a'] FROM %s WHERE k = 0");
+
+        assertRows(execute("SELECT v['d'..] FROM %s WHERE k = 0"), row(set("d", "e")));
+        assertRows(execute("SELECT v[..'d'] FROM %s WHERE k = 0"), row(set("a", "b", "d")));
+        assertRows(execute("SELECT v['f'..] FROM %s WHERE k = 0"), row(set()));
+        assertRows(execute("SELECT v[..'f'] FROM %s WHERE k = 0"), row(set("a", "b", "d", "e")));
+
+        assertRows(execute("SELECT sizeof(v) FROM %s where k = 0"), row(4L));
+    }
+
+    /**
+     * Tests for CASSANDRA-7396,
+     * migrated from cql_tests.py:TestCQL.select_list_key_single_row_test()
+     */
+    @Ignore // CASSANDRA-7396 not yet delivered
+    public void testSelectListKeySingleRow() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, v list<text>)");
+        execute("INSERT INTO %s (k, v) VALUES ( 0, ['e', 'a', 'd', 'b'])");
+
+        assertRows(execute("SELECT v FROM %s WHERE k = 0"), row("e", "a", "d", "b"));
+        assertRows(execute("SELECT v[0] FROM %s WHERE k = 0"), row("e"));
+        assertRows(execute("SELECT v[3] FROM %s WHERE k = 0"), row("b"));
+        assertRows(execute("SELECT v[0] FROM %s WHERE k = 1"), row((Object)null));
+
+        assertInvalid("SELECT v[-1] FROM %s WHERE k = 0");
+        assertInvalid("SELECT v[5] FROM %s WHERE k = 0");
+
+        assertRows(execute("SELECT v[1..3] FROM %s WHERE k = 0"), row("a", "d", "b"));
+        assertRows(execute("SELECT v[0..2] FROM %s WHERE k = 0"), row("e", "a", "d"));
+        assertInvalid("SELECT v[0..4] FROM %s WHERE k = 0");
+        assertInvalid("SELECT v[2..0] FROM %s WHERE k = 0");
+
+        assertRows(execute("SELECT sizeof(v) FROM %s where k = 0"), row(4L));
+    }
+
+    /**
+     * Tests for CASSANDRA-7396,
+     * migrated from cql_tests.py:TestCQL.select_map_key_multi_row_test()
+     */
+    @Ignore // CASSANDRA-7396 not yet delivered
+    public void testSelectMapKeyMultiRow() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, v map<int, text>)");
+        execute("INSERT INTO %s (k, v) VALUES ( 0, {1:'a', 2:'b', 3:'c', 4:'d'})");
+        execute("INSERT INTO %s (k, v) VALUES ( 1, {1:'a', 2:'b', 5:'e', 6:'f'})");
+
+        assertRows(execute("SELECT v[1] FROM %s"), row("a"), row("a"));
+        assertRows(execute("SELECT v[5] FROM %s"), row("e"));
+        assertRows(execute("SELECT v[4] FROM %s"), row("d"));
+
+        assertRows(execute("SELECT v[1..3] FROM %s"), row(set("a", "b", "c")), row(set("a", "b", "e")));
+        assertRows(execute("SELECT v[3..5] FROM %s"), row(set("c", "d")), row(set("e")));
+        assertInvalid("SELECT v[3..1] FROM %s");
+
+        assertRows(execute("SELECT v[..2] FROM %s"), row(set("a", "b")), row(set("a", "b")));
+        assertRows(execute("SELECT v[3..] FROM %s"), row(set("c", "d")), row(set("e", "f")));
+        assertRows(execute("SELECT v[0..] FROM %s"), row(set("a", "b", "c", "d")), row(set("a", "b", "e", "f")));
+        assertRows(execute("SELECT v[..5] FROM %s"), row(set("a", "b", "c", "d")), row(set("a", "b", "e")));
+
+        assertRows(execute("SELECT sizeof(v) FROM %s"), row(4L, 4L));
+    }
+
+    /**
+     * Tests for CASSANDRA-7396,
+     * migrated from cql_tests.py:TestCQL.select_set_key_multi_row_test()
+     */
+    @Ignore // CASSANDRA-7396 not yet delivered
+    public void testSelectSetKeyMultiRow() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, v set<text>)");
+        execute("INSERT INTO %s (k, v) VALUES ( 0, {'e', 'a', 'd', 'b'})");
+        execute("INSERT INTO %s (k, v) VALUES ( 1, {'c', 'f', 'd', 'b'})");
+
+        assertRows(execute("SELECT v FROM %s"), row(set("b", "c", "d", "f")), row(set("a", "b", "d", "e")));
+        assertRows(execute("SELECT v['a'] FROM %s"), row(true), row(false));
+        assertRows(execute("SELECT v['c'] FROM %s"), row(false), row(true));
+
+        assertRows(execute("SELECT v['b'..'d'] FROM %s"), row(set("b", "d")), row(set("b", "c", "d")));
+        assertRows(execute("SELECT v['b'..'e'] FROM %s"), row(set("b", "d", "e")), row(set("b", "c", "d")));
+        assertRows(execute("SELECT v['a'..'d'] FROM %s"), row(set("a", "b", "d")), row(set("b", "c", "d")));
+        assertRows(execute("SELECT v['b'..'f'] FROM %s"), row(set("b", "d", "e")), row(set("b", "c", "d", "f")));
+        assertInvalid("SELECT v['d'..'a'] FROM %s");
+
+        assertRows(execute("SELECT v['d'..] FROM %s"), row(set("d", "e")), row(set("d", "f")));
+        assertRows(execute("SELECT v[..'d'] FROM %s"), row(set("a", "b", "d")), row(set("b", "c", "d")));
+        assertRows(execute("SELECT v['f'..] FROM %s"), row(set("f")));
+        assertRows(execute("SELECT v[..'f'] FROM %s"), row(set("a", "b", "d", "e")), row(set("b", "c", "d", "f")));
+
+        assertRows(execute("SELECT sizeof(v) FROM %s"), row(4L, 4L));
+    }
+
+    /**
+     *  Tests for CASSANDRA-7396,
+     *  migrated from cql_tests.py:TestCQL.select_list_key_multi_row_test()
+     */
+    @Ignore // CASSANDRA-7396 not yet delivered
+    public void testSelectListKeyMultiRow() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, v list<text>)");
+        execute("INSERT INTO %s (k, v) VALUES ( 0, ['e', 'a', 'd', 'b'])");
+        execute("INSERT INTO %s (k, v) VALUES ( 1, ['c', 'f', 'd', 'b'])");
+
+        assertRows(execute("SELECT v FROM %s"), row(list("c", "f", "d", "b")), row(list("e", "a", "d", "b")));
+        assertRows(execute("SELECT v[0] FROM %s"), row("e"), row("c"));
+        assertRows(execute("SELECT v[3] FROM %s"), row("b"), row("d"));
+        assertInvalid("SELECT v[-1] FROM %s");
+        assertInvalid("SELECT v[5] FROM %s");
+
+        assertRows(execute("SELECT v[1..3] FROM %s"), row(list("a", "d", "b")), row(list("f", "d", "b")));
+        assertRows(execute("SELECT v[0..2] FROM %s"), row(list("e", "a", "d")), row(list("c", "f", "d")));
+        assertInvalid("SELECT v[0..4] FROM %s");
+        assertInvalid("SELECT v[2..0] FROM %s");
+
+        assertRows(execute("SELECT sizeof(v) FROM %s"), row(4L, 4L));
     }
 }
