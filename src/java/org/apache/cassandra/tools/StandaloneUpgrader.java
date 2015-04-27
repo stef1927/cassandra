@@ -20,6 +20,7 @@ package org.apache.cassandra.tools;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.cassandra.db.lifecycle.TransactionLogs;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.commons.cli.*;
 
@@ -109,7 +110,7 @@ public class StandaloneUpgrader
                     {
                         // Remove the sstable (it's been copied by upgrade)
                         System.out.format("Deleting table %s.%n", sstable.descriptor.baseFilename());
-                        sstable.markObsolete(null);
+                        sstable.markObsolete(txn.logs());
                         sstable.selfRef().release();
                     }
                 }
@@ -121,7 +122,7 @@ public class StandaloneUpgrader
                 }
             }
             CompactionManager.instance.finishCompactionsAndShutdown(5, TimeUnit.MINUTES);
-            SSTableDeletingTask.waitForDeletions();
+            TransactionLogs.waitForDeletions();
             System.exit(0);
         }
         catch (Exception e)

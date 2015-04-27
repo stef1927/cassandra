@@ -315,7 +315,7 @@ public class ScrubTest
          * Code used to generate an outOfOrder sstable. The test for out-of-order key in BigTableWriter must also be commented out.
          * The test also assumes an ordered partitioner.
         List<String> keys = Arrays.asList("t", "a", "b", "z", "c", "y", "d");
-        String filename = cfs.getTempSSTablePath(new File(System.getProperty("corrupt-sstable-root")));
+        SSTableWriter writer = new SSTableWriter(cfs.getTempSSTablePath(new File(System.getProperty("corrupt-sstable-root"))),
         SSTableWriter writer = SSTableWriter.create(cfs.metadata,
                                                     Descriptor.fromFilename(filename),
                                                     keys.size(),
@@ -341,7 +341,7 @@ public class ScrubTest
 
         File rootDir = new File(root);
         assert rootDir.isDirectory();
-        Descriptor desc = new Descriptor("la", rootDir, KEYSPACE, columnFamily, 1, Descriptor.Type.FINAL, SSTableFormat.Type.BIG);
+        Descriptor desc = new Descriptor("la", rootDir, KEYSPACE, columnFamily, 1, SSTableFormat.Type.BIG);
         CFMetaData metadata = Schema.instance.getCFMetaData(desc.ksname, desc.cfname);
 
         try
@@ -366,7 +366,7 @@ public class ScrubTest
             sstable.last = sstable.first;
 
         try (LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.SCRUB, sstable);
-             Scrubber scrubber = new Scrubber(cfs, txn, false, true, true);)
+             Scrubber scrubber = new Scrubber(cfs, txn, false, true, true))
         {
             scrubber.scrub();
         }

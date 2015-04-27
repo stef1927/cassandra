@@ -28,6 +28,10 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Throwables;
+import org.apache.cassandra.db.compaction.OperationType;
+import org.apache.cassandra.db.lifecycle.TransactionLogs;
+import org.apache.cassandra.io.sstable.SSTableTxnWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -362,8 +366,7 @@ public class Memtable implements Comparable<Memtable>
             logger.info("Writing {}", Memtable.this.toString());
 
             SSTableReader ssTable;
-            // errors when creating the writer that may leave empty temp files.
-            try (SSTableWriter writer = createFlushWriter(cfs.getTempSSTablePath(sstableDirectory), columnsCollector.get(), statsCollector.get()))
+            try (SSTableTxnWriter writer = createFlushWriter(cfs.getSSTablePath(sstableDirectory), columnsCollector.get(), statsCollector.get()))
             {
                 boolean trackContention = logger.isDebugEnabled();
                 int heavilyContendedRowCount = 0;
@@ -395,10 +398,10 @@ public class Memtable implements Comparable<Memtable>
                 {
                     logger.info(String.format("Completed flushing %s (%s) for commitlog position %s",
                                               writer.getFilename(),
-                                              FBUtilities.prettyPrintMemory(writer.getOnDiskFilePointer()),
+                                              FBUtilities.prettyPrintMemory(writer.getFilePointer()),
                                               context));
 
-                    // temp sstables should contain non-repaired data.
+                    // sstables should contain non-repaired data.
                     ssTable = writer.finish(true);
                 }
                 else
@@ -416,18 +419,21 @@ public class Memtable implements Comparable<Memtable>
             }
         }
 
-        public SSTableWriter createFlushWriter(String filename,
+        public SSTableTxnWriter createFlushWriter(String filename,
                                                PartitionColumns columns,
                                                RowStats stats)
         {
+            TransactionLogs transactionLogs = new TransactionLogs(OperationType.FLUSH, cfs.metadata);
             MetadataCollector sstableMetadataCollector = new MetadataCollector(cfs.metadata.comparator).replayPosition(context);
-            return SSTableWriter.create(Descriptor.fromFilename(filename),
-                                        (long)partitions.size(),
-                                        ActiveRepairService.UNREPAIRED_SSTABLE,
-                                        cfs.metadata,
-                                        cfs.partitioner,
-                                        sstableMetadataCollector,
-                                        new SerializationHeader(cfs.metadata, columns, stats));
+            return new SSTableTxnWriter(transactionLogs,
+                                        SSTableWriter.create(Descriptor.fromFilename(filename),
+                                                             (long)partitions.size(),
+                                                             ActiveRepairService.UNREPAIRED_SSTABLE,
+                                                             cfs.metadata,
+                                                             cfs.partitioner,
+                                                             sstableMetadataCollector,
+                                                             new SerializationHeader(cfs.metadata, columns, stats),
+                                                             transactionLogs));
         }
     }
 

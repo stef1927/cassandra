@@ -70,6 +70,16 @@ class Helpers
      * A convenience method for encapsulating this action over multiple SSTableReader with exception-safety
      * @return accumulate if not null (with any thrown exception attached), or any thrown exception otherwise
      */
+    static void setupKeyCache(Iterable<SSTableReader> readers)
+    {
+        for (SSTableReader reader : readers)
+            reader.setupKeyCache();
+    }
+
+    /**
+     * A convenience method for encapsulating this action over multiple SSTableReader with exception-safety
+     * @return accumulate if not null (with any thrown exception attached), or any thrown exception otherwise
+     */
     static Throwable setReplaced(Iterable<SSTableReader> readers, Throwable accumulate)
     {
         for (SSTableReader reader : readers)
@@ -109,13 +119,13 @@ class Helpers
      * A convenience method for encapsulating this action over multiple SSTableReader with exception-safety
      * @return accumulate if not null (with any thrown exception attached), or any thrown exception otherwise
      */
-    static Throwable markObsolete(Tracker tracker, Iterable<SSTableReader> readers, Throwable accumulate)
+    static Throwable markObsolete(Iterable<SSTableReader> readers, TransactionLogs txnLogs, Throwable accumulate)
     {
         for (SSTableReader reader : readers)
         {
             try
             {
-                boolean firstToCompact = reader.markObsolete(tracker);
+                boolean firstToCompact = reader.markObsolete(txnLogs);
                 assert firstToCompact : reader + " was already marked compacted";
             }
             catch (Throwable t)

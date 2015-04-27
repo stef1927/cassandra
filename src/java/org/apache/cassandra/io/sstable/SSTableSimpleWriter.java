@@ -30,6 +30,7 @@ import com.google.common.base.Throwables;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.*;
+import org.apache.cassandra.db.lifecycle.TransactionLogs;
 import org.apache.cassandra.db.rows.RowStats;
 import org.apache.cassandra.db.partitions.PartitionUpdate;
 import org.apache.cassandra.dht.IPartitioner;
@@ -55,14 +56,14 @@ class SSTableSimpleWriter extends AbstractSSTableSimpleWriter
     protected DecoratedKey currentKey;
     protected PartitionUpdate update;
 
-    private SSTableWriter writer;
+    private SSTableTxnWriter writer;
 
     protected SSTableSimpleWriter(File directory, CFMetaData metadata, IPartitioner partitioner, PartitionColumns columns)
     {
         super(directory, metadata, partitioner, columns);
     }
 
-    private SSTableWriter getOrCreateWriter()
+    private SSTableTxnWriter getOrCreateWriter()
     {
         if (writer == null)
             writer = createWriter();

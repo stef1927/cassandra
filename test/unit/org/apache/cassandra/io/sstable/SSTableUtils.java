@@ -25,6 +25,7 @@ import java.util.*;
 
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.*;
+import org.apache.cassandra.db.lifecycle.TransactionLogs;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.db.partitions.*;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
@@ -78,7 +79,7 @@ public class SSTableUtils
         File cfDir = new File(tempdir, keyspaceName + File.separator + cfname);
         cfDir.mkdirs();
         cfDir.deleteOnExit();
-        File datafile = new File(new Descriptor(cfDir, keyspaceName, cfname, generation, Descriptor.Type.FINAL).filenameFor("Data.db"));
+        File datafile = new File(new Descriptor(cfDir, keyspaceName, cfname, generation).filenameFor("Data.db"));
         if (!datafile.createNewFile())
             throw new IOException("unable to create file " + datafile);
         datafile.deleteOnExit();
@@ -185,7 +186,7 @@ public class SSTableUtils
             return write(sorted.size(), new Appender()
             {
                 @Override
-                public boolean append(SSTableWriter writer) throws IOException
+                public boolean append(SSTableTxnWriter writer) throws IOException
                 {
                     if (!iter.hasNext())
                         return false;
@@ -208,7 +209,7 @@ public class SSTableUtils
         {
             File datafile = (dest == null) ? tempSSTableFile(ksname, cfname, generation) : new File(dest.filenameFor(Component.DATA));
             SerializationHeader header = SerializationHeader.make(Schema.instance.getCFMetaData(ksname, cfname), Collections.EMPTY_LIST);
-            SSTableWriter writer = SSTableWriter.create(Descriptor.fromFilename(datafile.getAbsolutePath()), expectedSize, ActiveRepairService.UNREPAIRED_SSTABLE, 0, header);
+            SSTableTxnWriter writer = SSTableTxnWriter.create(datafile.getAbsolutePath(), expectedSize, ActiveRepairService.UNREPAIRED_SSTABLE, 0, header);
             while (appender.append(writer)) { /* pass */ }
             SSTableReader reader = writer.finish(true);
             // mark all components for removal
@@ -222,6 +223,6 @@ public class SSTableUtils
     public static abstract class Appender
     {
         /** Called with an open writer until it returns false. */
-        public abstract boolean append(SSTableWriter writer) throws IOException;
+        public abstract boolean append(SSTableTxnWriter writer) throws IOException;
     }
 }

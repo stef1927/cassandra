@@ -26,12 +26,14 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Throwables;
 
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.*;
+import org.apache.cassandra.db.lifecycle.TransactionLogs;
 import org.apache.cassandra.db.rows.Row;
 import org.apache.cassandra.db.rows.RowStats;
 import org.apache.cassandra.db.rows.UnfilteredSerializer;
@@ -136,11 +138,13 @@ class SSTableSimpleUnsortedWriter extends AbstractSSTableSimpleWriter
         try
         {
             diskWriter.join();
+            checkForWriterException();
         }
-        catch (InterruptedException e)
+        catch (Throwable e)
         {
             throw new RuntimeException(e);
         }
+
         checkForWriterException();
     }
 
@@ -208,7 +212,7 @@ class SSTableSimpleUnsortedWriter extends AbstractSSTableSimpleWriter
                     if (b == SENTINEL)
                         return;
 
-                    try (SSTableWriter writer = createWriter())
+                        try (SSTableTxnWriter writer = createWriter())
                     {
                         for (Map.Entry<DecoratedKey, PartitionUpdate> entry : b.entrySet())
                             writer.append(entry.getValue().unfilteredIterator());

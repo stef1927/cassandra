@@ -42,6 +42,7 @@ import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.metrics.StorageMetrics;
 import org.apache.cassandra.notifications.*;
 import org.apache.cassandra.utils.Pair;
+import org.apache.cassandra.utils.Throwables;
 import org.apache.cassandra.utils.concurrent.OpOrder;
 
 import static com.google.common.base.Predicates.and;
@@ -141,7 +142,9 @@ public class Tracker
                 logger.debug("adding {} to list of files tracked for {}.{}", sstable.descriptor, cfstore.keyspace.getName(), cfstore.name);
             try
             {
-                add += sstable.bytesOnDisk();
+                final long size = sstable.bytesOnDisk();
+                sstable.runOnGlobalRelease(() -> cfstore.metric.totalDiskSpaceUsed.dec(size));
+                add += size;
             }
             catch (Throwable t)
             {
@@ -164,7 +167,7 @@ public class Tracker
         }
         StorageMetrics.load.inc(add - subtract);
         cfstore.metric.liveDiskSpaceUsed.inc(add - subtract);
-        // we don't subtract from total until the sstable is deleted
+        // we don't subtract from total until the sstable is deleted, see SSTableReader.runOnGlobalRelease
         cfstore.metric.totalDiskSpaceUsed.inc(add);
         return accumulate;
     }
@@ -224,13 +227,24 @@ public class Tracker
      */
     public Throwable dropSSTables(final Predicate<SSTableReader> remove, OperationType operationType, Throwable accumulate)
     {
-        Pair<View, View> result = apply(new Function<View, View>()
+        try (TransactionLogs txnLogs = new TransactionLogs(operationType, cfstore.metadata, this))
         {
-            public View apply(View view)
-            {
-                Set<SSTableReader> toremove = copyOf(filter(view.sstables, and(remove, notIn(view.compacting))));
-                return updateLiveSet(toremove, emptySet()).apply(view);
-            }
+            accumulate = dropSSTables(remove, txnLogs, accumulate);
+            txnLogs.finish();
+        }
+        catch (Throwable t)
+        {
+            accumulate = Throwables.merge(accumulate, t);
+        }
+
+        return accumulate;
+    }
+
+    public Throwable dropSSTables(final Predicate<SSTableReader> remove, TransactionLogs txnLogs, Throwable accumulate)
+    {
+        Pair<View, View> result = apply(view -> {
+            Set<SSTableReader> toremove = copyOf(filter(view.sstables, and(remove, notIn(view.compacting))));
+            return updateLiveSet(toremove, emptySet()).apply(view);
         });
 
         Set<SSTableReader> removed = Sets.difference(result.left.sstables, result.right.sstables);
@@ -239,9 +253,9 @@ public class Tracker
         if (!removed.isEmpty())
         {
             // notifySSTablesChanged -> LeveledManifest.promote doesn't like a no-op "promotion"
-            accumulate = notifySSTablesChanged(removed, Collections.<SSTableReader>emptySet(), operationType, accumulate);
+            accumulate = notifySSTablesChanged(removed, Collections.<SSTableReader>emptySet(), txnLogs.getType(), accumulate);
             accumulate = updateSizeTracking(removed, emptySet(), accumulate);
-            accumulate = markObsolete(this, removed, accumulate);
+            accumulate = markObsolete(removed, txnLogs, accumulate);
             accumulate = release(selfRefs(removed), accumulate);
         }
         return accumulate;
@@ -369,7 +383,6 @@ public class Tracker
         File backupsDir = Directories.getBackupsDirectory(sstable.descriptor);
         sstable.createLinks(FileUtils.getCanonicalPath(backupsDir));
     }
-
 
     // NOTIFICATION
 

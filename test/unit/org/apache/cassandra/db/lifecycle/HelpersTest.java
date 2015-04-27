@@ -32,6 +32,7 @@ import junit.framework.Assert;
 import org.apache.cassandra.MockSchema;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.big.BigTableReader;
@@ -157,12 +158,14 @@ public class HelpersTest
     public void testMarkObsolete()
     {
         ColumnFamilyStore cfs = MockSchema.newCFS();
+        TransactionLogs txnLogs = new TransactionLogs(OperationType.UNKNOWN, cfs.metadata);
         Iterable<SSTableReader> readers = Lists.newArrayList(MockSchema.sstable(1, cfs), MockSchema.sstable(2, cfs));
-        Throwable accumulate = Helpers.markObsolete(null, readers, null);
+        Throwable accumulate = Helpers.markObsolete(readers, txnLogs, null);
         Assert.assertNull(accumulate);
         for (SSTableReader reader : readers)
             Assert.assertTrue(reader.isMarkedCompacted());
-        accumulate = Helpers.markObsolete(null, readers, null);
+        accumulate = Helpers.markObsolete(readers, txnLogs, null);
         Assert.assertNotNull(accumulate);
+        txnLogs.finish();
     }
 }

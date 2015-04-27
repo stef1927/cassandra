@@ -23,6 +23,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.cassandra.config.Schema;
+import org.apache.cassandra.db.lifecycle.TransactionLogs;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.commons.cli.*;
 
@@ -154,7 +155,7 @@ public class StandaloneSplitter
                     new SSTableSplitter(cfs, transaction, options.sizeInMB).split();
 
                     // Remove the sstable (it's been copied by split and snapshotted)
-                    sstable.markObsolete(null);
+                    sstable.markObsolete(transaction.logs());
                     sstable.selfRef().release();
                 }
                 catch (Exception e)
@@ -165,7 +166,7 @@ public class StandaloneSplitter
                 }
             }
             CompactionManager.instance.finishCompactionsAndShutdown(5, TimeUnit.MINUTES);
-            SSTableDeletingTask.waitForDeletions();
+            TransactionLogs.waitForDeletions();
             System.exit(0); // We need that to stop non daemonized threads
         }
         catch (Exception e)

@@ -21,12 +21,9 @@ import java.io.File;
 import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.Closeable;
-import java.nio.ByteBuffer;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import com.google.common.base.Throwables;
 
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.DatabaseDescriptor;
@@ -35,9 +32,7 @@ import org.apache.cassandra.db.rows.RowStats;
 import org.apache.cassandra.db.partitions.PartitionUpdate;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.io.sstable.format.SSTableFormat;
-import org.apache.cassandra.io.sstable.format.SSTableWriter;
 import org.apache.cassandra.service.ActiveRepairService;
-import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Pair;
 
 /**
@@ -64,18 +59,19 @@ abstract class AbstractSSTableSimpleWriter implements Closeable
         this.formatType = type;
     }
 
-    protected SSTableWriter createWriter()
+    protected SSTableTxnWriter createWriter()
     {
-        return SSTableWriter.create(createDescriptor(directory, metadata.ksName, metadata.cfName, formatType),
-                                    0,
-                                    ActiveRepairService.UNREPAIRED_SSTABLE,
-                                    new SerializationHeader(metadata, columns, RowStats.NO_STATS));
+        return SSTableTxnWriter.create(createDescriptor(directory, metadata.ksName, metadata.cfName, formatType),
+                                       0,
+                                       ActiveRepairService.UNREPAIRED_SSTABLE,
+                                       0,
+                                       new SerializationHeader(metadata, columns, RowStats.NO_STATS));
     }
 
     private static Descriptor createDescriptor(File directory, final String keyspace, final String columnFamily, final SSTableFormat.Type fmt)
     {
         int maxGen = getNextGeneration(directory, columnFamily);
-        return new Descriptor(directory, keyspace, columnFamily, maxGen + 1, Descriptor.Type.TEMP, fmt);
+        return new Descriptor(directory, keyspace, columnFamily, maxGen + 1, fmt);
     }
 
     private static int getNextGeneration(File directory, final String columnFamily)
