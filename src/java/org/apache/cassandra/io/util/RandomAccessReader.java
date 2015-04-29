@@ -233,7 +233,7 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
             throw new IllegalArgumentException("new position should not be negative");
 
         if (buffer == null)
-            throw new AssertionError("Attempted to seek in a closed RAR");
+            throw new IllegalStateException("Attempted to seek in a closed RAR");
 
         if (newPosition >= length()) // it is save to call length() in read-only mode
         {
@@ -285,7 +285,7 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     public int read(byte[] buff, int offset, int length)
     {
         if (buffer == null)
-            throw new AssertionError("Attempted to read from closed RAR");
+            throw new IllegalStateException("Attempted to read from closed RAR");
 
         if (length == 0)
             return 0;
@@ -306,7 +306,7 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         assert length >= 0 : "buffer length should not be negative: " + length;
 
         if (buffer == null)
-            throw new AssertionError("Attempted to read from closed RAR");
+            throw new IllegalStateException("Attempted to read from closed RAR");
 
         try
         {

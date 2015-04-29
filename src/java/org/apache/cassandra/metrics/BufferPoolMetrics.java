@@ -31,6 +31,7 @@ public class BufferPoolMetrics
     /** Total number of misses */
     public final Meter misses;
 
+    // I'd rather not track this (same rationale as eliminating "hits")
     /** Total number of requests */
     public final Meter requests;
 

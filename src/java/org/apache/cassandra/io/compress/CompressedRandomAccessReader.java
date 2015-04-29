@@ -80,7 +80,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     @Override
     protected ByteBuffer allocateBuffer(int bufferSize, BufferType bufferType)
     {
-        assert Integer.bitCount(bufferSize) == 1;
+        assert Integer.bitCount(bufferSize) == 1; //must be a power of two
         return BufferPool.get(bufferSize, bufferType);
     }
 
