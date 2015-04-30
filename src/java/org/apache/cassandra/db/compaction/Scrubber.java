@@ -56,6 +56,7 @@ public class Scrubber implements Closeable
 
     private ByteBuffer currentIndexKey;
     private ByteBuffer nextIndexKey;
+    long currentRowPositionFromIndex;
     long nextRowPositionFromIndex;
 
     private final OutputHandler outputHandler;
@@ -104,6 +105,9 @@ public class Scrubber implements Closeable
                         : sstable.openDataReader(CompactionManager.instance.getRateLimiter());
         this.indexFile = RandomAccessReader.open(new File(sstable.descriptor.filenameFor(Component.PRIMARY_INDEX)));
         this.scrubInfo = new ScrubInfo(dataFile, sstable);
+
+        this.currentRowPositionFromIndex = 0;
+        this.nextRowPositionFromIndex = 0;
     }
 
     public void scrub()
@@ -151,12 +155,16 @@ public class Scrubber implements Closeable
                 updateIndexKey();
 
                 long dataStart = dataFile.getFilePointer();
-                long dataStartFromIndex = currentIndexKey == null
-                                        ? -1
-                                        : rowStart + 2 + currentIndexKey.remaining();
-                if (sstable.descriptor.version.hasRowSizeAndColumnCount)
-                    dataStartFromIndex += 8;
-                long dataSizeFromIndex = nextRowPositionFromIndex - dataStartFromIndex;
+                long dataStartFromIndex = -1;
+                long dataSizeFromIndex = -1;
+                if (currentIndexKey != null)
+                {
+                    dataStartFromIndex = currentRowPositionFromIndex + 2 + currentIndexKey.remaining();
+                    if (sstable.descriptor.version.hasRowSizeAndColumnCount)
+                        dataStartFromIndex += 8;
+
+                    dataSizeFromIndex = nextRowPositionFromIndex - dataStartFromIndex;
+                }
 
                 if (!sstable.descriptor.version.hasRowSizeAndColumnCount)
                 {
@@ -176,10 +184,20 @@ public class Scrubber implements Closeable
                 writer.mark();
                 try
                 {
-                    if (key == null || !key.key.equals(currentIndexKey))
+                    if (key == null)
                         throw new IOError(new IOException("Unable to read row key from data file"));
+
+                    if (!key.key.equals(currentIndexKey))
+                        throw new IOError(new IOException(String.format("Key from data file (%s) does not match key from index file (%s)", key, currentIndexKey)));
+
                     if (dataSize > dataFile.length())
                         throw new IOError(new IOException("Impossible row size " + dataSize));
+
+                    if (dataStart != dataStartFromIndex)
+                        outputHandler.warn(String.format("Data file row position %d different from index file row position %d", dataStart, dataSizeFromIndex));
+
+                    if (dataSize != dataSizeFromIndex)
+                        outputHandler.warn(String.format("Data file row size %d different from index file row size %d", dataSize, dataSizeFromIndex));
 
                     SSTableIdentityIterator atoms = new SSTableIdentityIterator(sstable, dataFile, key, dataSize, true);
                     if (prevKey != null && prevKey.compareTo(key) > 0)
@@ -193,10 +211,8 @@ public class Scrubber implements Closeable
                         emptyRows++;
                     else
                         goodRows++;
-                    prevKey = key;
 
-                    if (dataStart != dataStartFromIndex)
-                        outputHandler.warn("Index file contained a different row size.");
+                    prevKey = key;
                 }
                 catch (Throwable th)
                 {
@@ -212,6 +228,8 @@ public class Scrubber implements Closeable
                         key = sstable.partitioner.decorateKey(currentIndexKey);
                         try
                         {
+                            dataFile.seek(dataStartFromIndex);
+
                             SSTableIdentityIterator atoms = new SSTableIdentityIterator(sstable, dataFile, key, dataSize, true);
                             if (prevKey != null && prevKey.compareTo(key) > 0)
                             {
@@ -224,6 +242,7 @@ public class Scrubber implements Closeable
                                 emptyRows++;
                             else
                                 goodRows++;
+
                             prevKey = key;
                         }
                         catch (Throwable th2)
@@ -290,6 +309,7 @@ public class Scrubber implements Closeable
     private void updateIndexKey()
     {
         currentIndexKey = nextIndexKey;
+        currentRowPositionFromIndex = nextRowPositionFromIndex;
         try
         {
             nextIndexKey = indexFile.isEOF() ? null : ByteBufferUtil.readWithShortLength(indexFile);

@@ -57,6 +57,7 @@ import static org.apache.cassandra.Util.column;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.junit.Assume.assumeTrue;
 
 @RunWith(OrderedJUnit4ClassRunner.class)
 public class ScrubTest extends SchemaLoader
@@ -156,6 +157,74 @@ public class ScrubTest extends SchemaLoader
         assertEquals(scrubResult.goodRows, rows.size());
     }
 
+
+    @Test
+    public void testScrubCorruptedRowInSmallFile() throws IOException, InterruptedException, ExecutionException
+    {
+        // cannot test this with compression
+        assumeTrue(!Boolean.parseBoolean(System.getProperty("cassandra.test.compression", "false")));
+
+        CompactionManager.instance.disableAutoCompaction();
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(COUNTER_CF);
+        cfs.clearUnsafe();
+
+        fillCounterCF(cfs, 2);
+
+        List<Row> rows = cfs.getRangeSlice(Util.range("", ""), null, new IdentityQueryFilter(), 1000);
+        assertEquals(2, rows.size());
+
+        SSTableReader sstable = cfs.getSSTables().iterator().next();
+        overrideWithGarbage(sstable, ByteBufferUtil.bytes("0"), ByteBufferUtil.bytes("1"));
+
+        // with skipCorrupted == false, the scrub is expected to fail
+        Scrubber scrubber = new Scrubber(cfs, sstable, false);
+        try
+        {
+            scrubber.scrub();
+            fail("Expected a CorruptSSTableException to be thrown");
+        }
+        catch (IOError err) {}
+
+        // with skipCorrupted == true, the corrupt row will be skipped
+        scrubber = new Scrubber(cfs, sstable, true);
+        scrubber.scrub();
+        scrubber.close();
+        cfs.replaceCompactedSSTables(Collections.singletonList(sstable), Collections.singletonList(scrubber.getNewSSTable()), OperationType.SCRUB);
+        assertEquals(1, cfs.getSSTables().size());
+
+        // verify that we can read all of the rows, and there is now one less row
+        rows = cfs.getRangeSlice(Util.range("", ""), null, new IdentityQueryFilter(), 1000);
+        assertEquals(1, rows.size());
+    }
+
+    @Test
+    public void testScrubOneRowWithCorruptedKey() throws IOException, ExecutionException, InterruptedException, ConfigurationException
+    {
+        // cannot test this with compression
+        assumeTrue(!Boolean.parseBoolean(System.getProperty("cassandra.test.compression", "false")));
+
+        CompactionManager.instance.disableAutoCompaction();
+        Keyspace keyspace = Keyspace.open(KEYSPACE);
+        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(CF);
+        cfs.clearUnsafe();
+
+        List<Row> rows;
+
+        // insert data and verify we get it back w/ range query
+        fillCF(cfs, 1);
+        rows = cfs.getRangeSlice(Util.range("", ""), null, new IdentityQueryFilter(), 1000);
+        assertEquals(1, rows.size());
+
+        SSTableReader sstable = cfs.getSSTables().iterator().next();
+        overrideWithGarbage(sstable, 0, 2);
+
+        CompactionManager.instance.performScrub(cfs, false);
+
+        // check data is still there
+        rows = cfs.getRangeSlice(Util.range("", ""), null, new IdentityQueryFilter(), 1000);
+        assertEquals(1, rows.size());
+    }
 
     @Test
     public void testScrubDeletedRow() throws IOException, ExecutionException, InterruptedException, ConfigurationException
@@ -286,6 +355,11 @@ public class ScrubTest extends SchemaLoader
             endPosition = Math.max(row0Start, row1Start);
         }
 
+        overrideWithGarbage(sstable, startPosition, endPosition);
+    }
+
+    private void overrideWithGarbage(SSTable sstable, long startPosition, long endPosition) throws IOException
+    {
         RandomAccessFile file = new RandomAccessFile(sstable.getFilename(), "rw");
         file.seek(startPosition);
         file.writeBytes(StringUtils.repeat('z', (int) (endPosition - startPosition)));
