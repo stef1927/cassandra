@@ -373,21 +373,14 @@ public class BufferPool
             return 64 << shift;
         }
 
-        public int unit()
+        final int unit()
         {
             return 1 << shift;
         }
 
-        public boolean isFree()
+        final boolean isFree()
         {
             return free() >= capacity();
-        }
-
-        /** We increment the atomic free count by one when recycling, @see recycle() */
-        public boolean isRecycled()
-        {
-            // suggestion: think this was a bug
-            return atomicFree == capacity() + 1;
         }
 
         /** The total free size, includes lost free slots that could not be compacted */
@@ -399,7 +392,7 @@ public class BufferPool
         @VisibleForTesting
         int offset()
         {
-            return 1 + Long.numberOfTrailingZeros(Long.lowestOneBit(freeSlots)) << shift;
+            return 1 + Long.numberOfTrailingZeros(freeSlots) << shift;
         }
 
         /** Return the slab to the global pool if we can atomically increment the atomic
@@ -425,56 +418,63 @@ public class BufferPool
         {
             // suggestion: don't think asserts that just confirm the simple math we did a few lines previously are helpful enough.
             // if we did that everywhere we'd be in trouble performance-wise (bear in mind we encourage asserts to be left on)
-            int roundedSize = roundUp(size);
-            // how many multiples of our units is the size?
-            int slotCount = (roundedSize >> shift);
-            // convert this into the bits needed in the bitmap, but at the bottom of the register
-            if (slotCount >= 64)
-            {
-                if ((slotCount > 64) | (freeSlots != -1))
-                    return null;
-                assert roundedSize == capacity();
-                freeSlots = 0;
-                return get(0, roundedSize, size);
-            }
-            long slotBits = (1 << slotCount) - 1;
-            // remove one of the bits, to help with the search below (we find the lowestOneBit, but remove it before looking
-            // for the remainder of the bits; so we only need to find 1 fewer bit)
-            long findBits = slotBits >> 1;
-            // in order that we always allocate page aligned results, we require that any allocation is "somewhat" aligned
-            // i.e. any single unit allocation can go anywhere; any 2 unit allocation must be allocated to a two-unit offset
-            // (so it occupies half of a "page"); and any 3 unit allocation or higher must be allocated at the start of a page
-            int alignment = (int) ~(findBits & 3);
 
-            long search = freeSlots;
-            int index = 0;
+            // how many multiples of our units is the size?
+            // we add (unit - 1), so that when we divide by unit (>>> shift), we effectively round up
+            int slotCount = (size - 1 + unit()) >>> shift;
+
+            // if we require more than 64 slots, we cannot possibly accommodate the allocation
+            if (slotCount > 64)
+                return null;
+
+            // convert the slotCount into the bits needed in the bitmap, but at the bottom of the register
+            long slotBits = -1 >>> (64 - slotCount);
+
+            // in order that we always allocate page aligned results, we require that any allocation is "somewhat" aligned
+            // i.e. any single unit allocation can go anywhere; any 2 unit allocation must begin in one of the first 3 slots
+            // of a page; a 3 unit must go in the first two slots; and any four unit allocation must be fully page-aligned
+
+            // to achieve this, we construct a searchMask that constrains the bits we find to those we permit starting
+            // a match from. as we find bits, we remove them from the mask to continue our search.
+            // this has an odd property when it comes to concurrent alloc/free, as we can safely skip backwards if
+            // a new slot is freed up, but we always make forward progress (i.e. never check the same bits twice),
+            // so running time is bounded
+            long searchMask = 0x1111111111111111L;
+            searchMask *= 15L >>> ((slotCount - 1) & 3);
+            // i.e. switch (slotCount & 3)
+            // case 1: searchMask = 0xFFFFFFFFFFFFFFFFL
+            // case 2: searchMask = 0x7777777777777777L
+            // case 3: searchMask = 0x3333333333333333L
+            // case 0: searchMask = 0x1111111111111111L
+
+            // truncate the mask, removing bits that have too few slots proceeding them
+            searchMask &= -1L >>> (slotCount - 1);
+
+            // this loop is very unroll friendly, and would achieve high ILP, but not clear if the compiler will exploit this.
+            // right now, not worth manually exploiting, but worth noting for future
             while (true)
             {
-                // find the lowest one bit, since we cannot be allocated anywhere earlier
-                long lowestOneBit = Long.lowestOneBit(search);
-                // find its position
-                int position = Long.numberOfTrailingZeros(lowestOneBit);
-                // set our index to this new position
-                index += position;
-                // shift our search register to remove everything before AND INCLUDING this lowest bit
-                search >>>= position + 1;
-                // check if we've found our bits, and that they're aligned
-                boolean aligned = (index & alignment) == index;
-                boolean found = (findBits & search) == findBits;
-                if (found & aligned)
-                {
-                    freeSlots &= ~(slotBits << index);
-                    return get(index << shift, roundedSize, size);
-                }
-                else if (search == 0)
-                {
+                long cur = freeSlots;
+                // find the index of the lowest set bit that also occurs in our mask (i.e. is permitted alignment, and not yet searched)
+                // we take the index, rather than finding the lowest bit, since we must obtain it anyway, and shifting is more efficient
+                // than multiplication
+                int index = Long.numberOfTrailingZeros(cur & searchMask);
+                // if no bit was actually found, we cannot serve this request, so return null
+                if (index == 64)
                     return null;
+                // remove this bit from our searchMask, so we don't return here next round
+                searchMask ^= 1 << index;
+                // if our bits occur starting at the index, remove ourselves from the bitmask and return
+                long candidate = slotBits << index;
+                if ((candidate & cur) == candidate)
+                {
+                    freeSlots &= ~candidate;
+                    return get(index << shift, slotCount << shift, size);
                 }
-                index += 1;
             }
         }
 
-        private ByteBuffer get(int offset, int roundedSize, int size)
+        private ByteBuffer get(int offset, long roundedSize, int size)
         {
             slab.limit(offset + size);
             slab.position(offset);
@@ -492,10 +492,8 @@ public class BufferPool
          */
         private int roundUp(int v)
         {
-            int modulo = v & (unit() - 1);
-            if (modulo != 0)
-                v += unit() - modulo;
-            return v;
+            int mask = unit() - 1;
+            return (v + mask) & ~mask;
         }
 
         /** Release a buffer */
