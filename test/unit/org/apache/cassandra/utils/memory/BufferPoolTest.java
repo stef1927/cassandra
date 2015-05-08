@@ -27,6 +27,8 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import org.apache.cassandra.io.util.RandomAccessReader;
+
 import static org.junit.Assert.*;
 
 public class BufferPoolTest
@@ -46,7 +48,7 @@ public class BufferPoolTest
     @Test
     public void testGetPut() throws InterruptedException
     {
-        final int size = BufferPool.DEFAULT_BUFFER_SIZE;
+        final int size = RandomAccessReader.DEFAULT_BUFFER_SIZE;
 
         ByteBuffer buffer = BufferPool.get(size);
         assertNotNull(buffer);
@@ -72,9 +74,9 @@ public class BufferPoolTest
     @Test
     public void testPageAligned()
     {
-        for (int i = BufferPool.DEFAULT_BUFFER_SIZE;
+        for (int i = RandomAccessReader.DEFAULT_BUFFER_SIZE;
                  i <= BufferPool.CHUNK_SIZE;
-                 i += BufferPool.DEFAULT_BUFFER_SIZE)
+                 i += RandomAccessReader.DEFAULT_BUFFER_SIZE)
         {
             checkPageAligned(i);
         }
@@ -141,12 +143,12 @@ public class BufferPoolTest
     @Test
     public void testRecycle()
     {
-        requestUpToSize(BufferPool.DEFAULT_BUFFER_SIZE, 3 * BufferPool.CHUNK_SIZE, true);
+        requestUpToSize(RandomAccessReader.DEFAULT_BUFFER_SIZE, 3 * BufferPool.CHUNK_SIZE, true);
     }
 
     private void requestDoubleMaxMemory()
     {
-        requestUpToSize(BufferPool.DEFAULT_BUFFER_SIZE, (int)(2 * BufferPool.MEMORY_USAGE_THRESHOLD), false);
+        requestUpToSize(RandomAccessReader.DEFAULT_BUFFER_SIZE, (int)(2 * BufferPool.MEMORY_USAGE_THRESHOLD), false);
     }
 
     private void requestUpToSize(int bufferSize, int totalSize, boolean giveBack)
@@ -183,7 +185,7 @@ public class BufferPoolTest
     @Test
     public void testFillUpChunks()
     {
-        final int size = BufferPool.DEFAULT_BUFFER_SIZE;
+        final int size = RandomAccessReader.DEFAULT_BUFFER_SIZE;
         final int numBuffers = BufferPool.CHUNK_SIZE / size;
 
         List<ByteBuffer> buffers1 = new ArrayList<>(numBuffers);
@@ -221,7 +223,7 @@ public class BufferPoolTest
     @Test
     public void testReuseSameBuffer()
     {
-        final int size = BufferPool.DEFAULT_BUFFER_SIZE;
+        final int size = RandomAccessReader.DEFAULT_BUFFER_SIZE;
         ByteBuffer buffer = BufferPool.get(size);
         assertEquals(size, buffer.capacity());
         final long address = MemoryUtil.getAddress(buffer);
@@ -506,13 +508,13 @@ public class BufferPoolTest
     @Test
     public void testMT_SameSizeImmediateReturn() throws InterruptedException
     {
-        checkMultipleThreads(40, 1, true, BufferPool.DEFAULT_BUFFER_SIZE);
+        checkMultipleThreads(40, 1, true, RandomAccessReader.DEFAULT_BUFFER_SIZE);
     }
 
     @Test
     public void testMT_SameSizePostponedReturn() throws InterruptedException
     {
-        checkMultipleThreads(40, 1, false, BufferPool.DEFAULT_BUFFER_SIZE);
+        checkMultipleThreads(40, 1, false, RandomAccessReader.DEFAULT_BUFFER_SIZE);
     }
 
     @Test

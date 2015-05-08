@@ -29,6 +29,8 @@ import org.apache.cassandra.utils.memory.BufferPool;
 
 public class RandomAccessReader extends AbstractDataInput implements FileDataInput
 {
+    public static final int DEFAULT_BUFFER_SIZE = 64 * 1024;
+
     // buffer which will cache file blocks
     protected ByteBuffer buffer;
 
@@ -77,7 +79,7 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
 
     public static RandomAccessReader open(ChannelProxy channel, long overrideSize)
     {
-        return open(channel, BufferPool.DEFAULT_BUFFER_SIZE, overrideSize);
+        return open(channel, DEFAULT_BUFFER_SIZE, overrideSize);
     }
 
     public static RandomAccessReader open(ChannelProxy channel, int bufferSize, long overrideSize)
@@ -90,7 +92,7 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     {
         try (ChannelProxy channel = new ChannelProxy(writer.getPath()))
         {
-            return open(channel, BufferPool.DEFAULT_BUFFER_SIZE, -1L);
+            return open(channel, DEFAULT_BUFFER_SIZE, -1L);
         }
     }
 

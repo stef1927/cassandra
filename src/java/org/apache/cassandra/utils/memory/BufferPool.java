@@ -40,10 +40,6 @@ import org.apache.cassandra.utils.concurrent.Ref;
  */
 public class BufferPool
 {
-    // suggestion: TODO move this
-    // SequentialWriter and RandomAccessReader should IMO both have their own default sizes, the latter of which we will remove soon
-    // This doesn't seem to belong in this class though.
-    public static final int DEFAULT_BUFFER_SIZE = 64 * 1024;
 
     /** The size of a page aligned buffer, 64kbit */
     static final int CHUNK_SIZE = 64 << 10;
