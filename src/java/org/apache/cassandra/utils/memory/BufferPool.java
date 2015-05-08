@@ -40,12 +40,12 @@ import org.apache.cassandra.utils.concurrent.Ref;
  */
 public class BufferPool
 {
-    // suggestion:
+    // suggestion: TODO move this
     // SequentialWriter and RandomAccessReader should IMO both have their own default sizes, the latter of which we will remove soon
     // This doesn't seem to belong in this class though.
     public static final int DEFAULT_BUFFER_SIZE = 64 * 1024;
 
-    /** The size of a page aligned buffer, 64kb, if you change this you must change the freeSlot encoding */
+    /** The size of a page aligned buffer, 64kbit */
     static final int CHUNK_SIZE = 64 << 10;
 
     @VisibleForTesting
@@ -69,10 +69,13 @@ public class BufferPool
 
     public static ByteBuffer get(int size)
     {
-        // suggestion: simplifying by imposing a positive requirement on size; if we want to relax later, we can simply return EMPTY_BUFFER here
-        if (size <= 0)
+        if (size < 0)
             throw new IllegalArgumentException("Size must be positive (" + size + ")");
-        return get(size, true);
+
+        if (size > 0)
+            return get(size, true);
+
+        return EMPTY_BUFFER;
     }
 
     public static ByteBuffer get(int size, boolean direct)
@@ -115,7 +118,7 @@ public class BufferPool
      */
     static final class GlobalPool
     {
-        /** The size of a bigger chunk, from which the page aligned buffers are sliced, must be a multiple of BUFFER_SIZE */
+        /** The size of a bigger chunk, 1mbit, must be a multiple of BUFFER_SIZE */
         static final int MACRO_CHUNK_SIZE = 1 << 20;
 
         static
@@ -128,7 +131,7 @@ public class BufferPool
         // the collection of large chunks we have allocated;
         // these are split up into smaller ones and placed in chunks
         private final Queue<Chunk> macroChunks = new ConcurrentLinkedQueue<>();
-        // suggestion: can't we just put Chunks here?
+        // suggestion: can't we just put Chunks here? TODO
         private final Queue<ByteBuffer> chunks = new ConcurrentLinkedQueue<>();
         private final AtomicLong memoryUsage = new AtomicLong();
 
@@ -191,13 +194,10 @@ public class BufferPool
         void reset()
         {
             chunks.clear();
-            // stef: clean does nothing, since we sliced the buffer,
-            // but slicing is nice, so let's just remove the clean
             macroChunks.clear();
             memoryUsage.set(0);
         }
     }
-
 
     /**
      * A thread local class that slices a chunk into smaller buffers, this class is not thread
@@ -226,7 +226,8 @@ public class BufferPool
             Chunk current = currentChunk;
             currentChunk = EMPTY_CHUNK;
             // must recycle after clearing currentChunk, so that we synchronize with a concurrent put()
-            current.maybeRecycle();
+            if (!current.isRecycled())
+                current.maybeRecycle();
 
             ByteBuffer buffer = globalPool.get();
             if (buffer == null)
@@ -238,8 +239,6 @@ public class BufferPool
 
         public ByteBuffer get(int size)
         {
-            metrics.requests.mark();
-
             if (size > CHUNK_SIZE)
             {
                 if (logger.isTraceEnabled())
@@ -247,8 +246,14 @@ public class BufferPool
                 return allocate(size);
             }
 
-            // suggestion: shouldn't be possible to be isRecycled() here, since we only recycle if NOT the current chunk
-            // also: prefer to not depend on hasCapacity when we do it in get() also
+            if (currentChunk.isRecycled())
+            {
+                if (logger.isTraceEnabled())
+                    logger.trace("Current chunk was recycled by different thread", size, CHUNK_SIZE);
+                if (!grabChunk())
+                    return allocate(size);
+            }
+
             ByteBuffer buffer = currentChunk.get(size);
             if (buffer != null)
                 return buffer;
@@ -258,6 +263,7 @@ public class BufferPool
 
             if (logger.isTraceEnabled())
                 logger.trace("Requested buffer size {} has been allocated directly due to lack of capacity", size);
+
             return allocate(size);
         }
 
@@ -286,7 +292,6 @@ public class BufferPool
         }
     }
 
-    // suggestion: ultimately this is the only call we use from that class, so let's simplify to just a method
     private static ByteBuffer allocateDirectAligned(int capacity)
     {
         int align = MemoryUtil.pageSize();
@@ -320,16 +325,14 @@ public class BufferPool
         public final LocalPool owner;
         private final ByteBuffer slab;
         private final long baseAddress;
-        private final int shift;
-
         private long freeSlots = -1;
+
         // Incremented when the owning pool releases a buffer, single thread update
         private int normalFree;
 
         // Incremented when another pool releases a buffer, multiple thread update
         private volatile int atomicFree;
         private static final AtomicIntegerFieldUpdater<Chunk> atomicFreeUpdater = AtomicIntegerFieldUpdater.newUpdater(Chunk.class, "atomicFree");
-
 
         public Chunk(ByteBuffer slab)
         {
@@ -343,18 +346,16 @@ public class BufferPool
             this.owner = owner;
             this.slab = slab;
             this.baseAddress = MemoryUtil.getAddress(slab);
-            // suggestion: how can slab be recycled before we disappear, and how would this break slab.capacity()?
-            this.shift = (31 & (Integer.numberOfTrailingZeros(slab.capacity() / 64))); // because slab may be recycled before we disappear
+
             if (slab.capacity() == 0)
                 freeSlots = 0;
+
             this.normalFree = slab.capacity();
             this.atomicFree = 0;
         }
 
         public static Chunk getAllocatedFrom(ByteBuffer buffer)
         {
-            // suggestion: for symmetry, using getAttachment here (this also avoids casting, and permits a cheaper assertion,
-            // but neither are as good a reason as clarity)
             Object attachment = MemoryUtil.getAttachment(buffer);
             if (attachment instanceof Chunk)
                 return (Chunk) attachment;
@@ -370,12 +371,17 @@ public class BufferPool
 
         public int capacity()
         {
-            return 64 << shift;
+            return 64 << shift();
         }
 
         final int unit()
         {
-            return 1 << shift;
+            return 1 << shift();
+        }
+
+        private int shift()
+        {
+            return (31 & (Integer.numberOfTrailingZeros(slab.capacity() / 64)));
         }
 
         final boolean isFree()
@@ -383,16 +389,15 @@ public class BufferPool
             return free() >= capacity();
         }
 
+        final boolean isRecycled()
+        {
+            return free() == capacity() + 1;
+        }
+
         /** The total free size, includes lost free slots that could not be compacted */
         int free()
         {
             return normalFree + atomicFree;
-        }
-
-        @VisibleForTesting
-        int offset()
-        {
-            return 1 + Long.numberOfTrailingZeros(freeSlots) << shift;
         }
 
         /** Return the slab to the global pool if we can atomically increment the atomic
@@ -411,13 +416,13 @@ public class BufferPool
                 globalPool.recycle(slab);
         }
 
-        /** Return the next available slice of this size. If
-         * we have exceeded the capacity we return an empty buffer.
+        /**
+         * Return the next available slice of this size. If
+         * we have exceeded the capacity we return null.
          */
         public ByteBuffer get(int size)
         {
-            // suggestion: don't think asserts that just confirm the simple math we did a few lines previously are helpful enough.
-            // if we did that everywhere we'd be in trouble performance-wise (bear in mind we encourage asserts to be left on)
+            int shift = shift();
 
             // how many multiples of our units is the size?
             // we add (unit - 1), so that when we divide by unit (>>> shift), we effectively round up
@@ -487,10 +492,9 @@ public class BufferPool
         }
 
         /**
-         * Round the size to the next power of two with a minimum size of MIN_BUFFER_SIZE.
-         * This is required for the encoding of free slots, see Slot.pack().
+         * Round the size to the next unit multiple.
          */
-        private int roundUp(int v)
+        int roundUp(int v)
         {
             int mask = unit() - 1;
             return (v + mask) & ~mask;
@@ -512,8 +516,7 @@ public class BufferPool
         private long getAddress(ByteBuffer buffer)
         {
             long address = MemoryUtil.getAddress(buffer);
-            // suggestion: since we wire everything up on both sides, a short assert is sufficient to check we haven't screwed up
-            // also, not sure we need to verify fits into an int, but since capacity is an int it must do
+
             assert (address >= baseAddress) & (address <= baseAddress + capacity());
             return address;
         }
@@ -564,6 +567,7 @@ public class BufferPool
         {
             int position = (int)(address - baseAddress);
             int size = roundUp(buffer.capacity());
+            int shift = shift();
 
             normalFree += size;
 

@@ -31,28 +31,13 @@ public class BufferPoolMetrics
     /** Total number of misses */
     public final Meter misses;
 
-    // I'd rather not track this (same rationale as eliminating "hits")
-    /** Total number of requests */
-    public final Meter requests;
-
-    /** hit rate */
-    public final Gauge<Double> missRate;
-
     /** Total size of buffer pools, in bytes */
     public final Gauge<Long> size;
 
     public BufferPoolMetrics()
     {
         misses = Metrics.meter(factory.createMetricName("Misses"));
-        requests = Metrics.meter(factory.createMetricName("Requests"));
-        missRate = Metrics.register(factory.createMetricName("MissRate"), new RatioGauge()
-        {
-            @Override
-            public Ratio getRatio()
-            {
-                return Ratio.of(misses.getCount(), requests.getCount());
-            }
-        });
+
         size = Metrics.register(factory.createMetricName("Size"), new Gauge<Long>()
         {
             public Long getValue()
