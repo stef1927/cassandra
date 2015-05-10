@@ -127,13 +127,18 @@ class Ring:
         division = max(lowest_division, self.MIN_DC_OFFSET_DIVIDER)
         return -self.ringrange // division
 
+    def bound_token(self, tok):
+        if tok < self.ringoffset:
+            tok += self.ringrange
+        return tok
+
     def calc_offset_tokens_nts(self):
         dc_offset = self.best_per_dc_offset()
         dcs = []
         for (dcnum, dccount) in enumerate(self.dc_counts):
             offset = dcnum * dc_offset
             arcsize = self.ringrange // (dccount or 1)
-            dcs.append([(n * arcsize + offset) - self.ringoffset % self.ringrange for n in xrange(dccount)])
+            dcs.append([self.bound_token((n * arcsize + offset) - self.ringoffset % self.ringrange) for n in xrange(dccount)])
         return dcs
 
     def calc_offset_tokens_onts(self):
