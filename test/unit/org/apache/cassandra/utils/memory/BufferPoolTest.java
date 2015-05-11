@@ -710,9 +710,6 @@ public class BufferPoolTest
 
                         BufferPool.put(buffer);
 
-                        if (chunk.isFree())
-                            assertTrue(chunk.isRecycled());
-
                     }
                     catch (Exception ex)
                     {
@@ -739,6 +736,6 @@ public class BufferPoolTest
         assertNotNull(buffer);
         assertEquals(sizes[0], buffer.capacity());
 
-        assertNotSame(chunk, BufferPool.currentChunk());
+        assertEquals(chunk, BufferPool.currentChunk());
     }
 }
