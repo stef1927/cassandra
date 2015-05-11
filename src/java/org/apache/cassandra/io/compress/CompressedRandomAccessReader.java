@@ -72,25 +72,27 @@ public class CompressedRandomAccessReader extends RandomAccessReader
         chunkSegments = file == null ? null : file.chunkSegments();
         if (chunkSegments == null)
         {
-            compressed = super.allocateBuffer(metadata.compressor().initialCompressedBufferLength(metadata.chunkLength()), metadata.compressor().preferredBufferType());
+            compressed = allocateBuffer(metadata.compressor().initialCompressedBufferLength(metadata.chunkLength()), metadata.compressor().preferredBufferType());
             checksumBytes = ByteBuffer.wrap(new byte[4]);
         }
     }
 
-    @Override
-    protected ByteBuffer allocateBuffer(int bufferSize, BufferType bufferType)
+    protected int getBufferSize(int size)
     {
-        assert Integer.bitCount(bufferSize) == 1; //must be a power of two
-        return BufferPool.get(bufferSize, bufferType);
+        assert Integer.bitCount(size) == 1; //must be a power of two
+        return size;
     }
 
     @Override
     public void close()
     {
         super.close();
+
         if (compressed != null)
-            FileUtils.clean(compressed);
-        compressed = null;
+        {
+            BufferPool.put(compressed);
+            compressed = null;
+        }
     }
 
     private void reBufferStandard()

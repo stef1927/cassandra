@@ -54,13 +54,17 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         // we can cache file length in read-only mode
         fileLength = overrideLength <= 0 ? channel.size() : overrideLength;
 
-        buffer = allocateBuffer(bufferSize, bufferType);
+        buffer = allocateBuffer(getBufferSize(bufferSize), bufferType);
         buffer.limit(0);
     }
 
-    protected ByteBuffer allocateBuffer(int bufferSize, BufferType bufferType)
+    protected int getBufferSize(int size)
     {
-        int size = (int) Math.min(fileLength, bufferSize);
+        return (int)Math.min(fileLength, size);
+    }
+
+    protected ByteBuffer allocateBuffer(int size, BufferType bufferType)
+    {
         return BufferPool.get(size, bufferType);
     }
 
