@@ -224,6 +224,8 @@ public class Config
 
     public Integer file_cache_size_in_mb = 512;
 
+    public boolean buffer_pool_use_heap_if_exhausted = true;
+
     public boolean inter_dc_tcp_nodelay = true;
 
     public MemtableAllocationType memtable_allocation_type = MemtableAllocationType.heap_buffers;
