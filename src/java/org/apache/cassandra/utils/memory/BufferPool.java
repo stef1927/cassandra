@@ -43,14 +43,14 @@ public class BufferPool
     /** The size of a page aligned buffer, 64kbit */
     static final int CHUNK_SIZE = 64 << 10;
 
-    @VisibleForTesting // rather non-final because of testing
-    static long MEMORY_USAGE_THRESHOLD = DatabaseDescriptor.getFileCacheSizeInMB() * 1024L * 1024L;
+    @VisibleForTesting
+    public static long MEMORY_USAGE_THRESHOLD = DatabaseDescriptor.getFileCacheSizeInMB() * 1024L * 1024L;
 
-    @VisibleForTesting // rather non-final because of testing
-    static boolean ALLOCATE_ON_HEAP_WHEN_EXAHUSTED = DatabaseDescriptor.getBufferPoolUseHeapIfExhausted();
+    @VisibleForTesting
+    public static boolean ALLOCATE_ON_HEAP_WHEN_EXAHUSTED = DatabaseDescriptor.getBufferPoolUseHeapIfExhausted();
 
-    @VisibleForTesting // rather non-final because of testing
-    static boolean DISABLED = Boolean.parseBoolean(System.getProperty("cassandra.test.disable_buffer_pool", "false"));
+    @VisibleForTesting
+    public static boolean DISABLED = Boolean.parseBoolean(System.getProperty("cassandra.test.disable_buffer_pool", "false"));
 
     private static final Logger logger = LoggerFactory.getLogger(BufferPool.class);
     private static final NoSpamLogger noSpamLogger = NoSpamLogger.getLogger(logger, 15L, TimeUnit.MINUTES);
@@ -519,7 +519,7 @@ public class BufferPool
                 return null;
 
             // convert the slotCount into the bits needed in the bitmap, but at the bottom of the register
-            long slotBits = -1 >>> (64 - slotCount);
+            long slotBits = -1L >>> (64 - slotCount);
 
             // in order that we always allocate page aligned results, we require that any allocation is "somewhat" aligned
             // i.e. any single unit allocation can go anywhere; any 2 unit allocation must begin in one of the first 3 slots
@@ -624,7 +624,7 @@ public class BufferPool
             }
             else
             {
-                long slotBits = (1 << slotCount) - 1;
+                long slotBits = (1L << slotCount) - 1;
 
                 while (true)
                 {

@@ -486,47 +486,56 @@ public class BufferPoolTest
     @Test
     public void testRoundUp()
     {
-        checkBufferCapacity(0);
+        checkBuffer(0);
 
-        checkBufferCapacity(1);
-        checkBufferCapacity(2);
-        checkBufferCapacity(4);
-        checkBufferCapacity(5);
-        checkBufferCapacity(8);
-        checkBufferCapacity(16);
-        checkBufferCapacity(32);
-        checkBufferCapacity(64);
+        checkBuffer(1);
+        checkBuffer(2);
+        checkBuffer(4);
+        checkBuffer(5);
+        checkBuffer(8);
+        checkBuffer(16);
+        checkBuffer(32);
+        checkBuffer(64);
 
-        checkBufferCapacity(65);
-        checkBufferCapacity(127);
-        checkBufferCapacity(128);
+        checkBuffer(65);
+        checkBuffer(127);
+        checkBuffer(128);
 
-        checkBufferCapacity(129);
-        checkBufferCapacity(255);
-        checkBufferCapacity(256);
+        checkBuffer(129);
+        checkBuffer(255);
+        checkBuffer(256);
 
-        checkBufferCapacity(512);
-        checkBufferCapacity(1024);
-        checkBufferCapacity(2048);
-        checkBufferCapacity(4096);
-        checkBufferCapacity(8192);
-        checkBufferCapacity(16384);
+        checkBuffer(512);
+        checkBuffer(1024);
+        checkBuffer(2048);
+        checkBuffer(4096);
+        checkBuffer(8192);
+        checkBuffer(16384);
 
-        checkBufferCapacity(16385);
-        checkBufferCapacity(32767);
-        checkBufferCapacity(32768);
+        checkBuffer(16385);
+        checkBuffer(32767);
+        checkBuffer(32768);
 
-        checkBufferCapacity(32769);
-        checkBufferCapacity(65535);
-        checkBufferCapacity(65536);
+        checkBuffer(32769);
+        checkBuffer(36000);
+        checkBuffer(65535);
+        checkBuffer(65536);
 
-        checkBufferCapacity(65537);
+        checkBuffer(65537);
     }
 
-    private void checkBufferCapacity(int size)
+    private void checkBuffer(int size)
     {
         ByteBuffer buffer = BufferPool.get(size);
         assertEquals(size, buffer.capacity());
+
+        if (size > 0 && size < BufferPool.CHUNK_SIZE)
+        {
+            BufferPool.Chunk chunk = BufferPool.currentChunk();
+            assertNotNull(chunk);
+            assertEquals(chunk.capacity(), chunk.free() + chunk.roundUp(size));
+        }
+
         BufferPool.put(buffer);
     }
 
