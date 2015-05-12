@@ -138,7 +138,7 @@ public class BufferPool
      * the macro-chunks, also page aligned. Macro-chunks are allocated as long as we have not exceeded the
      * memory maximum threshold, MEMORY_USAGE_THRESHOLD and are never released.
      *
-     * This class is shared by multiple thread local pools and must be thread-safe..
+     * This class is shared by multiple thread local pools and must be thread-safe.
      */
     static final class GlobalPool
     {
@@ -257,8 +257,7 @@ public class BufferPool
 
     /**
      * A thread local class that grabs chunks from the global pool for this thread allocations.
-     * Only one thread can do the allocations but multiple threads can release the allocations,
-     * that is it is OK for another thread to release a buffer allocated by a different thread.
+     * Only one thread can do the allocations but multiple threads can release the allocations.
      */
     static final class LocalPool
     {
@@ -368,8 +367,20 @@ public class BufferPool
     }
 
     /**
-     * A memory chunk, it takes a buffer and slices it
-     * into smaller buffers.
+     * A memory chunk: it takes a buffer (the slab) and slices it
+     * into smaller buffers when requested.
+     *
+     * It divides the slab into 64 units and keeps a long mask, freeSlots,
+     * indicating if a unit is in use or not. Each bit in freeSlots corresponds
+     * to a unit, if the bit is set then the unit is free (available for allocation)
+     * whilst if it is not set then the unit is in use.
+     *
+     * When we receive a request of a given size we round up the size to the nearest
+     * multiple of allocation units required. Then we search for n consecutive free units,
+     * where n is the number of units required. We also align to page boundaries.
+     *
+     * When we reiceve a release request we work out the position by comparing the buffer
+     * address to our base address and we simply release the units.
      */
     final static class Chunk
     {
@@ -388,12 +399,21 @@ public class BufferPool
 
             this.slab = slab;
             this.baseAddress = MemoryUtil.getAddress(slab);
+
+            // The number of bits by which we need to shift to obtain a unit
+            // "31 &" is because numberOfTrailingZeros returns 32 when the capacity is zero
             this.shift = 31 & (Integer.numberOfTrailingZeros(slab.capacity() / 64));
 
+            // -1 means all free whilst 0 means all in use
             this.freeSlots = slab.capacity() == 0 ? 0 : -1;
             this.owner = null;
         }
 
+        /**
+         * We stash the chunk in the attachment of a buffer
+         * that was returned by get(), this method simply
+         * retrives the chunk that sliced a buffer, if any.
+         */
         public static Chunk getParentChunk(ByteBuffer buffer)
         {
             Object attachment = MemoryUtil.getAttachment(buffer);
@@ -471,7 +491,8 @@ public class BufferPool
         }
 
         /**
-         * Return the slab to the global pool if it's the correct owner asking.
+         * Return the slab to the global pool if this is invoked
+         * by the correct owner.
          */
         public boolean maybeRecycle(LocalPool owner)
         {
@@ -576,7 +597,6 @@ public class BufferPool
         /** Release a buffer */
         public void free(ByteBuffer buffer)
         {
-            // can just clear attachment, since we have a strong reference to its parent, and no point adding work for GC
             if (!releaseAttachment(buffer))
                 return;
 

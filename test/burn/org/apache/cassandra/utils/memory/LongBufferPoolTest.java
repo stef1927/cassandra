@@ -36,14 +36,14 @@ public class LongBufferPoolTest
     public void testAllocateWithPool() throws InterruptedException, ExecutionException
     {
         BufferPool.DISABLED = false;
-        testAllocate(45, TimeUnit.MINUTES.toNanos(2L));
+        testAllocate(45, TimeUnit.MINUTES.toNanos(1L));
     }
 
     @Test
     public void testAllocateNoPool() throws InterruptedException, ExecutionException
     {
         BufferPool.DISABLED = true;
-        testAllocate(45, TimeUnit.MINUTES.toNanos(2L));
+        testAllocate(45, TimeUnit.MINUTES.toNanos(1L));
     }
 
     public void testAllocate(int threadCount, long duration) throws InterruptedException, ExecutionException
@@ -104,14 +104,15 @@ public class LongBufferPoolTest
                             readBuffer(buffer, true);
 
                             if (rand.nextBoolean())
-                            { //toss the coin, either release this buffer now or
+                            { // toss the coin, either release this buffer now or
                                 BufferPool.put(buffer);
                             }
                             else
-                            { //stash it for later release, any thread can release it
+                            { // stash it for later release possibly by a different thread
                                 buffers.offer(buffer);
-                                if (buffers.size() > 2)
-                                {
+
+                                if (buffers.size() > 5)
+                                { // if enough buffers have been stashed, just release the first one
                                     ByteBuffer anotherBuffer = buffers.poll();
                                     readBuffer(anotherBuffer, false);
                                     BufferPool.put(anotherBuffer);
