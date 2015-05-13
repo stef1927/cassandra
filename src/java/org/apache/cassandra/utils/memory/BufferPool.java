@@ -188,6 +188,9 @@ public class BufferPool
             while (!chunks.isEmpty())
             {
                 Chunk chunk = chunks.poll();
+                if (chunk == null) // another thread got in the way
+                    continue;
+
                 buffer = chunk.get(size);
                 if (buffer != null)
                     break;
@@ -327,7 +330,9 @@ public class BufferPool
 
             chunk.free(buffer);
 
-            if (chunks.peekFirst() != chunk)
+            // if a chunk is fully free, give it away even if it is the only one
+            // otherwise we leak memory when the thread dies
+            if (chunks.peekFirst() != chunk || chunk.isFree())
             {
                 if (chunk.maybeRecycle(this))
                     chunks.remove(chunk);
@@ -550,9 +555,11 @@ public class BufferPool
                 // we take the index, rather than finding the lowest bit, since we must obtain it anyway, and shifting is more efficient
                 // than multiplication
                 int index = Long.numberOfTrailingZeros(cur & searchMask);
-                // if no bit was actually found, we cannot serve this request, so return null
-                if (index == 64)
+
+                // it not enough bits found, we cannot serve this request, so return null
+                if ((64 - index) < slotCount)
                     return null;
+
                 // remove this bit from our searchMask, so we don't return here next round
                 searchMask ^= 1 << index;
                 // if our bits occur starting at the index, remove ourselves from the bitmask and return

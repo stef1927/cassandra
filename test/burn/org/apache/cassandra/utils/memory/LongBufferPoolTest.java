@@ -28,22 +28,27 @@ import java.util.concurrent.*;
 
 import org.junit.Test;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import static org.junit.Assert.*;
 
 public class LongBufferPoolTest
 {
+    private static final Logger logger = LoggerFactory.getLogger(LongBufferPoolTest.class);
+
     @Test
     public void testAllocateWithPool() throws InterruptedException, ExecutionException
     {
         BufferPool.DISABLED = false;
-        testAllocate(45, TimeUnit.MINUTES.toNanos(1L));
+        testAllocate(45, TimeUnit.MINUTES.toNanos(2L));
     }
 
     @Test
     public void testAllocateNoPool() throws InterruptedException, ExecutionException
     {
         BufferPool.DISABLED = true;
-        testAllocate(45, TimeUnit.MINUTES.toNanos(1L));
+        testAllocate(45, TimeUnit.MINUTES.toNanos(2L));
     }
 
     public void testAllocate(int threadCount, long duration) throws InterruptedException, ExecutionException
@@ -66,33 +71,42 @@ public class LongBufferPoolTest
         {
             ret.add(executorService.submit(new Callable()
             {
-                private final int minBufferSize = 16;
-                private final long datum = 123456L;
+                private final int minBufferSize = 12;
+                private final ThreadLocalRandom rand = ThreadLocalRandom.current();
+                private int size = 0;
 
                 private void writeBuffer(ByteBuffer buffer)
                 {
-                    buffer.putLong(datum);
-                    buffer.putLong(Thread.currentThread().getId());
+                    int numVals = (buffer.capacity() - 4) / 8;
+                    buffer.putInt(numVals);
+
+                    Long val = rand.nextLong(10000000L);
+                    for (int i = 0; i < numVals; i++)
+                        buffer.putLong(val);
                 }
 
-                private void readBuffer(ByteBuffer buffer, boolean sameThread)
+                private void readBuffer(ByteBuffer buffer)
                 {
                     buffer.position(0);
-                    assertEquals(datum, buffer.getLong());
+                    int numVals = buffer.getInt();
 
-                    long id = buffer.getLong();
-                    if (sameThread)
-                        assertEquals(Thread.currentThread().getId(), id);
+                    long val = 0;
+                    for (int i = 0; i < numVals; i++)
+                    {
+                        if (i ==0)
+                            val = buffer.getLong();
+                        else
+                            assertEquals(val, buffer.getLong());
+                    }
                 }
 
                 public Boolean call() throws Exception
                 {
                     try
                     {
-                        ThreadLocalRandom rand = ThreadLocalRandom.current();
                         while (System.nanoTime() < until)
                         {
-                            int size = Math.max(minBufferSize, rand.nextInt(BufferPool.CHUNK_SIZE + 1));
+                            size = Math.max(minBufferSize, rand.nextInt(BufferPool.CHUNK_SIZE + 1));
 
                             ByteBuffer buffer = BufferPool.get(size);
                             assertNotNull(buffer);
@@ -101,7 +115,7 @@ public class LongBufferPoolTest
                             writeBuffer(buffer);
 
                             Thread.sleep(rand.nextInt(1000)); // sleep up to 1 second
-                            readBuffer(buffer, true);
+                            readBuffer(buffer);
 
                             if (rand.nextBoolean())
                             { // toss the coin, either release this buffer now or
@@ -114,7 +128,7 @@ public class LongBufferPoolTest
                                 if (buffers.size() > 5)
                                 { // if enough buffers have been stashed, just release the first one
                                     ByteBuffer anotherBuffer = buffers.poll();
-                                    readBuffer(anotherBuffer, false);
+                                    readBuffer(anotherBuffer);
                                     BufferPool.put(anotherBuffer);
                                 }
                             }
@@ -123,6 +137,10 @@ public class LongBufferPoolTest
                     }
                     catch (Exception ex)
                     {
+                        logger.error("Got exception {}, latest size {}, current chunk {}",
+                                     ex.getMessage(),
+                                     size,
+                                     BufferPool.currentChunk());
                         ex.printStackTrace();
                         return false;
                     }
