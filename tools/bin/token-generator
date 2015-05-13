@@ -30,7 +30,8 @@ from tempfile import NamedTemporaryFile
 
 description = '''Given a list of numbers indicating the number of nodes
 in each separate datacenter, outputs a recommended list of tokens to use
-with RandomPartitioner: one for each node in each datacenter.
+with Murmur3Partitioner (by default) or with RandomPartitioner.
+The list contains one token for each node in each datacenter.
 '''
 
 usage = "%prog <nodes_in_dc1> [<nodes_in_dc2> [...]]"
@@ -38,13 +39,15 @@ usage = "%prog <nodes_in_dc1> [<nodes_in_dc2> [...]]"
 parser = optparse.OptionParser(description=description, usage=usage)
 
 def part_murmur3(option, opt, value, parser):
-    parser.values.ringoffset=-(1<<64)
-    parser.values.ringrange=(1<<65)
+    parser.values.ringoffset=-(1<<63)
+    parser.values.ringrange=(1<<64)
     return
+
 def part_random(option, opt, value, parser):
     parser.values.ringoffset=0
     parser.values.ringrange=(1<<127)
     return
+
 parser.add_option('--murmur3', action='callback', callback=part_murmur3,
                   help='Generate tokens for Murmur3Partitioner (default).')
 parser.add_option('--random', action='callback', callback=part_random,
