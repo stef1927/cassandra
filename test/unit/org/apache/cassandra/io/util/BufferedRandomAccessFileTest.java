@@ -42,6 +42,7 @@ public class BufferedRandomAccessFileTest
     public void testReadAndWrite() throws Exception
     {
         SequentialWriter w = createTempFile("braf");
+        ChannelProxy channel = new ChannelProxy(w.getPath());
 
         // writting string of data to the file
         byte[] data = "Hello".getBytes();
@@ -52,7 +53,7 @@ public class BufferedRandomAccessFileTest
         w.sync();
 
         // reading small amount of data from file, this is handled by initial buffer
-        RandomAccessReader r = RandomAccessReader.open(w);
+        RandomAccessReader r = RandomAccessReader.open(channel);
 
         byte[] buffer = new byte[data.length];
         assertEquals(data.length, r.read(buffer));
@@ -75,7 +76,7 @@ public class BufferedRandomAccessFileTest
 
         w.sync();
 
-        r = RandomAccessReader.open(w); // re-opening file in read-only mode
+        r = RandomAccessReader.open(channel); // re-opening file in read-only mode
 
         // reading written buffer
         r.seek(initialPosition); // back to initial (before write) position
@@ -124,6 +125,7 @@ public class BufferedRandomAccessFileTest
 
         w.finish();
         r.close();
+        channel.close();
     }
 
     @Test
@@ -136,7 +138,8 @@ public class BufferedRandomAccessFileTest
         byte[] in = generateByteArray(RandomAccessReader.DEFAULT_BUFFER_SIZE);
         w.write(in);
 
-        RandomAccessReader r = RandomAccessReader.open(w);
+        ChannelProxy channel = new ChannelProxy(w.getPath());
+        RandomAccessReader r = RandomAccessReader.open(channel);
 
         // Read it into a same size array.
         byte[] out = new byte[RandomAccessReader.DEFAULT_BUFFER_SIZE];
@@ -148,6 +151,7 @@ public class BufferedRandomAccessFileTest
 
         r.close();
         w.finish();
+        channel.close();
     }
 
     @Test
@@ -175,9 +179,11 @@ public class BufferedRandomAccessFileTest
         w.finish();
 
         // will use cachedlength
-        RandomAccessReader r = RandomAccessReader.open(tmpFile);
-        assertEquals(lessThenBuffer.length + biggerThenBuffer.length, r.length());
-        r.close();
+        try (ChannelProxy channel = new ChannelProxy(tmpFile);
+            RandomAccessReader r = RandomAccessReader.open(channel))
+        {
+            assertEquals(lessThenBuffer.length + biggerThenBuffer.length, r.length());
+        }
     }
 
     @Test
@@ -195,7 +201,8 @@ public class BufferedRandomAccessFileTest
         w.write(data);
         w.sync();
 
-        final RandomAccessReader r = RandomAccessReader.open(w);
+        final ChannelProxy channel = new ChannelProxy(w.getPath());
+        final RandomAccessReader r = RandomAccessReader.open(channel);
 
         ByteBuffer content = r.readBytes((int) r.length());
 
@@ -219,6 +226,7 @@ public class BufferedRandomAccessFileTest
 
         w.finish();
         r.close();
+        channel.close();
     }
 
     @Test
@@ -229,7 +237,8 @@ public class BufferedRandomAccessFileTest
         w.write(data);
         w.finish();
 
-        final RandomAccessReader file = RandomAccessReader.open(w);
+        final ChannelProxy channel = new ChannelProxy(w.getPath());
+        final RandomAccessReader file = RandomAccessReader.open(channel);
 
         file.seek(0);
         assertEquals(file.getFilePointer(), 0);
@@ -259,6 +268,7 @@ public class BufferedRandomAccessFileTest
         }, IllegalArgumentException.class); // throws IllegalArgumentException
 
         file.close();
+        channel.close();
     }
 
     @Test
@@ -268,7 +278,8 @@ public class BufferedRandomAccessFileTest
         w.write(generateByteArray(RandomAccessReader.DEFAULT_BUFFER_SIZE * 2));
         w.finish();
 
-        RandomAccessReader file = RandomAccessReader.open(w);
+        ChannelProxy channel = new ChannelProxy(w.getPath());
+        RandomAccessReader file = RandomAccessReader.open(channel);
 
         file.seek(0); // back to the beginning of the file
         assertEquals(file.skipBytes(10), 10);
@@ -288,6 +299,7 @@ public class BufferedRandomAccessFileTest
         assertEquals(file.bytesRemaining(), file.length());
 
         file.close();
+        channel.close();
     }
 
     @Test
@@ -302,7 +314,8 @@ public class BufferedRandomAccessFileTest
 
         w.sync();
 
-        RandomAccessReader r = RandomAccessReader.open(w);
+        ChannelProxy channel = new ChannelProxy(w.getPath());
+        RandomAccessReader r = RandomAccessReader.open(channel);
 
         // position should change after skip bytes
         r.seek(0);
@@ -316,6 +329,7 @@ public class BufferedRandomAccessFileTest
 
         w.finish();
         r.close();
+        channel.close();
     }
 
     @Test
@@ -391,7 +405,8 @@ public class BufferedRandomAccessFileTest
 
         w.sync();
 
-        RandomAccessReader r = RandomAccessReader.open(w);
+        ChannelProxy channel = new ChannelProxy(w.getPath());
+        RandomAccessReader r = RandomAccessReader.open(channel);
 
         assertEquals(r.bytesRemaining(), toWrite);
 
@@ -407,6 +422,7 @@ public class BufferedRandomAccessFileTest
 
         w.finish();
         r.close();
+        channel.close();
     }
 
     @Test
@@ -477,7 +493,8 @@ public class BufferedRandomAccessFileTest
 
         w.finish();
 
-        RandomAccessReader file = RandomAccessReader.open(w);
+        ChannelProxy channel = new ChannelProxy(w.getPath());
+        RandomAccessReader file = RandomAccessReader.open(channel);
 
         file.seek(10);
         FileMark mark = file.mark();
@@ -502,6 +519,7 @@ public class BufferedRandomAccessFileTest
         assertEquals(file.bytesPastMark(), 0);
 
         file.close();
+        channel.close();
     }
 
     @Test (expected = AssertionError.class)
@@ -512,7 +530,8 @@ public class BufferedRandomAccessFileTest
             w.write(new byte[30]);
             w.flush();
 
-            try (RandomAccessReader r = RandomAccessReader.open(w))
+            try (ChannelProxy channel = new ChannelProxy(w.getPath());
+                 RandomAccessReader r = RandomAccessReader.open(channel))
             {
                 r.seek(10);
                 r.mark();
