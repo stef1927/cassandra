@@ -168,6 +168,18 @@ def format_integer_type(val, colormap, **_):
 formatter_for('long')(format_integer_type)
 formatter_for('int')(format_integer_type)
 
+def format_small_integer_type(val, colormap, **_):
+    bval = str(val)
+    return colorme(bval, colormap, 'smallint')
+
+formatter_for('smallint')(format_small_integer_type)
+
+def format_tiny_integer_type(val, colormap, **_):
+    bval = str(val)
+    return colorme(bval, colormap, 'tinyint')
+
+formatter_for('tinyint')(format_tiny_integer_type)
+
 @formatter_for('datetime')
 def format_value_timestamp(val, colormap, date_time_format, quote=False, **_):
     bval = strftime(date_time_format.timestamp_format, calendar.timegm(val.utctimetuple()))

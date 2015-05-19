@@ -135,7 +135,7 @@ from cqlshlib.tracing import print_trace_session, print_trace
 DEFAULT_HOST = '127.0.0.1'
 DEFAULT_PORT = 9042
 DEFAULT_CQLVER = '3.2.0'
-DEFAULT_PROTOCOL_VERSION = 3
+DEFAULT_PROTOCOL_VERSION = 4
 
 DEFAULT_FLOAT_PRECISION = 5
 DEFAULT_MAX_TRACE_WAIT = 10
@@ -171,6 +171,9 @@ parser.add_option("--cqlshrc", help="Specify an alternative cqlshrc file locatio
 parser.add_option('--cqlversion', default=DEFAULT_CQLVER,
                   help='Specify a particular CQL version (default: %default).'
                        ' Examples: "3.0.3", "3.1.0"')
+parser.add_option('--protocolversion', default=DEFAULT_PROTOCOL_VERSION,
+                  help='Specify a particular native protocol version (default: %default).'
+                       ' Examples: "3", "4"')
 parser.add_option("-e", "--execute", help='Execute the statement and quit.')
 
 optvalues = optparse.Values()
@@ -581,7 +584,8 @@ class Shell(cmd.Cmd):
                  max_trace_wait=DEFAULT_MAX_TRACE_WAIT,
                  ssl=False,
                  single_statement=None,
-                 client_timeout=10):
+                 client_timeout=10,
+                 protocol_version=DEFAULT_PROTOCOL_VERSION):
         cmd.Cmd.__init__(self, completekey=completekey)
         self.hostname = hostname
         self.port = port
@@ -599,7 +603,7 @@ class Shell(cmd.Cmd):
             self.conn = use_conn
         else:
             self.conn = Cluster(contact_points=(self.hostname,), port=self.port, cql_version=cqlver,
-                                protocol_version=DEFAULT_PROTOCOL_VERSION,
+                                protocol_version=protocol_version,
                                 auth_provider=self.auth_provider,
                                 ssl_options=sslhandling.ssl_settings(hostname, CONFIG_FILE) if ssl else None,
                                 load_balancing_policy=WhiteListRoundRobinPolicy([self.hostname]))
@@ -1614,7 +1618,7 @@ class Shell(cmd.Cmd):
                 contact_points=(self.hostname,),
                 port=self.port,
                 cql_version=self.conn.cql_version,
-                protocol_version=DEFAULT_PROTOCOL_VERSION,
+                protocol_version=self.conn.protocol_version,
                 auth_provider=self.auth_provider,
                 ssl_options=sslhandling.ssl_settings(self.hostname, CONFIG_FILE) if self.ssl else None,
                 load_balancing_policy=WhiteListRoundRobinPolicy([self.hostname]),
@@ -1703,7 +1707,7 @@ class Shell(cmd.Cmd):
 
                 request_id = conn.get_request_id()
                 binary_message = query_message.to_binary(
-                    stream_id=request_id, protocol_version=DEFAULT_PROTOCOL_VERSION, compression=None)
+                    stream_id=request_id, protocol_version=self.conn.protocol_version, compression=None)
 
                 # add the message directly to the connection's queue
                 with conn.lock:
@@ -2036,7 +2040,7 @@ class Shell(cmd.Cmd):
         auth_provider = PlainTextAuthProvider(username=username, password=password)
 
         conn = Cluster(contact_points=(self.hostname,), port=self.port, cql_version=self.conn.cql_version,
-                       protocol_version=DEFAULT_PROTOCOL_VERSION,
+                       protocol_version=self.conn.protocol_version,
                        auth_provider=auth_provider,
                        ssl_options=self.conn.ssl_options,
                        load_balancing_policy=WhiteListRoundRobinPolicy([self.hostname]))
@@ -2273,6 +2277,7 @@ def read_options(cmdlineargs, environment):
 
     optvalues.tty = sys.stdin.isatty()
     optvalues.cqlversion = option_with_default(configs.get, 'cql', 'version', DEFAULT_CQLVER)
+    optvalues.protocolversion = option_with_default(configs.get, 'connection', 'protocolversion', DEFAULT_PROTOCOL_VERSION)
     optvalues.execute = None
 
     (options, arguments) = parser.parse_args(cmdlineargs, values=optvalues)
@@ -2312,6 +2317,11 @@ def read_options(cmdlineargs, environment):
         parser.error('%r is not a supported CQL version.' % options.cqlversion)
     else:
         options.cqlmodule = cql3handling
+
+    try:
+        optvalues.protocol_version = int(options.protocolversion)
+    except ValueError:
+        parser.error('%r is not a valid number.' % options.protocolversion)
 
     try:
         port = int(port)
@@ -2392,7 +2402,8 @@ def main(options, hostname, port):
                       max_trace_wait=options.max_trace_wait,
                       ssl=options.ssl,
                       single_statement=options.execute,
-                      client_timeout=options.client_timeout)
+                      client_timeout=options.client_timeout,
+                      protocol_version=options.protocol_version)
     except KeyboardInterrupt:
         sys.exit('Connection aborted.')
     except CQL_ERRORS, e:
