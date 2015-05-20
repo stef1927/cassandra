@@ -171,9 +171,6 @@ parser.add_option("--cqlshrc", help="Specify an alternative cqlshrc file locatio
 parser.add_option('--cqlversion', default=DEFAULT_CQLVER,
                   help='Specify a particular CQL version (default: %default).'
                        ' Examples: "3.0.3", "3.1.0"')
-parser.add_option('--protocolversion', default=DEFAULT_PROTOCOL_VERSION,
-                  help='Specify a particular native protocol version (default: %default).'
-                       ' Examples: "3", "4"')
 parser.add_option("-e", "--execute", help='Execute the statement and quit.')
 
 optvalues = optparse.Values()
@@ -1053,6 +1050,9 @@ class Shell(cmd.Cmd):
     def perform_statement(self, statement):
         stmt = SimpleStatement(statement, consistency_level=self.consistency_level, serial_consistency_level=self.serial_consistency_level, fetch_size=self.default_page_size if self.use_paging else None)
         result = self.perform_simple_statement(stmt)
+
+        self.print_warnings(stmt.warnings)
+
         if self.tracing_enabled:
             if stmt.trace:
                 print_trace(self, stmt.trace)
@@ -1077,7 +1077,7 @@ class Shell(cmd.Cmd):
         rows = None
         while True:
             try:
-                rows = self.session.execute(statement, trace=self.tracing_enabled)
+                rows = self.session.execute(statement, trace=self.tracing_enabled, warnings=True)
                 break
             except CQL_ERRORS, err:
                 self.printerr(str(err.__class__.__name__) + ": " + str(err))
@@ -1191,6 +1191,16 @@ class Shell(cmd.Cmd):
                 column = formatted_names[field_id].ljust(max_col_width, color=self.color)
                 value = field.ljust(field.displaywidth, color=self.color)
                 self.writeresult(' ' + " | ".join([column, value]))
+            self.writeresult('')
+
+    def print_warnings(self, warnings):
+        if warnings is None or len(warnings) == 0:
+            return;
+
+        self.writeresult('')
+        self.writeresult('Warnings :')
+        for warning in warnings:
+            self.writeresult(warning)
             self.writeresult('')
 
     def emptyline(self):
@@ -2277,7 +2287,6 @@ def read_options(cmdlineargs, environment):
 
     optvalues.tty = sys.stdin.isatty()
     optvalues.cqlversion = option_with_default(configs.get, 'cql', 'version', DEFAULT_CQLVER)
-    optvalues.protocolversion = option_with_default(configs.get, 'connection', 'protocolversion', DEFAULT_PROTOCOL_VERSION)
     optvalues.execute = None
 
     (options, arguments) = parser.parse_args(cmdlineargs, values=optvalues)
@@ -2317,11 +2326,6 @@ def read_options(cmdlineargs, environment):
         parser.error('%r is not a supported CQL version.' % options.cqlversion)
     else:
         options.cqlmodule = cql3handling
-
-    try:
-        optvalues.protocol_version = int(options.protocolversion)
-    except ValueError:
-        parser.error('%r is not a valid number.' % options.protocolversion)
 
     try:
         port = int(port)
@@ -2402,8 +2406,7 @@ def main(options, hostname, port):
                       max_trace_wait=options.max_trace_wait,
                       ssl=options.ssl,
                       single_statement=options.execute,
-                      client_timeout=options.client_timeout,
-                      protocol_version=options.protocol_version)
+                      client_timeout=options.client_timeout)
     except KeyboardInterrupt:
         sys.exit('Connection aborted.')
     except CQL_ERRORS, e:
