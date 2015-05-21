@@ -550,7 +550,6 @@ class FrozenType(cassandra.cqltypes._ParameterizedType):
         subtype, = cls.subtypes
         return subtype.to_binary(val, protocol_version)
 
-
 class Shell(cmd.Cmd):
     custom_prompt = os.getenv('CQLSH_PROMPT', '')
     if custom_prompt is not '':
@@ -1049,16 +1048,22 @@ class Shell(cmd.Cmd):
 
     def perform_statement(self, statement):
         stmt = SimpleStatement(statement, consistency_level=self.consistency_level, serial_consistency_level=self.serial_consistency_level, fetch_size=self.default_page_size if self.use_paging else None)
-        result = self.perform_simple_statement(stmt)
+        result, future = self.perform_simple_statement(stmt)
 
-        self.print_warnings(stmt.warnings)
+        if future:
+            if future.warnings:
+                self.print_warnings(future.warnings)
 
-        if self.tracing_enabled:
-            if stmt.trace:
-                print_trace(self, stmt.trace)
-            else:
-                msg = "Statement trace did not complete within %d seconds" % (self.session.max_trace_wait)
-                self.writeresult(msg, color=RED)
+            if self.tracing_enabled:
+                try:
+                    trace = future.get_query_trace(self.max_trace_wait)
+                    if trace:
+                        print_trace(self, trace)
+                    else:
+                        msg = "Statement trace did not complete within %d seconds" % (self.session.max_trace_wait)
+                        self.writeresult(msg, color=RED)
+                except Exception, err:
+                    self.printerr("Unable to fetch query trace: %s" % (str(err),))
 
         return result
 
@@ -1073,19 +1078,20 @@ class Shell(cmd.Cmd):
 
     def perform_simple_statement(self, statement):
         if not statement:
-            return False
+            return False, None
         rows = None
         while True:
             try:
-                rows = self.session.execute(statement, trace=self.tracing_enabled, warnings=True)
+                future = self.session.execute_async(statement, trace=self.tracing_enabled)
+                rows = future.result(self.session.default_timeout)
                 break
             except CQL_ERRORS, err:
                 self.printerr(str(err.__class__.__name__) + ": " + str(err))
-                return False
+                return False, None
             except Exception, err:
                 import traceback
                 self.printerr(traceback.format_exc())
-                return False
+                return False, None
 
         if statement.query_string[:6].lower() == 'select':
             self.print_result(rows, self.parse_for_table_meta(statement.query_string))
@@ -1098,7 +1104,7 @@ class Shell(cmd.Cmd):
             self.writeresult("")
             self.print_static_result(rows, self.parse_for_table_meta(statement.query_string))
         self.flush_output()
-        return True
+        return True, future
 
     def print_result(self, rows, table_meta):
         self.decoding_errors = []
