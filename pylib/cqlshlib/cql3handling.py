@@ -48,10 +48,6 @@ class Cql3ParsingRuleSet(CqlParsingRuleSet):
         'materialized', 'view'
     ))
 
-    unreserved_keywords = set((
-        'key', 'clustering', 'ttl', 'compact', 'storage', 'type', 'values', 'custom', 'exists'
-    ))
-
     columnfamily_layout_options = (
         ('bloom_filter_fp_chance', None),
         ('comment', None),
@@ -89,10 +85,6 @@ class Cql3ParsingRuleSet(CqlParsingRuleSet):
         'EACH_QUORUM',
         'SERIAL'
     )
-
-    maybe_escape_name = staticmethod(maybe_escape_name)
-
-    escape_name = staticmethod(escape_name)
 
     @classmethod
     def escape_value(cls, value):
@@ -133,8 +125,6 @@ explain_completion = CqlRuleSet.explain_completion
 dequote_value = CqlRuleSet.dequote_value
 dequote_name = CqlRuleSet.dequote_name
 escape_value = CqlRuleSet.escape_value
-maybe_escape_name = CqlRuleSet.maybe_escape_name
-
 
 # BEGIN SYNTAX/COMPLETION RULE DEFINITIONS
 
