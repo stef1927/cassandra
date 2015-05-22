@@ -78,7 +78,7 @@ public class BufferPool
 
     public static ByteBuffer get(int size, boolean direct)
     {
-        if (DISABLED || !direct)
+        if (DISABLED | !direct)
             return allocate(size, !direct);
         else
             return takeFromPool(size, !direct);
@@ -104,7 +104,7 @@ public class BufferPool
 
     public static void put(ByteBuffer buffer)
     {
-        if (buffer.isDirect() && !DISABLED)
+        if (!(DISABLED | buffer.hasArray()))
             localPool.get().put(buffer);
     }
 
@@ -160,6 +160,7 @@ public class BufferPool
         }
 
         private final Queue<Chunk> macroChunks = new ConcurrentLinkedQueue<>();
+        // TODO (future): it would be preferable to use a CLStack to improve cache occupancy; it would also be preferable to use "CoreLocal" storage
         private final Queue<Chunk> chunks = new ConcurrentLinkedQueue<>();
         private final AtomicLong memoryUsage = new AtomicLong();
 
@@ -184,6 +185,8 @@ public class BufferPool
         private ByteBuffer getFromExistingChunks(int size)
         {
             ByteBuffer buffer = null;
+            // stef: do we need this? it shouldn't be possible to race with an allocation to any Chunk here
+            // since we take exclusive ownership by removing it from the CLQ
             List<Chunk> discardedChunks = new ArrayList<>(chunks.size());
             while (!chunks.isEmpty())
             {
@@ -265,6 +268,11 @@ public class BufferPool
     static final class LocalPool
     {
         private final static BufferPoolMetrics metrics = new BufferPoolMetrics();
+        // stef: currently you don't remove any items from this queue. also, it no longer needs to be a CLQ
+        // I would prefer it if we updated this to a simple array (or, possibly, an ArrayDeque) that we impose
+        // a size limit of just, say, 3, and we just keep the largest two if we need to allocate a fourth.
+        // we should also try to allocate from the newest segment _last_ so that we get a chance to eliminate the
+        // older ones.
         private final Deque<Chunk> chunks = new ConcurrentLinkedDeque<>();
 
         private ByteBuffer getFromGlobalPool(int size)
@@ -329,21 +337,20 @@ public class BufferPool
             }
 
             chunk.free(buffer);
-
-            // if a chunk is fully free, give it away even if it is the only one
-            // otherwise we leak memory when the thread dies
-            if (chunks.peekFirst() != chunk || chunk.isFree())
-            {
-                if (chunk.maybeRecycle(this))
-                    chunks.remove(chunk);
-            }
+            // stef: good point about thread death. this is still a risk though. we should probably introduce a PhantomReference
+            // so that we can cleanup when we get collected
         }
 
         @VisibleForTesting
         void reset()
         {
             while (!chunks.isEmpty())
-                chunks.poll().maybeRecycle(this);
+            {
+                Chunk chunk = chunks.poll();
+                chunk.freeSlots = -1L;
+                chunk.owner = null;
+                chunk.maybeRecycle();
+            }
         }
     }
 
@@ -396,11 +403,14 @@ public class BufferPool
         private volatile long freeSlots;
         private static final AtomicLongFieldUpdater<Chunk> atomicFreeSlotUpdater = AtomicLongFieldUpdater.newUpdater(Chunk.class, "freeSlots");
 
+        // the pool that is _currently allocating_ from this Chunk
+        // if this is set, it means the chunk may not be recycled because we may still allocate from it;
+        // if it has been unset the local pool has finished with it, and it may be recycled
         private volatile LocalPool owner;
 
         public Chunk(ByteBuffer slab)
         {
-            assert slab.isDirect();
+            assert !slab.hasArray();
 
             this.slab = slab;
             this.baseAddress = MemoryUtil.getAddress(slab);
@@ -411,7 +421,6 @@ public class BufferPool
 
             // -1 means all free whilst 0 means all in use
             this.freeSlots = slab.capacity() == 0 ? 0 : -1;
-            this.owner = null;
         }
 
         /**
@@ -448,15 +457,12 @@ public class BufferPool
             if (attachment == null)
                 return false;
 
-            if (MemoryUtil.compareAndSetAttachment(buffer, attachment, null))
-            {
-                if (attachment instanceof Ref)
-                    ((Ref<Chunk>) attachment).release();
+            if (attachment instanceof Ref)
+                ((Ref<Chunk>) attachment).release();
 
-                return true;
-            }
-
-            return false;
+            // stef: i'd prefer to keep CAS to an absolute minimum, and we already check (through assertion)
+            // that we don't double-free in the caller
+            return true;
         }
 
         @VisibleForTesting
@@ -499,12 +505,11 @@ public class BufferPool
          * Return the slab to the global pool if this is invoked
          * by the correct owner.
          */
-        public boolean maybeRecycle(LocalPool owner)
+        public boolean maybeRecycle()
         {
-            if (this.owner != owner)
+            if (this.owner != null)
                 return false;
 
-            setOwner(null);
             globalPool.recycle(this);
             return true;
         }
@@ -556,8 +561,10 @@ public class BufferPool
                 // than multiplication
                 int index = Long.numberOfTrailingZeros(cur & searchMask);
 
-                // it not enough bits found, we cannot serve this request, so return null
-                if ((64 - index) < slotCount)
+                // if no bit was actually found, we cannot serve this request, so return null.
+                // due to truncating the searchMask this immediately terminates any search when we run out of indexes
+                // that could accommodate the allocation, i.e. is equivalent to checking (64 - index) < slotCount
+                if (index == 64)
                     return null;
 
                 // remove this bit from our searchMask, so we don't return here next round
@@ -616,31 +623,28 @@ public class BufferPool
             position >>= shift;
             int slotCount = size >> shift;
 
+            long slotBits = (1L << slotCount) - 1;
+            long shiftedSlotBits = (slotBits << position);
+
             if (slotCount == 64)
             {
                 assert size == capacity();
                 assert position == 0;
-
-                while (true)
-                {
-                    long cur = freeSlots;
-                    assert cur == 0; // ensure no double free
-                    if (atomicFreeSlotUpdater.compareAndSet(this, cur, -1))
-                        break;
-                }
+                shiftedSlotBits = -1L;
             }
-            else
+
+            long next;
+            while (true)
             {
-                long slotBits = (1L << slotCount) - 1;
-
-                while (true)
-                {
-                    long cur = freeSlots;
-                    assert (cur & (slotBits << position)) == 0; // ensure no double free
-                    if (atomicFreeSlotUpdater.compareAndSet(this, cur, cur | (slotBits << position)))
-                        break;
-                }
+                long cur = freeSlots;
+                next = cur | shiftedSlotBits;
+                assert next == (cur ^ shiftedSlotBits); // ensure no double free
+                if (atomicFreeSlotUpdater.compareAndSet(this, cur, next))
+                    break;
             }
+
+            if (next == -1L)
+                maybeRecycle();
         }
 
         @Override

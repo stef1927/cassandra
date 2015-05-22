@@ -84,8 +84,14 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         @Override
         public void close()
         {
-            super.close();
-            channel.close();
+            try
+            {
+                super.close();
+            }
+            finally
+            {
+                channel.close();
+            }
         }
     }
 

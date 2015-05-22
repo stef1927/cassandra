@@ -202,12 +202,6 @@ public abstract class MemoryUtil
         unsafe.putObject(instance, DIRECT_BYTE_BUFFER_ATTACHMENT_OFFSET, next);
     }
 
-    public static boolean compareAndSetAttachment(ByteBuffer instance, Object prev, Object next)
-    {
-        assert instance.getClass() == DIRECT_BYTE_BUFFER_CLASS;
-        return unsafe.compareAndSwapObject(instance, DIRECT_BYTE_BUFFER_ATTACHMENT_OFFSET, prev, next);
-    }
-
     public static ByteBuffer duplicateDirectByteBuffer(ByteBuffer source, ByteBuffer hollowBuffer)
     {
         assert source.getClass() == DIRECT_BYTE_BUFFER_CLASS;
