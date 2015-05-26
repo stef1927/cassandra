@@ -33,7 +33,7 @@ import org.apache.cassandra.io.compress.CompressionParameters;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.utils.CLibrary;
-import org.apache.cassandra.utils.concurrent.Transactional.AbstractTransactional;
+import org.apache.cassandra.utils.concurrent.Transactional;
 
 import static org.apache.cassandra.utils.Throwables.merge;
 import org.apache.cassandra.utils.SyncUtil;
@@ -42,7 +42,7 @@ import org.apache.cassandra.utils.SyncUtil;
  * Adds buffering, mark, and fsyncing to OutputStream.  We always fsync on close; we may also
  * fsync incrementally if Config.trickle_fsync is enabled.
  */
-public class SequentialWriter extends OutputStream implements WritableByteChannel
+public class SequentialWriter extends OutputStream implements WritableByteChannel, Transactional
 {
     private static final int DEFAULT_BUFFER_SIZE = 64 * 1024;
 
