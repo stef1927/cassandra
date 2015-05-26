@@ -33,8 +33,7 @@ import org.apache.cassandra.io.compress.CompressionParameters;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.utils.CLibrary;
-import org.apache.cassandra.utils.concurrent.Transactional;
-import org.apache.cassandra.utils.memory.BufferPool;
+import org.apache.cassandra.utils.concurrent.Transactional.AbstractTransactional;
 
 import static org.apache.cassandra.utils.Throwables.merge;
 import org.apache.cassandra.utils.SyncUtil;
