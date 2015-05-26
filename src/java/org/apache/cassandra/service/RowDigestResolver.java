@@ -41,7 +41,16 @@ public class RowDigestResolver extends AbstractRowResolver
         {
             ReadResponse result = message.payload;
             if (!result.isDigestQuery())
+            {
+                if (result.digest() == null)
+                {
+                    ByteBuffer digest = ColumnFamily.digest(result.row().cf);
+                    if (!result.updateDigest(digest))
+                        assert digest.equals(result.digest()) :
+                               String.format("Digest mismatch : %s vs %s", digest.array(), result.digest().array());
+                }
                 return result.row();
+            }
         }
         return null;
     }
@@ -81,7 +90,17 @@ public class RowDigestResolver extends AbstractRowResolver
             {
                 // note that this allows for multiple data replies, post-CASSANDRA-5932
                 data = response.row().cf;
-                newDigest = ColumnFamily.digest(data);
+                if (response.digest() == null)
+                {
+                    newDigest = ColumnFamily.digest(data);
+                    if (!message.payload.updateDigest(newDigest))
+                        assert newDigest.equals(message.payload.digest()) :
+                               String.format("Digest mismatch : %s vs %s", newDigest.array(), message.payload.digest().array());
+                }
+                else
+                {
+                    newDigest = response.digest();
+                }
             }
 
             if (digest == null)
