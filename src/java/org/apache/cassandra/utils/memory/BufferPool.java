@@ -109,7 +109,12 @@ public class BufferPool
 
     public static void put(ByteBuffer buffer)
     {
-        if (!(DISABLED || buffer.hasArray()))  // benedict: did you mean bitwise | for performance or was it a typo?
+        if (!(DISABLED || buffer.hasArray()))  // stef: I meant the bitwise |, but more for stylistic reasons
+                                               // (I prefer to use it where I know what the likely outcome of the first
+                                               // guard is known, and the second guard is not dependent on the first).
+                                               // This should help the branch predictor not waste as many slots.
+                                               // I shouldn't have really messed with this though, since that's up to you,
+                                               // and not likely noticeable in any way.
             localPool.get().put(buffer);
     }
 
@@ -201,9 +206,27 @@ public class BufferPool
             ByteBuffer buffer = null;
             // stef: do we need this? it shouldn't be possible to race with an allocation to any Chunk here
             // since we take exclusive ownership by removing it from the CLQ
+
             // benedict: we need it if we recycle chunks before they are fully free, in that an allocation may
             // fail due to lack of space, else we can get rid of this and simply return chunks from the global pool
             // as we did initially, see also comment in LocalPool.put()
+
+            // stef: I see. I didn't realise at the time, and have just processed the code enough to understand this.
+            // (see my latest comment on JIRA, which was probably a waste of time composing, but did at least help me
+            // understand the current behaviour :)
+            // I apologise; things are pretty hectic right now
+            // My view is that we should only recycle when fully free, and that any thread should be able to do so,
+            // since it meaningfully clarifies things, and prevents the weird states I mention on JIRA.
+            // The idea of the change to prevent recycling when the owner is set was to essentially say "if the chunk
+            // is in a local allocation queue (indicated by the owner being set), it may not be recycled because the owner
+            // still is potentially using it" but once the owner decides it will never allocate from the chunk again,
+            // it is made possible to free it, and anybody may do so, but only once it is fully free
+            // This bounds our wasted memory at the size of a local allocation queue, which is pretty lightweight;
+            // we can also make it so that if on free we find that it is fully free AND we own it ourselves, we immediately
+            // recycle it, so that a dormant thread does not occupy any memory.
+            // I think this likely results in about the best mix of simplicity and characteristics, to avoid any weird corner
+            // case behaviours. WDYT? (Note this isn't an imposition, everyone's view counts, and I don't want you to feel like
+            // I'm dictating here.)
             List<Chunk> discardedChunks = new ArrayList<>(chunks.size());
             while (!chunks.isEmpty())
             {
@@ -394,6 +417,8 @@ public class BufferPool
             //   free slots.This is the current strategy. The disavantage is that we keep
             //   up to 3 chunks for as long as the thread is alive and we have the
             //   messy GlobalPool.getFromExistingChunks().
+
+            // stef: see my above comment. thanks for clarifying where I had been totally unclear before :)
         }
 
         @VisibleForTesting
