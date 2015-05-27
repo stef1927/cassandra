@@ -137,7 +137,7 @@ public class LongBufferPoolTest
                     }
                     catch (Exception ex)
                     {
-                        logger.error("Got exception {}, latest size {}, current chunk {}",
+                        logger.error("Got exception {}, latest requested size {}, current chunk {}",
                                      ex.getMessage(),
                                      size,
                                      BufferPool.currentChunk());

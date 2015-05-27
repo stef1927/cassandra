@@ -18,12 +18,15 @@
 
 package org.apache.cassandra.utils.memory;
 
+import java.lang.ref.PhantomReference;
+import java.lang.ref.ReferenceQueue;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 
+import org.apache.cassandra.concurrent.NamedThreadFactory;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.NoSpamLogger;
 
@@ -78,7 +81,7 @@ public class BufferPool
 
     public static ByteBuffer get(int size, boolean direct)
     {
-        if (DISABLED | !direct)
+        if (DISABLED || !direct) // benedict: did you mean bitwise | for performance or was it a typo?
             return allocate(size, !direct);
         else
             return takeFromPool(size, !direct);
@@ -104,7 +107,7 @@ public class BufferPool
 
     public static void put(ByteBuffer buffer)
     {
-        if (!(DISABLED | buffer.hasArray()))
+        if (!(DISABLED || buffer.hasArray()))  // benedict: did you mean bitwise | for performance or was it a typo?
             localPool.get().put(buffer);
     }
 
@@ -119,13 +122,20 @@ public class BufferPool
     @VisibleForTesting
     static Chunk currentChunk()
     {
-        return localPool.get().chunks.peekFirst();
+        return localPool.get().chunks[0];
     }
 
     @VisibleForTesting
     static int numChunks()
     {
-        return localPool.get().chunks.size();
+        int ret = 0;
+        for (Chunk chunk : localPool.get().chunks)
+        {
+            if (chunk != null)
+                ret++;
+        }
+
+        return ret;
     }
 
     public static long sizeInBytes()
@@ -180,13 +190,18 @@ public class BufferPool
         }
 
         /**
-         * Scan the existing chunks until we find one that can allocate the buffer with the requested size
+         * Scan the existing chunks until we find one that can allocate the buffer with the requested size.
+         * Since existing chunks are not necessarily fully free we may find a chunk that has not enough space
+         * so we add it to the discaredChunks list and then put it back.
          */
         private ByteBuffer getFromExistingChunks(int size)
         {
             ByteBuffer buffer = null;
             // stef: do we need this? it shouldn't be possible to race with an allocation to any Chunk here
             // since we take exclusive ownership by removing it from the CLQ
+            // benedict: we need it if we recycle chunks before they are fully free, in that an allocation may
+            // fail due to lack of space, else we can get rid of this and simply return chunks from the global pool
+            // as we did initially, see also comment in LocalPool.put()
             List<Chunk> discardedChunks = new ArrayList<>(chunks.size());
             while (!chunks.isEmpty())
             {
@@ -268,12 +283,12 @@ public class BufferPool
     static final class LocalPool
     {
         private final static BufferPoolMetrics metrics = new BufferPoolMetrics();
-        // stef: currently you don't remove any items from this queue. also, it no longer needs to be a CLQ
-        // I would prefer it if we updated this to a simple array (or, possibly, an ArrayDeque) that we impose
-        // a size limit of just, say, 3, and we just keep the largest two if we need to allocate a fourth.
-        // we should also try to allocate from the newest segment _last_ so that we get a chance to eliminate the
-        // older ones.
-        private final Deque<Chunk> chunks = new ConcurrentLinkedDeque<>();
+        private final Chunk[] chunks = new Chunk[3];
+
+        public LocalPool()
+        {
+            localPoolReferences.add(new LocalPoolRef(this, localPoolRefQueue));
+        }
 
         private ByteBuffer getFromGlobalPool(int size)
         {
@@ -281,13 +296,31 @@ public class BufferPool
             if (buffer == null)
                 return null;
 
-            Chunk chunk = Chunk.getParentChunk(buffer);
-            assert chunk != null;
-            assert chunk.owner == null;
+            addChunk(Chunk.getParentChunk(buffer));
 
-            chunk.setOwner(this);
-            chunks.addFirst(chunk);
             return buffer;
+        }
+
+        private void addChunk(Chunk chunk)
+        {
+            assert chunk != null;
+
+            int smallestChunkIdx = -1;
+            for (int i = 0; i < chunks.length; i++)
+            {
+                if (chunks[i] == null)
+                {
+                    chunks[i] = chunk;
+                    return;
+                }
+
+                if (smallestChunkIdx == -1 ||
+                    chunks[i].free() < chunks[smallestChunkIdx].free())
+                    smallestChunkIdx = i;
+            }
+
+            globalPool.recycle(chunks[smallestChunkIdx]);
+            chunks[smallestChunkIdx] = chunk;
         }
 
         public ByteBuffer get(int size, boolean onHeap)
@@ -300,9 +333,12 @@ public class BufferPool
                 return allocate(size, onHeap);
             }
 
-            for (Chunk chunk : chunks)
+            for (int i = chunks.length-1; i >= 0; i--)
             { // first see if our own chunks can serve this buffer
-                ByteBuffer buffer = chunk.get(size);
+                if (chunks[i] == null)
+                    continue;
+
+                ByteBuffer buffer = chunks[i].get(size);
                 if (buffer != null)
                     return buffer;
             }
@@ -336,22 +372,94 @@ public class BufferPool
                 return;
             }
 
+
             chunk.free(buffer);
-            // stef: good point about thread death. this is still a risk though. we should probably introduce a PhantomReference
-            // so that we can cleanup when we get collected
+
+            // benedict: we cannot recycle directly from free()
+            // because that includes the macro chunks of the global pool
+            // and so we'd have to call it here and we'd also have to be
+            // careful to avoid races so that it doesn't get recycled multiple times.
+
+            // I am still not clear which strategy we are aiming for however:
+            // - should we recycle only chunks that are completely free, the
+            //   advantage would be that we could get rid of
+            //   GlobalPool.getFromExistingChunks(), see comment in there.
+            //   We'd have to however find a way to avoid races between threads.
+            // or
+            // - should we allow only the owning thread to recycle chunks that
+            //   it no longe references, regardless of whether they are free,
+            //   knowing that any threads can free the remaining slots and reuse the
+            //   free slots.This is the current strategy. The disavantage is that we keep
+            //   up to 3 chunks for as long as the thread is alive and we have the
+            //   messy GlobalPool.getFromExistingChunks().
         }
 
         @VisibleForTesting
         void reset()
         {
-            while (!chunks.isEmpty())
+            for (int i = 0; i < chunks.length; i++)
             {
-                Chunk chunk = chunks.poll();
-                chunk.freeSlots = -1L;
-                chunk.owner = null;
-                chunk.maybeRecycle();
+                if (chunks[i] != null)
+                {
+                    chunks[i].freeSlots = -1L;
+                    globalPool.recycle(chunks[i]);
+                    chunks[i] = null;
+                }
             }
         }
+    }
+
+    private static final class LocalPoolRef extends  PhantomReference<LocalPool>
+    {
+        private final Chunk[] chunks;
+        public LocalPoolRef(LocalPool localPool, ReferenceQueue<? super LocalPool> q)
+        {
+            super(localPool, q);
+            chunks = localPool.chunks;
+        }
+
+        public void release()
+        {
+            for (Chunk chunk : chunks)
+            {
+                if (chunk != null)
+                    globalPool.recycle(chunk);
+            }
+        }
+    }
+
+    // benedict : I understand this is required to keep the phantom reference from being GC-ed or can we do without?
+    private static final ConcurrentLinkedQueue<LocalPoolRef> localPoolReferences = new ConcurrentLinkedQueue<>();
+
+    private static final ReferenceQueue<Object> localPoolRefQueue = new ReferenceQueue<>();
+    private static final ExecutorService EXEC = Executors.newFixedThreadPool(1, new NamedThreadFactory("LocalPool-Cleaner"));
+    static
+    {
+        EXEC.execute(new Runnable()
+        {
+            public void run()
+            {
+                try
+                {
+                    while (true)
+                    {
+                        Object obj = localPoolRefQueue.remove();
+                        if (obj instanceof LocalPoolRef)
+                        {
+                            ((LocalPoolRef) obj).release();
+                            localPoolReferences.remove(obj);
+                        }
+                    }
+                }
+                catch (InterruptedException e)
+                {
+                }
+                finally
+                {
+                    EXEC.execute(this);
+                }
+            }
+        });
     }
 
     private static ByteBuffer allocateDirectAligned(int capacity)
@@ -402,11 +510,6 @@ public class BufferPool
 
         private volatile long freeSlots;
         private static final AtomicLongFieldUpdater<Chunk> atomicFreeSlotUpdater = AtomicLongFieldUpdater.newUpdater(Chunk.class, "freeSlots");
-
-        // the pool that is _currently allocating_ from this Chunk
-        // if this is set, it means the chunk may not be recycled because we may still allocate from it;
-        // if it has been unset the local pool has finished with it, and it may be recycled
-        private volatile LocalPool owner;
 
         public Chunk(ByteBuffer slab)
         {
@@ -460,8 +563,6 @@ public class BufferPool
             if (attachment instanceof Ref)
                 ((Ref<Chunk>) attachment).release();
 
-            // stef: i'd prefer to keep CAS to an absolute minimum, and we already check (through assertion)
-            // that we don't double-free in the caller
             return true;
         }
 
@@ -475,9 +576,12 @@ public class BufferPool
                 FileUtils.clean(slab);
         }
 
-        public void setOwner(LocalPool owner)
+        @VisibleForTesting
+        long setFreeSlots(long val)
         {
-            this.owner = owner;
+            long ret = freeSlots;
+            freeSlots = val;
+            return ret;
         }
 
         public int capacity()
@@ -499,19 +603,6 @@ public class BufferPool
         int free()
         {
             return Long.bitCount(freeSlots) * unit();
-        }
-
-        /**
-         * Return the slab to the global pool if this is invoked
-         * by the correct owner.
-         */
-        public boolean maybeRecycle()
-        {
-            if (this.owner != null)
-                return false;
-
-            globalPool.recycle(this);
-            return true;
         }
 
         /**
@@ -568,7 +659,7 @@ public class BufferPool
                     return null;
 
                 // remove this bit from our searchMask, so we don't return here next round
-                searchMask ^= 1 << index;
+                searchMask ^= 1L << index;
                 // if our bits occur starting at the index, remove ourselves from the bitmask and return
                 long candidate = slotBits << index;
                 if ((candidate & cur) == candidate)
@@ -643,8 +734,7 @@ public class BufferPool
                     break;
             }
 
-            if (next == -1L)
-                maybeRecycle();
+            // benedict - see comment in LocalPool.put()
         }
 
         @Override
