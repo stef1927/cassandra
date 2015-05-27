@@ -23,13 +23,15 @@ package org.apache.cassandra.io.util;
 
 import com.google.common.util.concurrent.RateLimiter;
 
+import org.apache.cassandra.io.compress.BufferType;
+
 public class ThrottledReader extends RandomAccessReader
 {
     private final RateLimiter limiter;
 
     protected ThrottledReader(ChannelProxy channel, long overrideLength, RateLimiter limiter)
     {
-        super(channel, BufferPool.DEFAULT_BUFFER_SIZE, overrideLength, BufferType.ON_HEAP);
+        super(channel, RandomAccessReader.DEFAULT_BUFFER_SIZE, overrideLength, BufferType.ON_HEAP);
         this.limiter = limiter;
     }
 

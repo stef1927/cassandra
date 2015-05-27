@@ -25,8 +25,10 @@ import java.util.concurrent.*;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 
+import org.apache.cassandra.io.compress.BufferType;
 import org.apache.cassandra.io.util.RandomAccessReader;
 
 import static org.junit.Assert.*;
@@ -436,7 +438,7 @@ public class BufferPoolTest
     @Test
     public void testHeapBuffer()
     {
-        ByteBuffer buffer = BufferPool.get(1024, false);
+        ByteBuffer buffer = BufferPool.get(1024, BufferType.ON_HEAP);
         assertNotNull(buffer);
         assertEquals(1024, buffer.capacity());
         assertFalse(buffer.isDirect());
@@ -760,13 +762,13 @@ public class BufferPoolTest
         System.gc();
     }
 
-    @Test
+    @Ignore
     public void testMultipleThreadsReleaseSameBuffer() throws InterruptedException
     {
         doMultipleThreadsReleaseBuffers(45, 4096);
     }
 
-    @Test
+    @Ignore
     public void testMultipleThreadsReleaseDifferentBuffer() throws InterruptedException
     {
         doMultipleThreadsReleaseBuffers(45, 4096, 8192);

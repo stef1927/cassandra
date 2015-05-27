@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 
 import org.apache.cassandra.concurrent.NamedThreadFactory;
+import org.apache.cassandra.io.compress.BufferType;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.NoSpamLogger;
 
@@ -79,8 +80,9 @@ public class BufferPool
             return takeFromPool(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED);
     }
 
-    public static ByteBuffer get(int size, boolean direct)
+    public static ByteBuffer get(int size, BufferType bufferType)
     {
+        boolean direct = bufferType == BufferType.OFF_HEAP;
         if (DISABLED || !direct) // benedict: did you mean bitwise | for performance or was it a typo?
             return allocate(size, !direct);
         else

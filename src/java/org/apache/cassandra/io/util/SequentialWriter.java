@@ -153,7 +153,7 @@ public class SequentialWriter extends OutputStream implements WritableByteChanne
      */
     public static SequentialWriter open(File file)
     {
-        return new SequentialWriter(file, BufferPool.DEFAULT_BUFFER_SIZE, BufferType.ON_HEAP);
+        return new SequentialWriter(file, DEFAULT_BUFFER_SIZE, BufferType.ON_HEAP);
     }
 
     public static ChecksummedSequentialWriter open(File file, File crcPath)
