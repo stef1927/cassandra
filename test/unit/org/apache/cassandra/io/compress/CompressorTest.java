@@ -195,7 +195,7 @@ public class CompressorTest
     {
         try
         {
-        int n = RandomAccessReader.DEFAULT_BUFFER_SIZE;
+            int n = RandomAccessReader.DEFAULT_BUFFER_SIZE;
             byte[] srcData = new byte[n];
             new Random().nextBytes(srcData);
 

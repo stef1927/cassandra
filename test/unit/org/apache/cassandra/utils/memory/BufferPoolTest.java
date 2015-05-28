@@ -754,12 +754,12 @@ public class BufferPoolTest
         finished.await();
         assertEquals(0, executorService.shutdownNow().size());
 
-        executorService = null;
-
         // Make sure thread local storage gets GC-ed
-        System.gc();
-        System.gc();
-        System.gc();
+        for (int i = 0; i < 5; i++)
+        {
+            System.gc();
+            Thread.sleep(100);
+        }
     }
 
     @Ignore
