@@ -32,6 +32,7 @@ import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.NoSpamLogger;
 
 import com.google.common.annotations.VisibleForTesting;
+import org.cliffc.high_scale_lib.NonBlockingHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,6 +57,9 @@ public class BufferPool
     @VisibleForTesting
     public static boolean DISABLED = Boolean.parseBoolean(System.getProperty("cassandra.test.disable_buffer_pool", "false"));
 
+    @VisibleForTesting
+    public static boolean DEBUG = false;
+
     private static final Logger logger = LoggerFactory.getLogger(BufferPool.class);
     private static final NoSpamLogger noSpamLogger = NoSpamLogger.getLogger(logger, 15L, TimeUnit.MINUTES);
     private static final ByteBuffer EMPTY_BUFFER = ByteBuffer.allocateDirect(0);
@@ -77,7 +81,15 @@ public class BufferPool
         if (DISABLED)
             return allocate(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED);
         else
-            return takeFromPool(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED);
+            return takeFromPool(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED, false);
+    }
+
+    public static ByteBuffer tryGet(int size)
+    {
+        if (DISABLED)
+            return allocate(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED);
+        else
+            return takeFromPool(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED, true);
     }
 
     public static ByteBuffer get(int size, BufferType bufferType)
@@ -86,7 +98,7 @@ public class BufferPool
         if (DISABLED | !direct)
             return allocate(size, !direct);
         else
-            return takeFromPool(size, !direct);
+            return takeFromPool(size, !direct, false);
     }
 
     private static ByteBuffer allocate(int size, boolean onHeap)
@@ -96,7 +108,7 @@ public class BufferPool
                : ByteBuffer.allocateDirect(size);
     }
 
-    private static ByteBuffer takeFromPool(int size, boolean allocateOnHeapWhenExhausted)
+    private static ByteBuffer takeFromPool(int size, boolean allocateOnHeapWhenExhausted, boolean returnNullIfExhausted)
     {
         if (size < 0)
             throw new IllegalArgumentException("Size must be positive (" + size + ")");
@@ -104,7 +116,7 @@ public class BufferPool
         if (size == 0)
             return EMPTY_BUFFER;
 
-        return localPool.get().get(size, allocateOnHeapWhenExhausted);
+        return localPool.get().get(size, allocateOnHeapWhenExhausted, returnNullIfExhausted);
     }
 
     public static void put(ByteBuffer buffer)
@@ -136,13 +148,38 @@ public class BufferPool
             if (chunk != null)
                 ret++;
         }
-
         return ret;
+    }
+
+    @VisibleForTesting
+    static void assertAllRecycled()
+    {
+        globalPool.debug.check();
     }
 
     public static long sizeInBytes()
     {
         return globalPool.sizeInBytes();
+    }
+
+    static final class Debug
+    {
+        long recycleRound = 1;
+        final Queue<Chunk> allChunks = new ConcurrentLinkedQueue<>();
+        void register(Chunk chunk)
+        {
+            allChunks.add(chunk);
+        }
+        void recycle(Chunk chunk)
+        {
+            chunk.lastRecycled = recycleRound;
+        }
+        void check()
+        {
+            for (Chunk chunk : allChunks)
+                assert chunk.lastRecycled == recycleRound;
+            recycleRound++;
+        }
     }
 
     /**
@@ -171,6 +208,7 @@ public class BufferPool
                             ALLOCATE_ON_HEAP_WHEN_EXAHUSTED ? "on heap" : "off heap");
         }
 
+        private final Debug debug = new Debug();
         private final Queue<Chunk> macroChunks = new ConcurrentLinkedQueue<>();
         // TODO (future): it would be preferable to use a CLStack to improve cache occupancy; it would also be preferable to use "CoreLocal" storage
         private final Queue<Chunk> chunks = new ConcurrentLinkedQueue<>();
@@ -212,10 +250,14 @@ public class BufferPool
 
             // allocate a large chunk
             Chunk chunk = new Chunk(allocateDirectAligned(MACRO_CHUNK_SIZE));
+            chunk.acquire(null);
             macroChunks.add(chunk);
             for (int i = 0 ; i < MACRO_CHUNK_SIZE ; i += CHUNK_SIZE)
             {
-                chunks.add(new Chunk(chunk.get(CHUNK_SIZE)));
+                Chunk add = new Chunk(chunk.get(CHUNK_SIZE));
+                chunks.add(add);
+                if (DEBUG)
+                    debug.register(add);
             }
 
             return true;
@@ -252,47 +294,53 @@ public class BufferPool
     static final class LocalPool
     {
         private final static BufferPoolMetrics metrics = new BufferPoolMetrics();
+        // a microqueue of Chunks:
+        //  * if any are null, they are at the end;
+        //  * new Chunks are added to the last null index
+        //  * if no null indexes available, the smallest is swapped with the last index, and this replaced
+        //  * this results in a queue that will typically be visited in ascending order of available space, so that
+        //    small allocations preferentially slice from the Chunks with the smallest space available to furnish them
+        // WARNING: if we ever change the size of this, we must update removeFromLocalQueue, and addChunk
         private final Chunk[] chunks = new Chunk[3];
+        private byte chunkCount = 0;
 
         public LocalPool()
         {
             localPoolReferences.add(new LocalPoolRef(this, localPoolRefQueue));
         }
 
-        private ByteBuffer getFromGlobalPool(int size)
+        private Chunk addChunkFromGlobalPool()
         {
             Chunk chunk = globalPool.get();
             if (chunk == null)
                 return null;
 
             addChunk(chunk);
-            return chunk.get(size);
+            return chunk;
         }
 
         private void addChunk(Chunk chunk)
         {
-            assert chunk.owner == null;
             chunk.acquire(this);
 
-            int smallestChunkIdx = -1;
-            for (int i = 0; i < chunks.length; i++)
+            if (chunkCount < 3)
             {
-                if (chunks[i] == null)
-                {
-                    chunks[i] = chunk;
-                    return;
-                }
-
-                if (smallestChunkIdx == -1 ||
-                    chunks[i].free() < chunks[smallestChunkIdx].free())
-                    smallestChunkIdx = i;
+                chunks[chunkCount++] = chunk;
+                return;
             }
 
+            int smallestChunkIdx = 0;
+            if (chunks[1].free() < chunks[0].free())
+                smallestChunkIdx = 1;
+            if (chunks[2].free() < chunks[smallestChunkIdx].free())
+                smallestChunkIdx = 2;
+
             chunks[smallestChunkIdx].release();
-            chunks[smallestChunkIdx] = chunk;
+            chunks[smallestChunkIdx] = chunks[2];
+            chunks[2] = chunk;
         }
 
-        public ByteBuffer get(int size, boolean onHeap)
+        public ByteBuffer get(int size, boolean onHeap, boolean returnNullIfExhausted)
         {
             if (size > CHUNK_SIZE)
             {
@@ -302,23 +350,26 @@ public class BufferPool
                 return allocate(size, onHeap);
             }
 
-            for (int i = chunks.length-1; i >= 0; i--)
+            for (Chunk chunk : chunks)
             { // first see if our own chunks can serve this buffer
-                if (chunks[i] == null)
-                    continue;
+                if (chunk == null)
+                    break;
 
-                ByteBuffer buffer = chunks[i].get(size);
+                ByteBuffer buffer = chunk.get(size);
                 if (buffer != null)
                     return buffer;
             }
 
             // else ask the global pool
-            ByteBuffer buffer = getFromGlobalPool(size);
-            if (buffer != null)
-                return buffer;
+            Chunk chunk = addChunkFromGlobalPool();
+            if (chunk != null)
+                return chunk.get(size);
 
             if (logger.isTraceEnabled())
                 logger.trace("Requested buffer size {} has been allocated directly due to lack of capacity", size);
+
+            if (returnNullIfExhausted)
+                return null;
 
             return allocate(size, onHeap);
         }
@@ -341,19 +392,55 @@ public class BufferPool
                 return;
             }
 
-            chunk.free(buffer);
-            chunk.maybeRecycle();
+            LocalPool owner = chunk.owner;
+            // ask the free method to take exclusive ownership of the act of recycling
+            // if we are either: already not owned by anyone, or owned by ourselves
+            long free = chunk.free(buffer, owner == null | owner == this);
+            if (free == 0L)
+            {
+                // 0L => we own recycling responsibility, so must recycle;
+                chunk.recycle();
+                // if we are also the owner, we must remove the Chunk from our local queue
+                if (owner == this)
+                    removeFromLocalQueue(chunk);
+            }
+            else if (((free == -1L) & owner != this) && chunk.owner == null)
+            {
+                // although we try to take recycle ownership cheaply, it is not always possible to do so if the owner is racing to unset.
+                // we must also check after completely freeing if the owner has since been unset, and try to recycle
+                chunk.tryRecycle();
+            }
+        }
+
+        private void removeFromLocalQueue(Chunk chunk)
+        {
+            // since we only have three elements in the queue, it is clearer, easier and faster to just hard code the options
+            if (chunks[0] == chunk)
+            {   // remove first by shifting back second two
+                chunks[0] = chunks[1];
+                chunks[1] = chunks[2];
+            }
+            else if (chunks[1] == chunk)
+            {   // remove second by shifting back last
+                chunks[1] = chunks[2];
+            }
+            else assert chunks[2] == chunk;
+            // whatever we do, the last element myst be null
+            chunks[2] = null;
+            chunkCount--;
         }
 
         @VisibleForTesting
         void reset()
         {
+            chunkCount = 0;
             for (int i = 0; i < chunks.length; i++)
             {
                 if (chunks[i] != null)
                 {
-                    chunks[i].setFreeSlots(-1L);
-                    chunks[i].release();
+                    chunks[i].owner = null;
+                    chunks[i].freeSlots = 0L;
+                    chunks[i].recycle();
                     chunks[i] = null;
                 }
             }
@@ -371,10 +458,13 @@ public class BufferPool
 
         public void release()
         {
-            for (Chunk chunk : chunks)
+            for (int i = 0 ; i < chunks.length ; i++)
             {
-                if (chunk != null)
-                    chunk.release();
+                if (chunks[i] != null)
+                {
+                    chunks[i].release();
+                    chunks[i] = null;
+                }
             }
         }
     }
@@ -456,44 +546,51 @@ public class BufferPool
     {
         private final ByteBuffer slab;
         private final long baseAddress;
-        private final long shift;
+        private final int shift;
 
         private volatile long freeSlots;
-        private static final AtomicLongFieldUpdater<Chunk> atomicFreeSlotUpdater = AtomicLongFieldUpdater.newUpdater(Chunk.class, "freeSlots");
+        private static final AtomicLongFieldUpdater<Chunk> freeSlotsUpdater = AtomicLongFieldUpdater.newUpdater(Chunk.class, "freeSlots");
 
         // the pool that is _currently allocating_ from this Chunk
         // if this is set, it means the chunk may not be recycled because we may still allocate from it;
         // if it has been unset the local pool has finished with it, and it may be recycled
         private volatile LocalPool owner;
+        private long lastRecycled;
+        private final Chunk original;
 
-        public Chunk(ByteBuffer slab)
+        Chunk(Chunk recycle)
+        {
+            assert recycle.freeSlots == 0L;
+            this.slab = recycle.slab;
+            this.baseAddress = recycle.baseAddress;
+            this.shift = recycle.shift;
+            this.freeSlots = -1L;
+            this.original = recycle.original;
+            if (DEBUG)
+                globalPool.debug.recycle(original);
+        }
+
+        Chunk(ByteBuffer slab)
         {
             assert !slab.hasArray();
-
             this.slab = slab;
             this.baseAddress = MemoryUtil.getAddress(slab);
 
             // The number of bits by which we need to shift to obtain a unit
             // "31 &" is because numberOfTrailingZeros returns 32 when the capacity is zero
             this.shift = 31 & (Integer.numberOfTrailingZeros(slab.capacity() / 64));
-
-            acquire(null);
+            // -1 means all free whilst 0 means all in use
+            this.freeSlots = slab.capacity() == 0 ? 0L : -1L;
+            this.original = DEBUG ? this : null;
         }
 
         /**
          * Acquire the chunk for future allocations: set the owner and prep
          * the free slots mask.
          */
-        public void acquire(LocalPool owner)
+        void acquire(LocalPool owner)
         {
-            // -1 means all free whilst 0 means all in use
-            this.freeSlots = slab.capacity() == 0 ? 0 : -1;
-
-            setOwner(owner);
-        }
-
-        public void setOwner(LocalPool owner)
-        {
+            assert this.owner == null;
             this.owner = owner;
         }
 
@@ -502,28 +599,23 @@ public class BufferPool
          * This method must be called by the LocalPool when it is certain that
          * the local pool shall never try to allocate any more buffers from this chunk.
          */
-        public void release()
+        void release()
         {
-            setOwner(null);
-            maybeRecycle();
+            this.owner = null;
+            tryRecycle();
         }
 
-        /**
-         * Return the chunk to the global pool if it has no owner and if it is free
-         * taking care not to race by cas-ing the free slots to zero.
-         */
-        public boolean maybeRecycle()
+        void tryRecycle()
         {
-            if (owner != null)
-                return false;
+            assert owner == null;
+            if (isFree() && freeSlotsUpdater.compareAndSet(this, -1L, 0L))
+                recycle();
+        }
 
-            if (!isFree())
-                return false;
-
-            if (atomicFreeSlotUpdater.compareAndSet(this, -1L, 0))
-                globalPool.recycle(this);
-
-            return true;
+        void recycle()
+        {
+            assert freeSlots == 0L;
+            globalPool.recycle(new Chunk(this));
         }
 
         /**
@@ -531,7 +623,7 @@ public class BufferPool
          * that was returned by get(), this method simply
          * retrives the chunk that sliced a buffer, if any.
          */
-        public static Chunk getParentChunk(ByteBuffer buffer)
+        static Chunk getParentChunk(ByteBuffer buffer)
         {
             Object attachment = MemoryUtil.getAttachment(buffer);
 
@@ -544,7 +636,7 @@ public class BufferPool
             return null;
         }
 
-        public ByteBuffer setAttachment(ByteBuffer buffer)
+        ByteBuffer setAttachment(ByteBuffer buffer)
         {
             if (Ref.DEBUG_ENABLED)
                 MemoryUtil.setAttachment(buffer, new Ref<>(this, null));
@@ -554,7 +646,7 @@ public class BufferPool
             return buffer;
         }
 
-        public boolean releaseAttachment(ByteBuffer buffer)
+        boolean releaseAttachment(ByteBuffer buffer)
         {
             Object attachment = MemoryUtil.getAttachment(buffer);
             if (attachment == null)
@@ -571,7 +663,7 @@ public class BufferPool
         {
             Chunk parent = getParentChunk(slab);
             if (parent != null)
-                parent.free(slab);
+                parent.free(slab, false);
             else
                 FileUtils.clean(slab);
         }
@@ -584,7 +676,7 @@ public class BufferPool
             return ret;
         }
 
-        public int capacity()
+        int capacity()
         {
             return 64 << shift;
         }
@@ -609,7 +701,7 @@ public class BufferPool
          * Return the next available slice of this size. If
          * we have exceeded the capacity we return null.
          */
-        public ByteBuffer get(int size)
+        ByteBuffer get(int size)
         {
             // how many multiples of our units is the size?
             // we add (unit - 1), so that when we divide by unit (>>> shift), we effectively round up
@@ -670,7 +762,7 @@ public class BufferPool
                     while (true)
                     {
                         // clear the candidate bits (freeSlots &= ~candidate)
-                        if (atomicFreeSlotUpdater.compareAndSet(this, cur, cur & ~candidate))
+                        if (freeSlotsUpdater.compareAndSet(this, cur, cur & ~candidate))
                             break;
 
                         cur = freeSlots;
@@ -695,17 +787,19 @@ public class BufferPool
          */
         int roundUp(int v)
         {
-            int mask = unit() - 1;
-            return (v + mask) & ~mask;
+            return BufferPool.roundUp(v, unit());
         }
 
         /**
-         * Release a buffer.
+         * Release a buffer. Return:
+         *    0L if the buffer must be recycled after the call;
+         *   -1L if it is free (and so we should tryRecycle if owner is now null)
+         *    some other value otherwise
          **/
-        public void free(ByteBuffer buffer)
+        long free(ByteBuffer buffer, boolean tryRelease)
         {
             if (!releaseAttachment(buffer))
-                return;
+                return 1L;
 
             long address = MemoryUtil.getAddress(buffer);
             assert (address >= baseAddress) & (address <= baseAddress + capacity());
@@ -732,8 +826,10 @@ public class BufferPool
                 long cur = freeSlots;
                 next = cur | shiftedSlotBits;
                 assert next == (cur ^ shiftedSlotBits); // ensure no double free
-                if (atomicFreeSlotUpdater.compareAndSet(this, cur, next))
-                    break;
+                if (tryRelease & (next == -1L))
+                    next = 0L;
+                if (freeSlotsUpdater.compareAndSet(this, cur, next))
+                    return next;
             }
         }
 
@@ -742,5 +838,17 @@ public class BufferPool
         {
             return String.format("[slab %s, slots bitmap %s, capacity %d, free %d]", slab, Long.toBinaryString(freeSlots), capacity(), free());
         }
+    }
+
+    @VisibleForTesting
+    public static int roundUpNormal(int size)
+    {
+        return roundUp(size, CHUNK_SIZE / 64);
+    }
+
+    private static int roundUp(int size, int unit)
+    {
+        int mask = unit - 1;
+        return (size + mask) & ~mask;
     }
 }

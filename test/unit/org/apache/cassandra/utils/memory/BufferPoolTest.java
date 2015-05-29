@@ -63,7 +63,7 @@ public class BufferPoolTest
         assertEquals(BufferPool.GlobalPool.MACRO_CHUNK_SIZE, BufferPool.sizeInBytes());
 
         BufferPool.put(buffer);
-        assertEquals(chunk, BufferPool.currentChunk());
+        assertEquals(null, BufferPool.currentChunk());
         assertEquals(BufferPool.GlobalPool.MACRO_CHUNK_SIZE, BufferPool.sizeInBytes());
     }
 
@@ -114,7 +114,7 @@ public class BufferPoolTest
         BufferPool.put(buffer1);
         BufferPool.put(buffer2);
 
-        assertEquals(chunk, BufferPool.currentChunk());
+        assertEquals(null, BufferPool.currentChunk());
         assertEquals(BufferPool.GlobalPool.MACRO_CHUNK_SIZE, BufferPool.sizeInBytes());
     }
 
@@ -220,12 +220,12 @@ public class BufferPoolTest
         for (ByteBuffer buffer : buffers1)
             BufferPool.put(buffer);
 
-        assertEquals(2, BufferPool.numChunks());
+        assertEquals(1, BufferPool.numChunks());
 
         for (ByteBuffer buffer : buffers2)
             BufferPool.put(buffer);
 
-        assertEquals(2, BufferPool.numChunks());
+        assertEquals(0, BufferPool.numChunks());
 
         buffers2.clear();
     }
@@ -319,10 +319,13 @@ public class BufferPoolTest
             BufferPool.put(buffer);
 
             freeSize += size;
-            assertEquals(freeSize, chunk.free());
+            if (freeSize == chunk.capacity())
+                assertEquals(0, chunk.free());
+            else
+                assertEquals(freeSize, chunk.free());
         }
 
-        assertTrue(chunk.isFree());
+        assertFalse(chunk.isFree());
     }
 
     @Test
@@ -360,8 +363,8 @@ public class BufferPoolTest
             BufferPool.put(buffer);
         }
 
-        assertEquals(chunk, BufferPool.currentChunk());
-        assertTrue(chunk.isFree());
+        assertEquals(null, BufferPool.currentChunk());
+        assertEquals(0, chunk.free());
     }
 
     @Test
@@ -394,8 +397,8 @@ public class BufferPoolTest
             BufferPool.put(buffers.get(i));
         }
 
-        assertEquals(chunk, BufferPool.currentChunk());
-        assertTrue(chunk.isFree());
+        assertEquals(null, BufferPool.currentChunk());
+        assertEquals(0, chunk.free());
     }
 
     @Test
@@ -537,9 +540,8 @@ public class BufferPoolTest
 
     private void checkBufferWithGivenSlots(int size, long freeSlots)
     {
-        //first allocate and release to make sure there is a chunk
+        //first allocate to make sure there is a chunk
         ByteBuffer buffer = BufferPool.get(size);
-        BufferPool.put(buffer);
 
         // now get the current chunk and override the free slots mask
         BufferPool.Chunk chunk = BufferPool.currentChunk();
@@ -547,12 +549,13 @@ public class BufferPoolTest
         long oldFreeSlots = chunk.setFreeSlots(freeSlots);
 
         // now check we can still get the buffer with the free slots mask changed
-        buffer = BufferPool.get(size);
+        ByteBuffer buffer2 = BufferPool.get(size);
         assertEquals(size, buffer.capacity());
-        BufferPool.put(buffer);
+        BufferPool.put(buffer2);
 
         // reset the free slots
         chunk.setFreeSlots(oldFreeSlots);
+        BufferPool.put(buffer);
     }
 
     @Test
