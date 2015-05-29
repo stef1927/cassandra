@@ -31,7 +31,7 @@ public class ThrottledReader extends RandomAccessReader
 
     protected ThrottledReader(ChannelProxy channel, long overrideLength, RateLimiter limiter)
     {
-        super(channel, RandomAccessReader.DEFAULT_BUFFER_SIZE, overrideLength, BufferType.ON_HEAP);
+        super(channel, RandomAccessReader.DEFAULT_BUFFER_SIZE, overrideLength, BufferType.OFF_HEAP);
         this.limiter = limiter;
     }
 

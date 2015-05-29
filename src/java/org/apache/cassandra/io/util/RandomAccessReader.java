@@ -112,7 +112,7 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
 
     public static RandomAccessReader open(ChannelProxy channel, int bufferSize, long overrideSize)
     {
-        return new RandomAccessReader(channel, bufferSize, overrideSize, BufferType.ON_HEAP);
+        return new RandomAccessReader(channel, bufferSize, overrideSize, BufferType.OFF_HEAP);
     }
 
     public ChannelProxy getChannel()
