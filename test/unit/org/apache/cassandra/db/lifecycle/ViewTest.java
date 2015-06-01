@@ -53,14 +53,20 @@ public class ViewTest
             {
                 RowPosition min = MockSchema.readerBounds(i);
                 RowPosition max = MockSchema.readerBounds(j);
-                for (boolean minInc : new boolean[] { true, false} )
+                for (boolean minInc : new boolean[] { true, false } )
                 {
-                    for (boolean maxInc : new boolean[] { true, false} )
+                    for (boolean maxInc : new boolean[] { true, false } )
                     {
                         if (i == j && !(minInc && maxInc))
                             continue;
                         List<SSTableReader> r = initialView.sstablesInBounds(AbstractBounds.bounds(min, minInc, max, maxInc));
-                        Assert.assertEquals(String.format("%d(%s) %d(%s)", i, minInc, j, maxInc), j - i + (minInc ? 0 : -1) + (maxInc ? 1 : 0), r.size());
+                        Assert.assertEquals(String.format("%c%d,%d%c interval has wrong number of tables",
+                                                          minInc ? '[' : '(',
+                                                          i,
+                                                          j,
+                                                          maxInc ? ']' : ')'),
+                                            j - i + (minInc ? 0 : -1) + (maxInc ? 1 : 0),
+                                            r.size());
                     }
                 }
             }
