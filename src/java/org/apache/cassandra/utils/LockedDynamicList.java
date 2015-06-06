@@ -17,14 +17,8 @@
  */
 package org.apache.cassandra.utils;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.TreeSet;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-import org.apache.cassandra.stress.generate.FasterRandom;
 
 // simple thread-unsafe skiplist that permits indexing/removal by position, insertion at the end
 // (though easily extended to insertion at any position, not necessary here)
