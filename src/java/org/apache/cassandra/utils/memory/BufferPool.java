@@ -32,7 +32,6 @@ import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.NoSpamLogger;
 
 import com.google.common.annotations.VisibleForTesting;
-import org.cliffc.high_scale_lib.NonBlockingHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -81,15 +80,7 @@ public class BufferPool
         if (DISABLED)
             return allocate(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED);
         else
-            return takeFromPool(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED, false);
-    }
-
-    public static ByteBuffer tryGet(int size)
-    {
-        if (DISABLED)
-            return allocate(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED);
-        else
-            return takeFromPool(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED, true);
+            return takeFromPool(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED);
     }
 
     public static ByteBuffer get(int size, BufferType bufferType)
@@ -98,7 +89,16 @@ public class BufferPool
         if (DISABLED | !direct)
             return allocate(size, !direct);
         else
-            return takeFromPool(size, !direct, false);
+            return takeFromPool(size, !direct);
+    }
+
+    /** Unlike the get methods, this will return null if the pool is exhausted */
+    public static ByteBuffer tryGet(int size)
+    {
+        if (DISABLED)
+            return allocate(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED);
+        else
+            return maybeTakeFromPool(size, ALLOCATE_ON_HEAP_WHEN_EXAHUSTED);
     }
 
     private static ByteBuffer allocate(int size, boolean onHeap)
@@ -108,7 +108,19 @@ public class BufferPool
                : ByteBuffer.allocateDirect(size);
     }
 
-    private static ByteBuffer takeFromPool(int size, boolean allocateOnHeapWhenExhausted, boolean returnNullIfExhausted)
+    private static ByteBuffer takeFromPool(int size, boolean allocateOnHeapWhenExhausted)
+    {
+        ByteBuffer ret = maybeTakeFromPool(size, allocateOnHeapWhenExhausted);
+        if (ret != null)
+            return ret;
+
+        if (logger.isTraceEnabled())
+            logger.trace("Requested buffer size {} has been allocated directly due to lack of capacity", size);
+
+        return localPool.get().allocate(size, allocateOnHeapWhenExhausted);
+    }
+
+    private static ByteBuffer maybeTakeFromPool(int size, boolean allocateOnHeapWhenExhausted)
     {
         if (size < 0)
             throw new IllegalArgumentException("Size must be positive (" + size + ")");
@@ -116,7 +128,15 @@ public class BufferPool
         if (size == 0)
             return EMPTY_BUFFER;
 
-        return localPool.get().get(size, allocateOnHeapWhenExhausted, returnNullIfExhausted);
+        if (size > CHUNK_SIZE)
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("Requested buffer size {} is bigger than {}, allocating directly", size, CHUNK_SIZE);
+
+            return localPool.get().allocate(size, allocateOnHeapWhenExhausted);
+        }
+
+        return localPool.get().get(size);
     }
 
     public static void put(ByteBuffer buffer)
@@ -336,20 +356,13 @@ public class BufferPool
                 smallestChunkIdx = 2;
 
             chunks[smallestChunkIdx].release();
-            chunks[smallestChunkIdx] = chunks[2];
+            if (smallestChunkIdx != 2)
+                chunks[smallestChunkIdx] = chunks[2];
             chunks[2] = chunk;
         }
 
-        public ByteBuffer get(int size, boolean onHeap, boolean returnNullIfExhausted)
+        public ByteBuffer get(int size)
         {
-            if (size > CHUNK_SIZE)
-            {
-                if (logger.isTraceEnabled())
-                    logger.trace("Requested buffer size {} is bigger than {}, allocating directly", size, CHUNK_SIZE);
-
-                return allocate(size, onHeap);
-            }
-
             for (Chunk chunk : chunks)
             { // first see if our own chunks can serve this buffer
                 if (chunk == null)
@@ -365,22 +378,13 @@ public class BufferPool
             if (chunk != null)
                 return chunk.get(size);
 
-            if (logger.isTraceEnabled())
-                logger.trace("Requested buffer size {} has been allocated directly due to lack of capacity", size);
-
-            if (returnNullIfExhausted)
-                return null;
-
-            return allocate(size, onHeap);
+           return null;
         }
 
         private ByteBuffer allocate(int size, boolean onHeap)
         {
             metrics.misses.mark();
-
-            return onHeap
-                    ? ByteBuffer.allocate(size)
-                    : ByteBuffer.allocateDirect(size);
+            return BufferPool.allocate(size, onHeap);
         }
 
         public void put(ByteBuffer buffer)

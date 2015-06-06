@@ -412,6 +412,9 @@ public class LongBufferPoolTest
         new LongBufferPoolTest().testAllocate(Runtime.getRuntime().availableProcessors(), TimeUnit.HOURS.toNanos(2L), 16 << 20);
     }
 
+    /**
+     * A single producer, single consumer queue.
+     */
     private static final class SPSCQueue<V>
     {
         static final class Node<V>
