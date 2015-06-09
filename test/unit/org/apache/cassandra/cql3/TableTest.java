@@ -1602,10 +1602,7 @@ public class TableTest extends CQLTester
         assertInvalidThrow(SyntaxException.class, "INSERT INTO %s (k, t) VALUES (0, 2012-11-07 18:18:22-0800)");
 
         for (int i = 0; i < 4; i++)
-        {
             execute("INSERT INTO %s (k, t) VALUES (0, now())");
-            Thread.sleep(1000);
-        }
 
         Object[][] rows = getRows(execute("SELECT * FROM %s"));
         assertEquals(4, rows.length);

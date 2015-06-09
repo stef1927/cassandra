@@ -30,6 +30,7 @@ import org.apache.cassandra.dht.Murmur3Partitioner;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.exceptions.SyntaxException;
 
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 public class SecondaryIndexTest extends CQLTester
@@ -214,7 +215,7 @@ public class SecondaryIndexTest extends CQLTester
     @Test
     public void testIndexOnComposite() throws Throwable
     {
-        createTable("CREATE TABLE %s (blog_id int, timestamp int, author text, content text, PRIMARY KEY (blog_id, timestamp))");
+        String tableName = createTable("CREATE TABLE %s (blog_id int, timestamp int, author text, content text, PRIMARY KEY (blog_id, timestamp))");
 
         execute("INSERT INTO %s (blog_id, timestamp, author, content) VALUES (?, ?, ?, ?)", 0, 0, "bob", "1st post");
         execute("INSERT INTO %s (blog_id, timestamp, author, content) VALUES (?, ?, ?, ?)", 0, 1, "tom", "2nd post");
@@ -222,9 +223,9 @@ public class SecondaryIndexTest extends CQLTester
         execute("INSERT INTO %s (blog_id, timestamp, author, content) VALUES (?, ?, ?, ?)", 0, 3, "tom", "4th post");
         execute("INSERT INTO %s (blog_id, timestamp, author, content) VALUES (?, ?, ?, ?)", 1, 0, "bob", "5th post");
 
-        createIndex("CREATE INDEX ON %s(author)");
+        createIndex("CREATE INDEX authoridx ON %s (author)");
 
-        Thread.sleep(1000);
+        assertTrue(waitForIndex(keyspace(), tableName, "authoridx"));
 
         assertRows(execute("SELECT blog_id, timestamp FROM %s WHERE author = 'bob'"),
                    row(1, 0),
@@ -360,8 +361,8 @@ public class SecondaryIndexTest extends CQLTester
         assertRows(execute("SELECT k, v FROM %s WHERE l CONTAINS 2"), row(1, 0), row(0, 0));
         assertEmpty(execute("SELECT k, v FROM %s WHERE l CONTAINS 6"));
 
-                    // sets
-                    assertRows(execute("SELECT k, v FROM %s WHERE s CONTAINS 'a'"), row(0, 0), row(0, 2));
+        // sets
+        assertRows(execute("SELECT k, v FROM %s WHERE s CONTAINS 'a'"), row(0, 0), row(0, 2));
         assertRows(execute("SELECT k, v FROM %s WHERE k = 0 AND s CONTAINS 'a'"), row(0, 0), row(0, 2));
         assertRows(execute("SELECT k, v FROM %s WHERE s CONTAINS 'd'"), row(1, 1));
         assertEmpty(execute("SELECT k, v FROM %s  WHERE s CONTAINS 'e'"));
@@ -434,7 +435,6 @@ public class SecondaryIndexTest extends CQLTester
     {
         createTable("CREATE TABLE %s (username text, session_id text, app_name text, account text, last_access timestamp, created_on timestamp, PRIMARY KEY (username, session_id, app_name, account))");
 
-        // createIndex("create index ON %s (session_id)");
         createIndex("create index ON %s (app_name)");
         createIndex("create index ON %s (last_access)");
 
@@ -461,27 +461,7 @@ public class SecondaryIndexTest extends CQLTester
         execute("INSERT INTO %s (k,v) VALUES (1,1)");
 
         createIndex("CREATE INDEX testindex on %s (v)");
-
-        // wait for the index to be fully built
-        long start = System.currentTimeMillis();
-        boolean indexCreated = false;
-        while (!indexCreated)
-        {
-            Object[][] results = getRows(execute("select index_name from system.\"IndexInfo\" where table_name = ?", keyspace()));
-            for(int i = 0; i < results.length; i++)
-            {
-                if ((tableName + ".testindex").equals(results[i][0]))
-                {
-                    indexCreated = true;
-                    break;
-                }
-            }
-
-            if (System.currentTimeMillis() - start > 10000)
-                fail("Failed to build secondary index within ten seconds: %s");
-
-            Thread.sleep(100);
-        }
+        assertTrue(waitForIndex(keyspace(), tableName, "testindex"));
 
         assertRows(execute("SELECT k FROM %s WHERE v = 0"), row(0));
         cleanupCache();

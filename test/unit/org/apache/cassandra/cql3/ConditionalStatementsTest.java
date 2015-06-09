@@ -27,6 +27,7 @@ import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.exceptions.SyntaxException;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 public class ConditionalStatementsTest extends CQLTester
@@ -62,7 +63,7 @@ public class ConditionalStatementsTest extends CQLTester
     {
         createTable(" CREATE TABLE %s (k int PRIMARY KEY, v1 int, v2 text, v3 int)");
 
-        // Shouldn 't apply
+        // Shouldn't apply
         assertRows(execute("UPDATE %s SET v1 = 3, v2 = 'bar' WHERE k = 0 IF v1 = 4"), row(false));
         assertRows(execute("UPDATE %s SET v1 = 3, v2 = 'bar' WHERE k = 0 IF EXISTS"), row(false));
 
@@ -73,7 +74,7 @@ public class ConditionalStatementsTest extends CQLTester
         assertRows(execute("INSERT INTO %s (k, v1, v2) VALUES (0, 5, 'bar') IF NOT EXISTS"), row(false, 0, 2, "foo", null));
         assertRows(execute("SELECT * FROM %s"), row(0, 2, "foo", null));
 
-        // Should not apply
+        // Shouldn't apply
         assertRows(execute("UPDATE %s SET v1 = 3, v2 = 'bar' WHERE k = 0 IF v1 = 4"), row(false, 2));
         assertRows(execute("SELECT * FROM %s"), row(0, 2, "foo", null));
 
@@ -158,12 +159,12 @@ public class ConditionalStatementsTest extends CQLTester
         assertRows(execute("DELETE FROM %s WHERE k=1 IF EXISTS"), row(false));
 
         execute("UPDATE %s USING TTL 1 SET v1=2 WHERE k=1");
-        Thread.sleep(1500);
+        Thread.sleep(1001);
         assertRows(execute("DELETE FROM %s WHERE k=1 IF EXISTS"), row(false));
         assertEmpty(execute("SELECT * FROM %s WHERE k=1"));
 
         execute("INSERT INTO %s (k, v1) VALUES (2, 2) USING TTL 1");
-        Thread.sleep(1500);
+        Thread.sleep(1001);
         assertRows(execute("DELETE FROM %s WHERE k=2 IF EXISTS"), row(false));
         assertEmpty(execute("SELECT * FROM %s WHERE k=2"));
 
@@ -183,7 +184,6 @@ public class ConditionalStatementsTest extends CQLTester
         assertRows(execute("DELETE FROM %s WHERE k='k' AND i=0 IF EXISTS"), row(false));
 
         // CASSANDRA-6430
-        //if v >= "2.1.1" or v < "2.1" and v >= "2.0.11":
         assertInvalid("DELETE FROM %s WHERE k = 'k' IF EXISTS");
         assertInvalid("DELETE FROM %s WHERE k = 'k' IF v = 'foo'");
         assertInvalid("DELETE FROM %s WHERE i = 0 IF EXISTS");
@@ -332,7 +332,7 @@ public class ConditionalStatementsTest extends CQLTester
         execute("INSERT INTO %s (k, v, lock) VALUES (0, 0, false)");
         execute("UPDATE %s USING TTL 1 SET lock=true WHERE k=0");
 
-        Thread.sleep(1500);
+        Thread.sleep(1001);
         assertRows(execute("UPDATE %s SET v = 1 WHERE k = 0 IF lock = null"),
                    row(true));
     }
@@ -830,23 +830,7 @@ public class ConditionalStatementsTest extends CQLTester
         // create and confirm
         createIndex("CREATE INDEX IF NOT EXISTS myindex ON %s (value1)");
 
-        // index building is asynch, wait for it to finish
-        boolean indexCreated = false;
-        for (int i = 0; i < 10; i++)
-        {
-            Object[][] rows = getRows(execute("select index_name from system.\"IndexInfo\" where table_name = ?", KEYSPACE));
-            if (rows.length > 0)
-            {
-                assertEquals(tableName + ".myindex", rows[0][0]);
-                indexCreated = true;
-                break;
-            }
-            Thread.sleep(500);
-        }
-
-        if (!indexCreated)
-            // this is executed when 'break' is never called
-            fail("Didn't see myindex after polling for 5 seconds");
+        assertTrue(waitForIndex(KEYSPACE, tableName, "myindex"));
 
         // unsuccessful create since it's already there
         execute("CREATE INDEX IF NOT EXISTS myindex ON %s (value1)");

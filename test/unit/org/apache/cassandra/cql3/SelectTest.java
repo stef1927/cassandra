@@ -326,7 +326,7 @@ public class SelectTest extends CQLTester
 
     /**
      * Check SELECT respects inclusive and exclusive bounds
-     * migrated from cql_tests.py:TestCQL.select_key_in_test()
+     * migrated from cql_tests.py:TestCQL.exclusive_slice_test()
      */
     @Test
     public void testSelectBounds() throws Throwable

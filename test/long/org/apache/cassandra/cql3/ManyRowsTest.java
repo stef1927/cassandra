@@ -36,8 +36,6 @@ public class ManyRowsTest extends CQLTester
     {
         createTable("CREATE TABLE %s (k int, v int, PRIMARY KEY (k))");
 
-        //cursor.default_fetch_size = 10000
-
         // We know we page at 10K, so test counting just before, at 10K, just after and
         // a bit after that.
         for (int k = 1; k < 10000; k++)

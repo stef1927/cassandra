@@ -183,7 +183,7 @@ public class OrderedTest extends CQLTester
     }
 
     /**
-     * Test for #4612 bug and more generaly order by when multiple C* rows are queried
+     * Test for #4612 bug and more generally order by when multiple C* rows are queried
      * migrated from cql_tests.py:TestCQL.order_by_multikey_test()
      */
     @Test
