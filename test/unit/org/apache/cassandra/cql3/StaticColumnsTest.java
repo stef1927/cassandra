@@ -162,8 +162,6 @@ public class StaticColumnsTest extends CQLTester
             for (int j = 0; j < 10; j++)
                 execute("INSERT INTO %s (k, p, s) VALUES (?, ?, ?)", i, j, i);
 
-        //cursor.default_fetch_size = 7
-
         rows = getRows(execute("SELECT DISTINCT k, s FROM %s"));
         checkDistinctRows(rows, true, 0, 10, 0, 10);
 
@@ -179,15 +177,12 @@ public class StaticColumnsTest extends CQLTester
                 for (int k = 0; k < 5; k++)
                     execute("INSERT INTO %s (k, c1, c2, s1, s2) VALUES (?, ?, ?, ?, ?)", i, j, k, i, i + 1);
 
-        //for fetch_size in (null, 2, 5, 7, 10, 24, 25, 26, 1000):
-        //cursor.default_fetch_size = fetch_size
         rows = getRows(execute("SELECT DISTINCT k, s1 FROM %s"));
         checkDistinctRows(rows, true, 0, 10, 0, 10);
 
         rows = getRows(execute("SELECT DISTINCT k, s2 FROM %s"));
         checkDistinctRows(rows, true, 0, 10, 1, 11);
 
-       // print "page size: ", fetch_size
         rows = getRows(execute("SELECT DISTINCT k, s1 FROM %s LIMIT 10"));
         checkDistinctRows(rows, true, 0, 10, 0, 10);
 

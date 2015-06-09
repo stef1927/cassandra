@@ -184,18 +184,6 @@ public abstract class CQLTester
             Keyspace.open(KEYSPACE).getColumnFamilyStore(currentTable).cleanupCache();
     }
 
-    public void rebuild(String indexName)
-    {
-        String currentTable = currentTable();
-        if (currentTable != null)
-            Keyspace.open(KEYSPACE).getColumnFamilyStore(currentTable).rebuildSecondaryIndex(indexName);
-    }
-
-    public boolean usePrepared()
-    {
-        return USE_PREPARED_VALUES;
-    }
-
     private static void removeAllSSTables(String ks, List<String> tables)
     {
         // clean up data directory which are stored as data directory/keyspace/data files
@@ -301,6 +289,37 @@ public abstract class CQLTester
         String fullQuery = String.format(query, KEYSPACE + "." + currentTable());
         logger.info(fullQuery);
         schemaChange(fullQuery);
+    }
+
+    /**
+     * Index creation is asynchronous, this method searches in the system table IndexInfo
+     * for the specified index and returns true if it finds it, which indicates the
+     * index was built. If we haven't found it after 5 seconds we give-up.
+     */
+    protected boolean waitForIndex(String keyspace, String table, String index) throws Throwable
+    {
+        long start = System.currentTimeMillis();
+        boolean indexCreated = false;
+        String indedName = String.format("%s.%s", table, index);
+        while (!indexCreated)
+        {
+            Object[][] results = getRows(execute("select index_name from system.\"IndexInfo\" where table_name = ?", keyspace));
+            for(int i = 0; i < results.length; i++)
+            {
+                if (indedName.equals(results[i][0]))
+                {
+                    indexCreated = true;
+                    break;
+                }
+            }
+
+            if (System.currentTimeMillis() - start > 5000)
+                break;
+
+            Thread.sleep(10);
+        }
+
+        return indexCreated;
     }
 
     protected void createIndexMayThrow(String query) throws Throwable
