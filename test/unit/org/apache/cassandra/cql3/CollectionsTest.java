@@ -325,13 +325,13 @@ public class CollectionsTest extends CQLTester
         // replace set with unset value
         execute("INSERT INTO %s (k, s) VALUES (10, ?)", unset());
         assertRows(execute("SELECT s FROM %s WHERE k = 10"),
-                row(s)
+                   row(s)
         );
 
         // add to set
         execute("UPDATE %s SET s = s + ? WHERE k = 10", unset());
         assertRows(execute("SELECT s FROM %s WHERE k = 10"),
-                row(s)
+                   row(s)
         );
 
         // remove all occurrences of element
