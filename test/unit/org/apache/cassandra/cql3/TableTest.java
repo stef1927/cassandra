@@ -22,6 +22,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 
@@ -42,6 +43,7 @@ import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.exceptions.SyntaxException;
 import org.apache.cassandra.transport.ProtocolException;
 import org.apache.cassandra.utils.ByteBufferUtil;
+import org.apache.cassandra.utils.UUIDGen;
 
 public class TableTest extends CQLTester
 {
@@ -383,10 +385,6 @@ public class TableTest extends CQLTester
 
         assertRows(execute("SELECT * FROM %s"),
                    row("abc", 4, "xyz", "some other value"));
-
-        //# Won't be allowed until #3708 is in
-        //if self.cluster.version() < "1.2":
-        //assertInvalid("DELETE FROM testcf2 WHERE username='abc' AND id=2")
     }
 
     /**
@@ -480,9 +478,6 @@ public class TableTest extends CQLTester
         createTable(" CREATE TABLE %s (k int, name int, value int, PRIMARY KEY(k, name)) WITH COMPACT STORAGE ");
         createTable(" CREATE TABLE %s (k int, c int, PRIMARY KEY (k),)");
 
-        // existing table (cannot test due to assertion)
-        //assertInvalidThrow(AlreadyExistsException.class, String.format("CREATE TABLE %s (k int PRIMARY KEY, c int)", table3));
-
         String table4 = createTableName();
 
         // repeated column
@@ -552,9 +547,6 @@ public class TableTest extends CQLTester
         res = getRows(execute(String.format("SELECT k FROM %s.%s WHERE token(k) >= %d",
                                             keyspace(), currentTable(), min_token)));
         assertEquals(c, res.length);
-
-        //assertInvalid("SELECT k FROM %s WHERE token(k) >= 0");
-        //execute("SELECT k FROM %s WHERE token(k) >= 0");
 
         res = getRows(execute(String.format("SELECT k FROM %s.%s WHERE token(k) >= token(%d) AND token(k) < token(%d)",
                                             keyspace(), currentTable(), inOrder[32], inOrder[65])));
@@ -921,34 +913,6 @@ public class TableTest extends CQLTester
         execute("INSERT INTO %s (k, c) VALUES (2, 2)");
         assertRows(execute("SELECT * FROM %s"),
                    row(2, 2, null, null));
-    }
-
-    /**
-     * Check dates are correctly recognized and validated,
-     * migrated from cql_tests.py:TestCQL.date_test()
-     */
-    @Test
-    public void testDate() throws Throwable
-    {
-        createTable("CREATE TABLE %s (k int PRIMARY KEY, t timestamp)");
-
-        execute("INSERT INTO %s (k, t) VALUES (0, '2011-02-03')");
-        assertInvalid("INSERT INTO %s (k, t) VALUES (0, '2011-42-42')");
-    }
-
-    /**
-     * Test a regression from #1337,
-     * migrated from cql_tests.py:TestCQL.range_slice_test()
-     */
-    @Test
-    public void testRangeSlice() throws Throwable
-    { //This was using a two node cluster...
-        createTable(" CREATE TABLE %s (k text PRIMARY KEY, v int)");
-
-        execute("INSERT INTO %s (k, v) VALUES ('foo', 0)");
-        execute("INSERT INTO %s (k, v) VALUES ('bar', 1)");
-
-        assertRowCount(execute("SELECT * FROM %s"), 2);
     }
 
     /**
@@ -1514,9 +1478,14 @@ public class TableTest extends CQLTester
 
         assertInvalid("SELECT dateOf(k) FROM %s WHERE k = 0 AND t = ?", rows[0][1]);
 
-        execute("SELECT dateOf(t), unixTimestampOf(t) FROM %s WHERE k = 0 AND t = ?", rows[0][1]);
-        execute("SELECT t FROM %s WHERE k = 0 AND t > maxTimeuuid(1234567) AND t < minTimeuuid('2012-11-07 18:18:22-0800')");
-        // not sure what to check exactly so just checking the query returns
+        for (int i = 0; i < 4; i++)
+        {
+            long timestamp = UUIDGen.unixTimestamp((UUID) rows[i][1]);
+            assertRows(execute("SELECT dateOf(t), unixTimestampOf(t) FROM %s WHERE k = 0 AND t = ?", rows[i][1]),
+                       row(new Date(timestamp), timestamp));
+        }
+
+        assertEmpty(execute("SELECT t FROM %s WHERE k = 0 AND t > maxTimeuuid(1234567) AND t < minTimeuuid('2012-11-07 18:18:22-0800')"));
     }
 
     /**
@@ -2235,7 +2204,7 @@ public class TableTest extends CQLTester
     @Test
     public void testLimitInCompactTable() throws Throwable
     {
-        createTable("CREATE TABLE %s( k int, v int, PRIMARY KEY (k, v) ) WITH COMPACT STORAGE ");
+        createTable("CREATE TABLE %s (k int, v int, PRIMARY KEY (k, v) ) WITH COMPACT STORAGE ");
 
         for (int i = 0; i < 4; i++)
             for (int j = 0; j < 4; j++)
@@ -2247,7 +2216,6 @@ public class TableTest extends CQLTester
         assertRows(execute("SELECT v FROM %s WHERE k=0 AND v > -1 AND v <= 4 LIMIT 2"),
                    row(0),
                    row(1));
-
         assertRows(execute("SELECT * FROM %s WHERE k IN (0, 1, 2) AND v > 0 AND v <= 4 LIMIT 2"),
                    row(0, 1),
                    row(0, 2));
@@ -2262,14 +2230,8 @@ public class TableTest extends CQLTester
                    row(1, 2),
                    row(1, 3));
 
-        // This doesn't work -- see #7059
-        //assertRows(execute("SELECT * FROM %s WHERE v > 1 AND v <= 3 LIMIT 6 ALLOW FILTERING"),
-        //           row(1, 2),
-        //           row(1, 3),
-        //           row(0, 2),
-        //           row(0, 3),
-        //           row(2, 2),
-        //           row(2, 3));
+        // strict bound (v > 1) over a range of partitions is not supported for compact storage if limit is provided
+        assertInvalidThrow(InvalidRequestException.class, "SELECT * FROM %s WHERE v > 1 AND v <= 3 LIMIT 6 ALLOW FILTERING");
     }
 
     /**
