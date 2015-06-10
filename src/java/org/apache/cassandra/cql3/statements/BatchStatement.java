@@ -411,7 +411,7 @@ public class BatchStatement implements CQLStatement
         CQL3CasRequest request = p.left;
         Set<ColumnDefinition> columnsWithConditions = p.right;
 
-        ColumnFamily result = ModificationStatement.casInternal(request);
+        ColumnFamily result = ModificationStatement.casInternal(request, state);
 
         return new ResultMessage.Rows(ModificationStatement.buildCasResultSet(request.cfm.ksName,
                                                                               request.key,

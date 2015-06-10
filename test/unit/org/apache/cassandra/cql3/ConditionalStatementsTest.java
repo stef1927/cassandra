@@ -48,7 +48,7 @@ public class ConditionalStatementsTest extends CQLTester
 
         for (int i = 0; i < 10; i++)
         {
-            execute("INSERT INTO %s (tkn, consumed) VALUES (?,FALSE)", i);
+            execute("INSERT INTO %s (tkn, consumed) VALUES (?, FALSE)", i);
 
             assertRows(execute("UPDATE %s SET consumed = TRUE WHERE tkn = ? IF consumed = FALSE", i), row(true));
             assertRows(execute("UPDATE %s SET consumed = TRUE WHERE tkn = ? IF consumed = FALSE", i), row(false, true));
@@ -201,7 +201,7 @@ public class ConditionalStatementsTest extends CQLTester
 
         // Test that INSERT IF NOT EXISTS concerns only the static column if no clustering nor regular columns
         // is provided, but concerns the CQL3 row targetted by the clustering columns otherwise
-        execute("INSERT INTO %s(id, k, v) VALUES (1, 'foo', 'foo')");
+        execute("INSERT INTO %s (id, k, v) VALUES (1, 'foo', 'foo')");
         assertRows(execute("INSERT INTO %s (id, k, version) VALUES (1, 'foo', 1) IF NOT EXISTS"), row(false, 1, "foo", null, "foo"));
         assertRows(execute("INSERT INTO %s (id, version) VALUES (1, 1) IF NOT EXISTS"), row(true));
         assertRows(execute("SELECT * FROM %s"), row(1, "foo", 1, "foo"));
