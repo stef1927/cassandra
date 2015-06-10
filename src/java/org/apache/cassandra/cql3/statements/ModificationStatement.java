@@ -640,13 +640,15 @@ public abstract class ModificationStatement implements CQLStatement
     public ResultMessage executeInternalWithCondition(QueryState state, QueryOptions options) throws RequestValidationException, RequestExecutionException
     {
         CQL3CasRequest request = makeCasRequest(state, options);
-        ColumnFamily result = casInternal(request);
+        ColumnFamily result = casInternal(request, state);
         return new ResultMessage.Rows(buildCasResultSet(request.key, result, options));
     }
 
-    static ColumnFamily casInternal(CQL3CasRequest request)
+    static ColumnFamily casInternal(CQL3CasRequest request, QueryState state)
     {
-        UUID ballot = UUIDGen.getTimeUUID(request.now);
+        long millis = state.getTimestamp() / 1000;
+        long nanos = ((state.getTimestamp() - (millis * 1000)) + 1) * 10;
+        UUID ballot = UUIDGen.getTimeUUID(millis, nanos);
         CFMetaData metadata = Schema.instance.getCFMetaData(request.cfm.ksName, request.cfm.cfName);
 
         ReadCommand readCommand = ReadCommand.create(request.cfm.ksName, request.key, request.cfm.cfName, request.now, request.readFilter());
