@@ -15,12 +15,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
+package org.apache.cassandra.cql3.validation.entities;
 
 import java.util.UUID;
 
-import org.junit.Ignore;
 import org.junit.Test;
+
+import org.apache.cassandra.cql3.validation.util.CQLTester;
 
 public class CollectionsTest extends CQLTester
 {
@@ -362,4 +363,126 @@ public class CollectionsTest extends CQLTester
                        map("bar", 3, "foo", 1, "foobar", 4),
                        set(1, 3, 5, 7, 11, 13)));
     }
+
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.collection_and_regular_test()
+     */
+    @Test
+    public void testCollectionAndRegularColumns() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, l list<int>, c int)");
+
+        execute("INSERT INTO %s (k, l, c) VALUES(3, [0, 1, 2], 4)");
+        execute("UPDATE %s SET l[0] = 1, c = 42 WHERE k = 3");
+        assertRows(execute("SELECT l, c FROM %s WHERE k = 3"),
+                   row(list(1, 1, 2), 42));
+    }
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.multi_list_set_test()
+     */
+    @Test
+    public void testMultipleLists() throws Throwable
+    {
+        createTable(" CREATE TABLE %s (k int PRIMARY KEY, l1 list<int>, l2 list<int>)");
+
+        execute("INSERT INTO %s (k, l1, l2) VALUES (0, [1, 2, 3], [4, 5, 6])");
+        execute("UPDATE %s SET l2[1] = 42, l1[1] = 24  WHERE k = 0");
+
+        assertRows(execute("SELECT l1, l2 FROM %s WHERE k = 0"),
+                   row(list(1, 24, 3), list(4, 42, 6)));
+    }
+
+    /**
+     * Test you can add columns in a table with collections (#4982 bug),
+     * migrated from cql_tests.py:TestCQL.alter_with_collections_test()
+     */
+    @Test
+    public void testAlterCollections() throws Throwable
+    {
+        createTable("CREATE TABLE %s (key int PRIMARY KEY, aset set<text>)");
+        execute("ALTER TABLE %s ADD c text");
+        execute("ALTER TABLE %s ADD alist list<text>");
+    }
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.collection_compact_test()
+     */
+    @Test
+    public void testCompactCollections() throws Throwable
+    {
+        String tableName = KEYSPACE + "." + createTableName();
+        assertInvalid(String.format("CREATE TABLE %s (user ascii PRIMARY KEY, mails list < text >) WITH COMPACT STORAGE;", tableName));
+    }
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.collection_function_test()
+     */
+    @Test
+    public void testFunctionsOnCollections() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, l set<int>)");
+
+        assertInvalid("SELECT ttl(l) FROM %s WHERE k = 0");
+        assertInvalid("SELECT writetime(l) FROM %s WHERE k = 0");
+    }
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.bug_5376()
+     */
+    @Test
+    public void testInClauseWithCollections() throws Throwable
+    {
+        createTable("CREATE TABLE %s (key text, c bigint, v text, x set < text >, PRIMARY KEY(key, c) )");
+
+        assertInvalid("select * from %s where key = 'foo' and c in (1,3,4)");
+    }
+
+    /**
+     * Test for bug #5795,
+     * migrated from cql_tests.py:TestCQL.nonpure_function_collection_test()
+     */
+    @Test
+    public void testNonPureFunctionCollection() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, v list<timeuuid>)");
+
+        // we just want to make sure this doesn't throw
+        execute("INSERT INTO %s (k, v) VALUES (0, [now()])");
+    }
+
+    /**
+     * Test for 5805 bug,
+     * migrated from cql_tests.py:TestCQL.collection_flush_test()
+     */
+    @Test
+    public void testCollectionFlush() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, s set<int>)");
+
+        execute("INSERT INTO %s (k, s) VALUES (1, {1})");
+        flush();
+
+        execute("INSERT INTO %s (k, s) VALUES (1, {2})");
+        flush();
+
+        assertRows(execute("SELECT * FROM %s"),
+                   row(1, set(2)));
+    }
+
+    /**
+     * Test for 6276,
+     * migrated from cql_tests.py:TestCQL.drop_and_readd_collection_test()
+     */
+    @Test
+    public void testDropAndReaddCollection() throws Throwable
+    {
+        createTable("create table %s (k int primary key, v set<text>, x int)");
+        execute("insert into %s (k, v) VALUES (0, {'fffffffff'})");
+        flush();
+        execute("alter table %s drop v");
+        assertInvalid("alter table %s add v set<int>");
+    }
+
 }

@@ -16,12 +16,13 @@
  * limitations under the License.
  */
 
-package org.apache.cassandra.cql3;
+package org.apache.cassandra.cql3.validation.operations;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.cql3.validation.util.CQLTester;
 import org.apache.cassandra.dht.Murmur3Partitioner;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.exceptions.SyntaxException;
@@ -30,14 +31,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-public class ConditionalStatementsTest extends CQLTester
+public class InsertUpdateIfCondition extends CQLTester
 {
-    @BeforeClass
-    public static void setUp()
-    {
-        DatabaseDescriptor.setPartitioner(new Murmur3Partitioner());
-    }
-
     /**
      * Migrated from cql_tests.py:TestCQL.cas_simple_test()
      */

@@ -1,4 +1,4 @@
-package org.apache.cassandra.cql3;
+package org.apache.cassandra.cql3.validation.operations;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -6,17 +6,72 @@ import org.junit.Test;
 import static junit.framework.Assert.assertNull;
 import static org.junit.Assert.assertEquals;
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.cql3.validation.util.CQLTester;
 import org.apache.cassandra.dht.ByteOrderedPartitioner;
 
 /**
- * Tests across partitions that require a ByteOrderedPartitioner
+ * SELECT statement tests that require a ByteOrderedPartitioner
  */
-public class OrderedTest extends CQLTester
+public class SelectOrderedPartitionerTest extends CQLTester
 {
     @BeforeClass
     public static void setUp()
     {
         DatabaseDescriptor.setPartitioner(new ByteOrderedPartitioner());
+    }
+
+    @Test
+    public void testTokenFunctionWithSingleColumnPartitionKey() throws Throwable
+    {
+        createTable("CREATE TABLE IF NOT EXISTS %s (a int PRIMARY KEY, b text)");
+        execute("INSERT INTO %s (a, b) VALUES (0, 'a')");
+
+        assertRows(execute("SELECT * FROM %s WHERE token(a) >= token(?)", 0), row(0, "a"));
+        assertRows(execute("SELECT * FROM %s WHERE token(a) >= token(?) and token(a) < token(?)", 0, 1), row(0, "a"));
+        assertInvalid("SELECT * FROM %s WHERE token(a) > token(?)", "a");
+        assertInvalid("SELECT * FROM %s WHERE token(a, b) >= token(?, ?)", "b", 0);
+        assertInvalid("SELECT * FROM %s WHERE token(a) >= token(?) and token(a) >= token(?)", 0, 1);
+        assertInvalid("SELECT * FROM %s WHERE token(a) >= token(?) and token(a) = token(?)", 0, 1);
+        assertInvalidSyntax("SELECT * FROM %s WHERE token(a) = token(?) and token(a) IN (token(?))", 0, 1);
+    }
+
+    @Test
+    public void testTokenFunctionWithPartitionKeyAndClusteringKeyArguments() throws Throwable
+    {
+        createTable("CREATE TABLE IF NOT EXISTS %s (a int, b text, PRIMARY KEY (a, b))");
+        assertInvalid("SELECT * FROM %s WHERE token(a, b) > token(0, 'c')");
+    }
+
+    @Test
+    public void testTokenFunctionWithMultiColumnPartitionKey() throws Throwable
+    {
+        createTable("CREATE TABLE IF NOT EXISTS %s (a int, b text, PRIMARY KEY ((a, b)))");
+        execute("INSERT INTO %s (a, b) VALUES (0, 'a')");
+        execute("INSERT INTO %s (a, b) VALUES (0, 'b')");
+        execute("INSERT INTO %s (a, b) VALUES (0, 'c')");
+
+        assertRows(execute("SELECT * FROM %s WHERE token(a, b) > token(?, ?)", 0, "a"),
+                   row(0, "b"),
+                   row(0, "c"));
+        assertRows(execute("SELECT * FROM %s WHERE token(a, b) > token(?, ?) and token(a, b) < token(?, ?)",
+                           0, "a",
+                           0, "d"),
+                   row(0, "b"),
+                   row(0, "c"));
+        assertInvalid("SELECT * FROM %s WHERE token(a) > token(?) and token(b) > token(?)", 0, "a");
+        assertInvalid("SELECT * FROM %s WHERE token(a) > token(?, ?) and token(a) < token(?, ?) and token(b) > token(?, ?) ", 0, "a", 0, "d", 0, "a");
+        assertInvalid("SELECT * FROM %s WHERE token(b, a) > token(0, 'c')");
+    }
+
+    @Test
+    public void testTokenFunctionWithCompoundPartitionAndClusteringCols() throws Throwable
+    {
+        createTable("CREATE TABLE IF NOT EXISTS %s (a int, b int, c int, d int, PRIMARY KEY ((a, b), c, d))");
+        // just test that the queries don't error
+        execute("SELECT * FROM %s WHERE token(a, b) > token(0, 0) AND c > 10 ALLOW FILTERING;");
+        execute("SELECT * FROM %s WHERE c > 10 AND token(a, b) > token(0, 0) ALLOW FILTERING;");
+        execute("SELECT * FROM %s WHERE token(a, b) > token(0, 0) AND (c, d) > (0, 0) ALLOW FILTERING;");
+        execute("SELECT * FROM %s WHERE (c, d) > (0, 0) AND token(a, b) > token(0, 0) ALLOW FILTERING;");
     }
 
     /**

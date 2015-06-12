@@ -15,15 +15,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
+package org.apache.cassandra.cql3.validation.entities;
+
+import org.junit.BeforeClass;
 import org.junit.Test;
 
-public class UseStatementTest extends CQLTester
+import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.dht.Murmur3Partitioner;
+
+public class DateTypeTest extends CQLTester
 {
+    /**
+     * Check dates are correctly recognized and validated,
+     * migrated from cql_tests.py:TestCQL.date_test()
+     */
     @Test
-    public void testUseStatementWithBindVariable() throws Throwable
+    public void testDate() throws Throwable
     {
-        assertInvalidSyntaxMessage("Bind variables cannot be used for keyspace names", "USE ?");
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, t timestamp)");
+
+        execute("INSERT INTO %s (k, t) VALUES (0, '2011-02-03')");
+        assertInvalid("INSERT INTO %s (k, t) VALUES (0, '2011-42-42')");
     }
 }

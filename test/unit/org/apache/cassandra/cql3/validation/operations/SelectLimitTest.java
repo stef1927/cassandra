@@ -1,12 +1,14 @@
-package org.apache.cassandra.cql3;
+package org.apache.cassandra.cql3.validation.operations;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.cql3.validation.util.CQLTester;
 import org.apache.cassandra.dht.ByteOrderedPartitioner;
+import org.apache.cassandra.exceptions.InvalidRequestException;
 
-public class LimitTest extends CQLTester
+public class SelectLimitTest extends CQLTester
 {
     @BeforeClass
     public static void setUp()
@@ -68,5 +70,42 @@ public class LimitTest extends CQLTester
 
         assertRowCount(execute("SELECT * FROM %s LIMIT 4"), 4);
 
+    }
+
+    /**
+     * Check for #7052 bug,
+     * migrated from cql_tests.py:TestCQL.limit_compact_table()
+     */
+    @Test
+    public void testLimitInCompactTable() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int, v int, PRIMARY KEY (k, v) ) WITH COMPACT STORAGE ");
+
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 4; j++)
+                execute("INSERT INTO %s(k, v) VALUES (?, ?)", i, j);
+
+        assertRows(execute("SELECT v FROM %s WHERE k=0 AND v > 0 AND v <= 4 LIMIT 2"),
+                   row(1),
+                   row(2));
+        assertRows(execute("SELECT v FROM %s WHERE k=0 AND v > -1 AND v <= 4 LIMIT 2"),
+                   row(0),
+                   row(1));
+        assertRows(execute("SELECT * FROM %s WHERE k IN (0, 1, 2) AND v > 0 AND v <= 4 LIMIT 2"),
+                   row(0, 1),
+                   row(0, 2));
+        assertRows(execute("SELECT * FROM %s WHERE k IN (0, 1, 2) AND v > -1 AND v <= 4 LIMIT 2"),
+                   row(0, 0),
+                   row(0, 1));
+        assertRows(execute("SELECT * FROM %s WHERE k IN (0, 1, 2) AND v > 0 AND v <= 4 LIMIT 6"),
+                   row(0, 1),
+                   row(0, 2),
+                   row(0, 3),
+                   row(1, 1),
+                   row(1, 2),
+                   row(1, 3));
+
+        // strict bound (v > 1) over a range of partitions is not supported for compact storage if limit is provided
+        assertInvalidThrow(InvalidRequestException.class, "SELECT * FROM %s WHERE v > 1 AND v <= 3 LIMIT 6 ALLOW FILTERING");
     }
 }

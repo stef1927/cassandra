@@ -15,14 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
+package org.apache.cassandra.cql3.validation.operations;
 
 import org.junit.Ignore;
 import org.junit.Test;
 
+import org.apache.cassandra.cql3.validation.util.CQLTester;
+
 import static org.junit.Assert.assertEquals;
 
-public class MultiColumnRelationTest extends CQLTester
+public class SelectMultiColumnRelationTest extends CQLTester
 {
     @Test
     public void testSingleClusteringInvalidQueries() throws Throwable

@@ -26,6 +26,8 @@ import java.util.Set;
 
 import org.junit.Test;
 
+import org.apache.cassandra.cql3.validation.util.CQLTester;
+
 public class ManyRowsTest extends CQLTester
 {
     /**

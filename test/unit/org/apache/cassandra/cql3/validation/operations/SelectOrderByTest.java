@@ -15,11 +15,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
+package org.apache.cassandra.cql3.validation.operations;
 
 import org.junit.Test;
 
-public class SelectWithOrderingTest extends CQLTester
+import org.apache.cassandra.cql3.validation.util.CQLTester;
+
+import static org.junit.Assert.assertTrue;
+
+public class SelectOrderByTest extends CQLTester
 {
     @Test
     public void testNormalSelectionOrderSingleClustering() throws Throwable
@@ -383,6 +387,117 @@ public class SelectWithOrderingTest extends CQLTester
                    expectedRows);
 
         assertInvalid("SELECT c1, c2, v FROM %s WHERE k = 0 ORDER BY c2 DESC, c1 ASC");
+    }
 
+    /**
+     * Migrated from cql_tests.py:TestCQL.multiordering_test()
+     */
+    @Test
+    public void testMultiordering() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k text, c1 int, c2 int, PRIMARY KEY (k, c1, c2) ) WITH CLUSTERING ORDER BY (c1 ASC, c2 DESC)");
+
+        for (int i = 0; i < 2; i++)
+            for (int j = 0; j < 2; j++)
+                execute("INSERT INTO %s (k, c1, c2) VALUES ('foo', ?, ?)", i, j);
+
+        assertRows(execute("SELECT c1, c2 FROM %s WHERE k = 'foo'"),
+                   row(0, 1), row(0, 0), row(1, 1), row(1, 0));
+
+        assertRows(execute("SELECT c1, c2 FROM %s WHERE k = 'foo' ORDER BY c1 ASC, c2 DESC"),
+                   row(0, 1), row(0, 0), row(1, 1), row(1, 0));
+
+        assertRows(execute("SELECT c1, c2 FROM %s WHERE k = 'foo' ORDER BY c1 DESC, c2 ASC"),
+                   row(1, 0), row(1, 1), row(0, 0), row(0, 1));
+
+        assertInvalid("SELECT c1, c2 FROM %s WHERE k = 'foo' ORDER BY c2 DESC");
+        assertInvalid("SELECT c1, c2 FROM %s WHERE k = 'foo' ORDER BY c2 ASC");
+        assertInvalid("SELECT c1, c2 FROM %s WHERE k = 'foo' ORDER BY c1 ASC, c2 ASC");
+    }
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.in_with_desc_order_test()
+     */
+    @Test
+    public void testSelectInStatementWithDesc() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int, c1 int, c2 int, PRIMARY KEY (k, c1, c2))");
+        execute("INSERT INTO %s(k, c1, c2) VALUES (0, 0, 0)");
+        execute("INSERT INTO %s(k, c1, c2) VALUES (0, 0, 1)");
+        execute("INSERT INTO %s(k, c1, c2) VALUES (0, 0, 2)");
+
+        assertRows(execute("SELECT * FROM %s WHERE k=0 AND c1 = 0 AND c2 IN (2, 0) ORDER BY c1 DESC"),
+                   row(0, 0, 2),
+                   row(0, 0, 0));
+    }
+
+    /**
+     * Test that columns don't need to be selected for ORDER BY when there is a IN (#4911),
+     * migrated from cql_tests.py:TestCQL.in_order_by_without_selecting_test()
+     */
+    @Test
+    public void testInOrderByWithoutSelecting() throws Throwable
+    {
+        createTable("CREATE TABLE %s (k int, c1 int, c2 int, v int, PRIMARY KEY (k, c1, c2))");
+
+        execute("INSERT INTO %s (k, c1, c2, v) VALUES (0, 0, 0, 0)");
+        execute("INSERT INTO %s (k, c1, c2, v) VALUES (0, 0, 1, 1)");
+        execute("INSERT INTO %s (k, c1, c2, v) VALUES (0, 0, 2, 2)");
+        execute("INSERT INTO %s (k, c1, c2, v) VALUES (1, 1, 0, 3)");
+        execute("INSERT INTO %s (k, c1, c2, v) VALUES (1, 1, 1, 4)");
+        execute("INSERT INTO %s (k, c1, c2, v) VALUES (1, 1, 2, 5)");
+
+        assertRows(execute("SELECT * FROM %s WHERE k=0 AND c1 = 0 AND c2 IN (2, 0)"),
+                   row(0, 0, 0, 0),
+                   row(0, 0, 2, 2));
+        assertRows(execute("SELECT * FROM %s WHERE k=0 AND c1 = 0 AND c2 IN (2, 0) ORDER BY c1 ASC, c2 ASC"),
+                   row(0, 0, 0, 0),
+                   row(0, 0, 2, 2));
+
+        // check that we don 't need to select the column on which we order
+        assertRows(execute("SELECT v FROM %s WHERE k=0 AND c1 = 0 AND c2 IN (2, 0)"),
+                   row(0),
+                   row(2));
+        assertRows(execute("SELECT v FROM %s WHERE k=0 AND c1 = 0 AND c2 IN (2, 0) ORDER BY c1 ASC"),
+                   row(0),
+                   row(2));
+        assertRows(execute("SELECT v FROM %s WHERE k=0 AND c1 = 0 AND c2 IN (2, 0) ORDER BY c1 DESC"),
+                   row(2),
+                   row(0));
+        assertRows(execute("SELECT v FROM %s WHERE k IN (1, 0)"),
+                   row(3),
+                   row(4),
+                   row(5),
+                   row(0),
+                   row(1),
+                   row(2));
+
+        assertRows(execute("SELECT v FROM %s WHERE k IN (1, 0) ORDER BY c1 ASC"),
+                   row(0),
+                   row(1),
+                   row(2),
+                   row(3),
+                   row(4),
+                   row(5));
+
+        // we should also be able to use functions in the select clause (additional test for CASSANDRA - 8286)
+        Object[][] results = getRows(execute("SELECT writetime(v) FROM %s WHERE k IN (1, 0) ORDER BY c1 ASC"));
+
+        // since we don 't know the write times, just assert that the order matches the order we expect
+        assertTrue(isFirstIntSorted(results));
+    }
+
+    private boolean isFirstIntSorted(Object[][] rows)
+    {
+        for (int i = 1; i < rows.length; i++)
+        {
+            Long prev = (Long)rows[i-1][0];
+            Long curr = (Long)rows[i][0];
+
+            if (prev > curr)
+                return false;
+        }
+
+        return true;
     }
 }

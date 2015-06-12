@@ -15,9 +15,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
+package org.apache.cassandra.cql3.validation.entities;
 
+import java.nio.ByteBuffer;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 import org.apache.commons.lang.StringUtils;
@@ -26,20 +29,18 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.cql3.validation.util.CQLTester;
 import org.apache.cassandra.dht.Murmur3Partitioner;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.exceptions.SyntaxException;
+import org.apache.cassandra.utils.FBUtilities;
 
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 public class SecondaryIndexTest extends CQLTester
 {
-    @BeforeClass
-    public static void setUp()
-    {
-        DatabaseDescriptor.setPartitioner(new Murmur3Partitioner());
-    }
+    private static final int TOO_BIG = 1024 * 65;
 
     @Test
     public void testCreateAndDropIndex() throws Throwable
@@ -267,6 +268,13 @@ public class SecondaryIndexTest extends CQLTester
         execute("insert into %s (pk, col1, col2) values ('pk2','foo2','bar2')");
         execute("insert into %s (pk, col1, col2) values ('pk3','foo3','bar3')");
         assertInvalid("select * from %s where col2 in ('bar1', 'bar2')");
+
+        //Migrated from cql_tests.py:TestCQL.bug_6050_test()
+        createTable("CREATE TABLE %s (k int PRIMARY KEY, a int, b int)");
+
+        createIndex("CREATE INDEX ON %s (a)");
+        assertInvalid("SELECT * FROM %s WHERE a = 3 AND b IN (1, 3)");
+
     }
 
     /**
@@ -466,4 +474,174 @@ public class SecondaryIndexTest extends CQLTester
         cleanupCache();
         assertRows(execute("SELECT k FROM %s WHERE v = 0"), row(0));
     }
+
+    // CASSANDRA-8280/8081
+    // reject updates with indexed values where value > 64k
+    @Test
+    public void testIndexOnCompositeValueOver64k() throws Throwable
+    {
+        createTable("CREATE TABLE %s(a int, b int, c blob, PRIMARY KEY (a))");
+        createIndex("CREATE INDEX ON %s(c)");
+        failInsert("INSERT INTO %s (a, b, c) VALUES (0, 0, ?)", ByteBuffer.allocate(TOO_BIG));
+    }
+
+    @Test
+    public void testIndexOnClusteringColumnInsertPartitionKeyAndClusteringsOver64k() throws Throwable
+    {
+        createTable("CREATE TABLE %s(a blob, b blob, c blob, d int, PRIMARY KEY (a, b, c))");
+        createIndex("CREATE INDEX ON %s(b)");
+
+        // CompositeIndexOnClusteringKey creates index entries composed of the
+        // PK plus all of the non-indexed clustering columns from the primary row
+        // so we should reject where len(a) + len(c) > 65560 as this will form the
+        // total clustering in the index table
+        ByteBuffer a = ByteBuffer.allocate(100);
+        ByteBuffer b = ByteBuffer.allocate(10);
+        ByteBuffer c = ByteBuffer.allocate(FBUtilities.MAX_UNSIGNED_SHORT - 99);
+
+        failInsert("INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, 0)", a, b, c);
+    }
+
+    @Test
+    public void testCompactTableWithValueOver64k() throws Throwable
+    {
+        createTable("CREATE TABLE %s(a int, b blob, PRIMARY KEY (a)) WITH COMPACT STORAGE");
+        createIndex("CREATE INDEX ON %s(b)");
+        failInsert("INSERT INTO %s (a, b) VALUES (0, ?)", ByteBuffer.allocate(TOO_BIG));
+    }
+
+    @Test
+    public void testIndexOnCollectionValueInsertPartitionKeyAndCollectionKeyOver64k() throws Throwable
+    {
+        createTable("CREATE TABLE %s(a blob , b map<blob, int>, PRIMARY KEY (a))");
+        createIndex("CREATE INDEX ON %s(b)");
+
+        // A collection key > 64k by itself will be rejected from
+        // the primary table.
+        // To test index validation we need to ensure that
+        // len(b) < 64k, but len(a) + len(b) > 64k as that will
+        // form the clustering in the index table
+        ByteBuffer a = ByteBuffer.allocate(100);
+        ByteBuffer b = ByteBuffer.allocate(FBUtilities.MAX_UNSIGNED_SHORT - 100);
+
+        failInsert("UPDATE %s SET b[?] = 0 WHERE a = ?", b, a);
+    }
+
+    @Test
+    public void testIndexOnCollectionKeyInsertPartitionKeyAndClusteringOver64k() throws Throwable
+    {
+        createTable("CREATE TABLE %s(a blob, b blob, c map<blob, int>, PRIMARY KEY (a, b))");
+        createIndex("CREATE INDEX ON %s(KEYS(c))");
+
+        // Basically the same as the case with non-collection clustering
+        // CompositeIndexOnCollectionKeyy creates index entries composed of the
+        // PK plus all of the clustering columns from the primary row, except the
+        // collection element - which becomes the partition key in the index table
+        ByteBuffer a = ByteBuffer.allocate(100);
+        ByteBuffer b = ByteBuffer.allocate(FBUtilities.MAX_UNSIGNED_SHORT - 100);
+        ByteBuffer c = ByteBuffer.allocate(10);
+
+        failInsert("UPDATE %s SET c[?] = 0 WHERE a = ? and b = ?", c, a, b);
+    }
+
+    @Test
+    public void testIndexOnPartitionKeyInsertValueOver64k() throws Throwable
+    {
+        createTable("CREATE TABLE %s(a int, b int, c blob, PRIMARY KEY ((a, b)))");
+        createIndex("CREATE INDEX ON %s(a)");
+        succeedInsert("INSERT INTO %s (a, b, c) VALUES (0, 0, ?)", ByteBuffer.allocate(TOO_BIG));
+    }
+
+    @Test
+    public void testIndexOnClusteringColumnInsertValueOver64k() throws Throwable
+    {
+        createTable("CREATE TABLE %s(a int, b int, c blob, PRIMARY KEY (a, b))");
+        createIndex("CREATE INDEX ON %s(b)");
+        succeedInsert("INSERT INTO %s (a, b, c) VALUES (0, 0, ?)", ByteBuffer.allocate(TOO_BIG));
+    }
+
+    @Test
+    public void testIndexOnFullCollectionEntryInsertCollectionValueOver64k() throws Throwable
+    {
+        createTable("CREATE TABLE %s(a int, b frozen<map<int, blob>>, PRIMARY KEY (a))");
+        createIndex("CREATE INDEX ON %s(full(b))");
+        Map<Integer, ByteBuffer> map = new HashMap();
+        map.put(0, ByteBuffer.allocate(1024 * 65));
+        failInsert("INSERT INTO %s (a, b) VALUES (0, ?)", map);
+    }
+
+    public void failInsert(String insertCQL, Object...args) throws Throwable
+    {
+        try
+        {
+            execute(insertCQL, args);
+            fail("Expected statement to fail validation");
+        }
+        catch (Exception e)
+        {
+            // as expected
+        }
+    }
+
+    public void succeedInsert(String insertCQL, Object...args) throws Throwable
+    {
+        execute(insertCQL, args);
+        flush();
+    }
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.clustering_indexing_test()
+     */
+    @Test
+    public void testIndexesOnClustering() throws Throwable
+    {
+        createTable("CREATE TABLE %s ( id1 int, id2 int, author text, time bigint, v1 text, v2 text, PRIMARY KEY ((id1, id2), author, time))");
+
+        createIndex("CREATE INDEX ON %s (time)");
+        execute("CREATE INDEX ON %s (id2)");
+
+        execute("INSERT INTO %s (id1, id2, author, time, v1, v2) VALUES(0, 0, 'bob', 0, 'A', 'A')");
+        execute("INSERT INTO %s (id1, id2, author, time, v1, v2) VALUES(0, 0, 'bob', 1, 'B', 'B')");
+        execute("INSERT INTO %s (id1, id2, author, time, v1, v2) VALUES(0, 1, 'bob', 2, 'C', 'C')");
+        execute("INSERT INTO %s (id1, id2, author, time, v1, v2) VALUES(0, 0, 'tom', 0, 'D', 'D')");
+        execute("INSERT INTO %s (id1, id2, author, time, v1, v2) VALUES(0, 1, 'tom', 1, 'E', 'E')");
+
+        assertRows(execute("SELECT v1 FROM %s WHERE time = 1"),
+                   row("B"), row("E"));
+
+        assertRows(execute("SELECT v1 FROM %s WHERE id2 = 1"),
+                   row("C"), row("E"));
+
+        assertRows(execute("SELECT v1 FROM %s WHERE id1 = 0 AND id2 = 0 AND author = 'bob' AND time = 0"),
+                   row("A"));
+
+        // Test for CASSANDRA-8206
+        execute("UPDATE %s SET v2 = null WHERE id1 = 0 AND id2 = 0 AND author = 'bob' AND time = 1");
+
+        assertRows(execute("SELECT v1 FROM %s WHERE id2 = 0"),
+                   row("A"), row("B"), row("D"));
+
+        assertRows(execute("SELECT v1 FROM %s WHERE time = 1"),
+                   row("B"), row("E"));
+    }
+
+    /**
+     * Migrated from cql_tests.py:TestCQL.invalid_clustering_indexing_test()
+     */
+    @Test
+    public void testIndexesOnClusteringInvalid() throws Throwable
+    {
+        createTable("CREATE TABLE %s (a int, b int, c int, d int, PRIMARY KEY ((a, b))) WITH COMPACT STORAGE");
+        assertInvalid("CREATE INDEX ON %s (a)");
+        assertInvalid("CREATE INDEX ON %s (b)");
+
+        createTable("CREATE TABLE %s (a int, b int, c int, PRIMARY KEY (a, b)) WITH COMPACT STORAGE");
+        assertInvalid("CREATE INDEX ON %s (a)");
+        assertInvalid("CREATE INDEX ON %s (b)");
+        assertInvalid("CREATE INDEX ON %s (c)");
+
+        createTable("CREATE TABLE %s (a int, b int, c int static , PRIMARY KEY (a, b))");
+        assertInvalid("CREATE INDEX ON %s (c)");
+    }
+
 }

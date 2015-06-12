@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package org.apache.cassandra.cql3;
+package org.apache.cassandra.cql3.validation.entities;
 
 import java.util.Arrays;
 
@@ -24,6 +24,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.cql3.validation.util.CQLTester;
 import org.apache.cassandra.dht.Murmur3Partitioner;
 
 import static junit.framework.Assert.assertNull;
@@ -32,12 +33,6 @@ import static org.junit.Assert.assertTrue;
 
 public class StaticColumnsTest extends CQLTester
 {
-    @BeforeClass
-    public static void setUp()
-    {
-        DatabaseDescriptor.setPartitioner(new Murmur3Partitioner());
-    }
-
 
     /**
      * Migrated from cql_tests.py:TestCQL.static_columns_test()
