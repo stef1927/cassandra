@@ -15,26 +15,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db;
+package org.apache.cassandra.cql3.validation.operations;
 
 import org.junit.Test;
 
 import org.apache.cassandra.cql3.validation.util.CQLTester;
-import org.apache.cassandra.cql3.UntypedResultSet;
-import org.apache.cassandra.service.CacheService;
-import static org.junit.Assert.assertEquals;
 
-public class RowCacheCQLTest extends CQLTester
+public class UseTest extends CQLTester
 {
     @Test
-    public void test7636() throws Throwable
+    public void testUseStatementWithBindVariable() throws Throwable
     {
-        CacheService.instance.setRowCacheCapacityInMB(1);
-        createTable("CREATE TABLE %s (p1 bigint, c1 int, PRIMARY KEY (p1, c1)) WITH caching = '{\"keys\":\"NONE\", \"rows_per_partition\":\"ALL\"}'");
-        execute("INSERT INTO %s (p1, c1) VALUES (123, 10)");
-        assertEmpty(execute("SELECT * FROM %s WHERE p1=123 and c1 > 1000"));
-        UntypedResultSet res = execute("SELECT * FROM %s WHERE p1=123 and c1 > 0");
-        assertEquals(1, res.size());
-        assertEmpty(execute("SELECT * FROM %s WHERE p1=123 and c1 > 1000"));
+        assertInvalidSyntaxMessage("Bind variables cannot be used for keyspace names", "USE ?");
     }
 }
