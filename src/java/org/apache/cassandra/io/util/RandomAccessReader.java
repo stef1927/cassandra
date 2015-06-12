@@ -76,9 +76,9 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     // not have a shared channel.
     private static class RandomAccessReaderWithChannel extends RandomAccessReader
     {
-        RandomAccessReaderWithChannel(File file)
+        RandomAccessReaderWithChannel(ChannelProxy channel)
         {
-            super(new ChannelProxy(file), DEFAULT_BUFFER_SIZE, -1L, BufferType.OFF_HEAP);
+            super(channel.sharedCopy(), DEFAULT_BUFFER_SIZE, -1L, BufferType.OFF_HEAP);
         }
 
         @Override
@@ -97,7 +97,10 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
 
     public static RandomAccessReader open(File file)
     {
-        return new RandomAccessReaderWithChannel(file);
+        try (ChannelProxy channel = new ChannelProxy(file))
+        {
+            return new RandomAccessReaderWithChannel(channel);
+        }
     }
 
     public static RandomAccessReader open(ChannelProxy channel)
