@@ -68,8 +68,9 @@ import org.apache.cassandra.gms.Gossiper;
 import org.apache.cassandra.gms.GossiperMBean;
 import org.apache.cassandra.locator.EndpointSnitchInfoMBean;
 import org.apache.cassandra.metrics.CassandraMetricsRegistry;
-import org.apache.cassandra.metrics.ColumnFamilyMetrics.Sampler;
+import org.apache.cassandra.metrics.TableMetrics.Sampler;
 import org.apache.cassandra.metrics.StorageMetrics;
+import org.apache.cassandra.metrics.TableMetrics;
 import org.apache.cassandra.metrics.ThreadPoolMetrics;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.MessagingServiceMBean;
@@ -1091,13 +1092,13 @@ public class NodeProbe implements AutoCloseable
      * Retrieve ColumnFamily metrics
      * @param ks Keyspace for which stats are to be displayed.
      * @param cf ColumnFamily for which stats are to be displayed.
-     * @param metricName View {@link org.apache.cassandra.metrics.ColumnFamilyMetrics}.
+     * @param metricName View {@link TableMetrics}.
      */
     public Object getColumnFamilyMetric(String ks, String cf, String metricName)
     {
         try
         {
-            String type = cf.contains(".") ? "IndexColumnFamily": "ColumnFamily";
+            String type = cf.contains(".") ? "IndexTable" : "Table";
             ObjectName oName = new ObjectName(String.format("org.apache.cassandra.metrics:type=%s,keyspace=%s,scope=%s,name=%s", type, ks, cf, metricName));
             switch(metricName)
             {
@@ -1109,16 +1110,16 @@ public class NodeProbe implements AutoCloseable
                 case "CompressionMetadataOffHeapMemoryUsed":
                 case "CompressionRatio":
                 case "EstimatedColumnCountHistogram":
-                case "EstimatedRowSizeHistogram":
-                case "EstimatedRowCount":
+                case "EstimatedPartitionSizeHistogram":
+                case "EstimatedPartitionCount":
                 case "KeyCacheHitRate":
                 case "LiveSSTableCount":
-                case "MaxRowSize":
-                case "MeanRowSize":
+                case "MaxPartitionSize":
+                case "MeanPartitionSize":
                 case "MemtableColumnsCount":
                 case "MemtableLiveDataSize":
                 case "MemtableOffHeapSize":
-                case "MinRowSize":
+                case "MinPartitionSize":
                 case "RecentBloomFilterFalsePositives":
                 case "RecentBloomFilterFalseRatio":
                 case "SnapshotsSize":
@@ -1141,7 +1142,7 @@ public class NodeProbe implements AutoCloseable
                 case "TombstoneScannedHistogram":
                     return JMX.newMBeanProxy(mbeanServerConn, oName, CassandraMetricsRegistry.JmxHistogramMBean.class);
                 default:
-                    throw new RuntimeException("Unknown table metric.");
+                    throw new RuntimeException("Unknown table metric " + metricName);
             }
         }
         catch (MalformedObjectNameException e)
