@@ -184,13 +184,11 @@ public class CompactionTask extends AbstractCompactionTask
                         }
                     }
 
-                        // don't replace old sstables yet, as we need to mark the compaction finished in the system table
+                    // point of no return
                     newSStables = writer.finish();
                 }
                 finally
                 {
-                    // point of no return -- the new sstables are live on disk; next we'll start deleting the old ones
-                    // (in replaceCompactedSSTables)
                     if (collector != null)
                         collector.finishCompaction(ci);
 

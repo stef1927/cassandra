@@ -125,8 +125,7 @@ class Helpers
         {
             try
             {
-                boolean firstToCompact = reader.markObsolete(txnLogs);
-                assert firstToCompact : reader + " was already marked compacted";
+                reader.markObsolete(txnLogs);
             }
             catch (Throwable t)
             {

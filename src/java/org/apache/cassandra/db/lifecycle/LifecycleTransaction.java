@@ -134,6 +134,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
             marked.add(reader);
             identities.add(reader.instanceId);
 
+            // stef: don't think this should be done; see comments in LifecycleTransaction.commit)_
             transactionLogs.trackOld(reader);
         }
     }
@@ -197,9 +198,29 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         Iterable<SSTableReader> obsolete = filterIn(logged.obsolete, originals);
 
         // do not delete original readers that will not become obsolete
+        // stef: this should not be in the commit section; I think it should really never be the case that they are _tracked_
+        // unless they are obsoleted. i.e., they should only be added to the transaction log during the prepareToCommit()
+        // phase that marks them obsolete
         for (SSTableReader reader : filterOut(originals, logged.obsolete))
             transactionLogs.untrack(reader, false);
 
+        // stef: these next two steps have the problem that errors can corrupt the state.
+
+        // If anything happens during the transactionLogs.commit() we cannot rollback the state correctly in abort().
+        // Strictly speaking, prepareToCommit() *should* do all of the work that can throw an error, however the semantics
+        // as envisaged do permit us to throw an exception at the very *start* of commit, before any state transitions
+        // happen that cannot be reversed. So, in particular, we need to be certain we do not markObsolete() an sstablereader
+        // if the transactionLogs.commit() can fail and leave the internal state showing it obsolete, but the external state not.
+
+        // AFAICT, this and the above section need a little refactoring: the above untrack needs to happen earlier, as does the
+        // trackOld within the markObsolete calls; these should all preferably happen in a prepareToCommit.
+        // then, the transactionLogs.commit() needs to happen before anything else in this doCommit()
+        // then, finally, we should complete the markObsolete() step by wiring up the in-memory state necessary to perform tidying
+        // since we have total control of this step, we can be certain no exceptions will be thrown
+
+        // if you fancy doing something else as a followup to this, completing the work I started on fault injection
+        // would be tremendously helpful here, to ensure we always safely rollback from any internal or external errors.
+        // See CASSANDRA-9165.
         accumulate = markObsolete(obsolete, transactionLogs, accumulate);
         accumulate = transactionLogs.commit(accumulate);
         accumulate = tracker.updateSizeTracking(logged.obsolete, logged.update, accumulate);

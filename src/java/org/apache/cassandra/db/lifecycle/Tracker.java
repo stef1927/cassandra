@@ -142,9 +142,7 @@ public class Tracker
                 logger.debug("adding {} to list of files tracked for {}.{}", sstable.descriptor, cfstore.keyspace.getName(), cfstore.name);
             try
             {
-                final long size = sstable.bytesOnDisk();
-                sstable.runOnGlobalRelease(() -> cfstore.metric.totalDiskSpaceUsed.dec(size));
-                add += size;
+                add += sstable.bytesOnDisk();
             }
             catch (Throwable t)
             {
@@ -167,7 +165,7 @@ public class Tracker
         }
         StorageMetrics.load.inc(add - subtract);
         cfstore.metric.liveDiskSpaceUsed.inc(add - subtract);
-        // we don't subtract from total until the sstable is deleted, see SSTableReader.runOnGlobalRelease
+        // we don't subtract from total until the sstable is deleted, see TransactionLogs.SSTableTidier
         cfstore.metric.totalDiskSpaceUsed.inc(add);
         return accumulate;
     }

@@ -38,7 +38,6 @@ import org.slf4j.LoggerFactory;
 import static org.apache.cassandra.utils.Throwables.merge;
 
 import org.apache.cassandra.concurrent.ScheduledExecutors;
-import org.apache.cassandra.concurrent.SharedExecutorPool;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.db.SystemKeyspace;
@@ -81,7 +80,9 @@ import org.apache.cassandra.utils.concurrent.Transactional;
  */
 public class TransactionLogs extends Transactional.AbstractTransactional implements Transactional
 {
-    public static final ScheduledThreadPoolExecutor executor = ScheduledExecutors.nonPeriodicTasks;
+    // stef: i'm not too convinced by exposing the same executor again, seems a little confusing to me without any value add
+    // stashing it for local
+    private static final ScheduledThreadPoolExecutor executor = ScheduledExecutors.nonPeriodicTasks;
     private static final Logger logger = LoggerFactory.getLogger(TransactionLogs.class);
 
     /**
@@ -359,7 +360,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     private final Tracker tracker;
     private final TransactionData data;
     private final Ref<TransactionLogs> selfRef;
-    private final Map<Descriptor, SSTableTidier> tableTidiers = new HashMap<>();
+    private final Map<Descriptor, SSTableTidier> sstableTidiers = new HashMap<>();
     // Deleting sstables is tricky because the mmapping might not have been finalized yet,
     // and delete will fail (on Windows) until it is (we only force the unmapping on SUN VMs).
     // Additionally, we need to make sure to delete the data file first, so on restart the others
@@ -413,6 +414,8 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
         return this;
     }
 
+    // stef: don't think this should be used anywhere except SSTableRewriter.switchWriter(),
+    // where we find we haven't used the current one. In which case we can also just assert that it is present in newLog()
     public TransactionLogs untrack(SSTable table, boolean delete)
     {
         if (!data.newLog().remove(table, delete))
@@ -503,14 +506,17 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
      */
     private static class SSTableTidier implements Runnable
     {
-        private final SSTableReader referent;
+        // must not retain a reference to the SSTableReader, else leak detection cannot kick in
+        private final Descriptor desc;
+        private final long sizeOnDisk;
         private final Tracker tracker;
         private final Ref<TransactionLogs> parentRef;
-        public Runnable runOnGlobalRelease;
 
         public SSTableTidier(SSTableReader referent, TransactionLogs parent)
         {
-            this.referent = referent;
+            this.desc = referent.descriptor;
+            // TODO: (before commit) make sure not run in critical commit() section, or run safely (perhaps stash file pointers and do in run())
+            this.sizeOnDisk = referent.bytesOnDisk();
             this.tracker = parent.tracker;
             this.parentRef = parent.selfRef.tryRef();
         }
@@ -519,11 +525,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
         {
             blocker.ask();
 
-            final Descriptor desc = referent.descriptor;
             SystemKeyspace.clearSSTableReadMeter(desc.ksname, desc.cfname, desc.generation);
-
-            if (tracker != null)
-                tracker.notifyDeleting(referent);
 
             try
             {
@@ -536,17 +538,21 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
             }
             catch (Throwable t)
             {
-                logger.error("Failed deletion for {}, we'll retry after GC and on on server restart", referent);
+                logger.error("Failed deletion for {}, we'll retry after GC and on server restart", desc);
                 failedDeletions.add(this);
                 return;
             }
 
-            if (runOnGlobalRelease != null)
-                runOnGlobalRelease.run(); // run the original runOnGlobalRelease for this reader
+            tracker.cfstore.metric.totalDiskSpaceUsed.dec(sizeOnDisk);
 
             // release the referent to the parent so that the all transaction files can be released
             parentRef.release();
         }
+    }
+
+    public void released(Descriptor desc)
+    {
+        sstableTidiers.get(desc).run();
     }
 
     /**
@@ -576,19 +582,17 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
      * sure to track it as an old reader so that the global release might delete
      * any files we were not able to delete.
      */
-    public void obsoleted(SSTableReader... readers)
+    public void obsoleted(SSTableReader reader)
     {
-        for (SSTableReader reader : readers)
-        {
-            trackOld(reader);
+        trackOld(reader);
 
-            if (tableTidiers.containsKey(reader.descriptor))
-                continue;
+        assert !sstableTidiers.containsKey(reader.descriptor);
 
-            final SSTableTidier tidier = new SSTableTidier(reader, this);
-            tidier.runOnGlobalRelease = reader.replaceGlobalReleaseRunner(() -> tidier.run());
-            tableTidiers.put(reader.descriptor, tidier);
-        }
+        // stef: think this is better here than in the tidier that is potentially run multiple times
+        if (tracker != null)
+            tracker.notifyDeleting(reader);
+
+        sstableTidiers.put(reader.descriptor, new SSTableTidier(reader, this));
     }
 
     private Throwable complete(Throwable accumulate, boolean succeeded)
@@ -643,7 +647,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
 
             for (File log : logs)
             {
-                try(TransactionData data = TransactionData.make(log))
+                try (TransactionData data = TransactionData.make(log))
                 {
                     // we need to check this because there are potentially 2 log files per operation
                     if (ids.contains(data.id))

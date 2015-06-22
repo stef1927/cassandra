@@ -172,7 +172,7 @@ public class TransactionLogsTest extends SchemaLoader
         transactionLogs.trackNew(sstableNew);
         transactionLogs.trackOld(sstableOld2);
 
-        transactionLogs.obsoleted(sstableOld1, sstableOld2);
+        transactionLogs.obsoleted(sstableOld2);
         transactionLogs.finish();
 
         sstableOld1.selfRef().release();

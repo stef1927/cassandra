@@ -173,8 +173,8 @@ public class DirectoriesTest
         {
             assertEquals(cfDir(INDEX_CFM), dir);
         }
-        Descriptor parentDesc = new Descriptor(parentDirectories.getDirectoryForNewSSTables(), KS, PARENT_CFM.cfName, 0, Descriptor.Type.FINAL);
-        Descriptor indexDesc = new Descriptor(indexDirectories.getDirectoryForNewSSTables(), KS, INDEX_CFM.cfName, 0, Descriptor.Type.FINAL);
+        Descriptor parentDesc = new Descriptor(parentDirectories.getDirectoryForNewSSTables(), KS, PARENT_CFM.cfName, 0);
+        Descriptor indexDesc = new Descriptor(indexDirectories.getDirectoryForNewSSTables(), KS, INDEX_CFM.cfName, 0);
 
         // snapshot dir should be created under its parent's
         File parentSnapshotDirectory = Directories.getSnapshotDirectory(parentDesc, "test");
@@ -191,9 +191,9 @@ public class DirectoriesTest
                      indexDirectories.snapshotCreationTime("test"));
 
         // check true snapshot size
-        Descriptor parentSnapshot = new Descriptor(parentSnapshotDirectory, KS, PARENT_CFM.cfName, 0, Descriptor.Type.FINAL);
+        Descriptor parentSnapshot = new Descriptor(parentSnapshotDirectory, KS, PARENT_CFM.cfName, 0);
         createFile(parentSnapshot.filenameFor(Component.DATA), 30);
-        Descriptor indexSnapshot = new Descriptor(indexSnapshotDirectory, KS, INDEX_CFM.cfName, 0, Descriptor.Type.FINAL);
+        Descriptor indexSnapshot = new Descriptor(indexSnapshotDirectory, KS, INDEX_CFM.cfName, 0);
         createFile(indexSnapshot.filenameFor(Component.DATA), 40);
 
         assertEquals(30, parentDirectories.trueSnapshotsSize());
