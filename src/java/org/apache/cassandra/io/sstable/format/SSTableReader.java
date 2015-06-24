@@ -1662,17 +1662,16 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
         synchronized (tidy.global)
         {
             assert !tidy.isReplaced;
-            assert tidy.global.obsoletedBy == null: this + " was already marked compacted";
+            assert tidy.global.obsoletion == null: this + " was already marked compacted";
 
-            tidy.global.obsoletedBy = txnLogs;
-            txnLogs.obsoleted(this);
+            tidy.global.obsoletion = txnLogs.obsoleted(this);
             tidy.global.stopReadMeterPersistence();
         }
     }
 
     public boolean isMarkedCompacted()
     {
-        return tidy.global.obsoletedBy != null;
+        return tidy.global.obsoletion != null;
     }
 
     public void markSuspect()
@@ -2195,7 +2194,7 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
         // shared state managing if the logical sstable has been compacted; this is used in cleanup
         // stef: thought it was a bit cleaner to just make it clear what we're doing on global release,
         // especially with the fact that both replace and set functionality were both used for the same behaviour
-        private volatile TransactionLogs obsoletedBy;
+        private volatile TransactionLogs.SSTableTidier obsoletion;
 
         GlobalTidy(final SSTableReader reader)
         {
@@ -2219,7 +2218,7 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
             {
                 public void run()
                 {
-                    if (obsoletedBy == null)
+                    if (obsoletion == null)
                     {
                         meterSyncThrottle.acquire();
                         SystemKeyspace.persistSSTableReadMeter(desc.ksname, desc.cfname, desc.generation, readMeter);
@@ -2242,8 +2241,8 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
         {
             lookup.remove(desc);
 
-            if (obsoletedBy != null)
-                obsoletedBy.released(desc);
+            if (obsoletion != null)
+                obsoletion.released(desc);
 
             // don't ideally want to dropPageCache for the file until all instances have been released
             CLibrary.trySkipCache(desc.filenameFor(Component.DATA), 0, 0);

@@ -125,19 +125,20 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
                 lines.addAll(FileUtils.readLines(file));
         }
 
-        public void add(SSTable table)
+        public boolean add(SSTable table)
         {
-            add(table.descriptor.baseFilename());
+            return add(table.descriptor.baseFilename());
         }
 
-        private void add(String path)
+        private boolean add(String path)
         {
             String relativePath = FileUtils.getRelativePath(parent.getParentFolder(), path);
-            if (!lines.contains(relativePath))
-            {
-                lines.add(relativePath);
-                FileUtils.append(file, relativePath);
-            }
+            if (lines.contains(relativePath))
+                return false;
+
+            lines.add(relativePath);
+            FileUtils.append(file, relativePath);
+            return true;
         }
 
         public boolean remove(SSTable table, boolean delete)
@@ -360,7 +361,6 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     private final Tracker tracker;
     private final TransactionData data;
     private final Ref<TransactionLogs> selfRef;
-    private final Map<Descriptor, SSTableTidier> sstableTidiers = new HashMap<>();
     // Deleting sstables is tricky because the mmapping might not have been finalized yet,
     // and delete will fail (on Windows) until it is (we only force the unmapping on SUN VMs).
     // Additionally, we need to make sure to delete the data file first, so on restart the others
@@ -504,7 +504,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
      * it when done, so that the final transaction cleanup can run when all obsolete readers
      * are released.
      */
-    private static class SSTableTidier implements Runnable
+    public static class SSTableTidier implements Runnable
     {
         // must not retain a reference to the SSTableReader, else leak detection cannot kick in
         private final Descriptor desc;
@@ -550,11 +550,6 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
         }
     }
 
-    public void released(Descriptor desc)
-    {
-        sstableTidiers.get(desc).run();
-    }
-
     /**
      * Retry all deletions that failed the first time around (presumably b/c the sstable was still mmap'd.)
      * Useful because there are times when we know GC has been invoked; also exposed as an mbean.
@@ -582,17 +577,18 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
      * sure to track it as an old reader so that the global release might delete
      * any files we were not able to delete.
      */
-    public void obsoleted(SSTableReader reader)
+    public SSTableTidier obsoleted(SSTableReader reader)
     {
-        trackOld(reader);
-
-        assert !sstableTidiers.containsKey(reader.descriptor);
+        // stef: I realise this is broken until my other suggestions are implemented, but just wanted to change
+        // this upfront, since it's a little cleaner end result
+        if (!data.oldLog().add(reader))
+            throw new IllegalStateException();
 
         // stef: think this is better here than in the tidier that is potentially run multiple times
         if (tracker != null)
             tracker.notifyDeleting(reader);
 
-        sstableTidiers.put(reader.descriptor, new SSTableTidier(reader, this));
+        return new SSTableTidier(reader, this);
     }
 
     private Throwable complete(Throwable accumulate, boolean succeeded)
