@@ -20,7 +20,7 @@ package org.apache.cassandra.cql3.validation.operations;
 
 import org.junit.Test;
 
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 
 public class BatchTest extends CQLTester
 {

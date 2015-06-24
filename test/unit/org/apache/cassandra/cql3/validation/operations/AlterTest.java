@@ -17,7 +17,7 @@
  */
 package org.apache.cassandra.cql3.validation.operations;
 
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.exceptions.ConfigurationException;
@@ -185,5 +185,17 @@ public class AlterTest extends CQLTester
         flush();
         execute("alter table %s drop v");
         execute("alter table %s add v int");
+    }
+
+    @Test
+    // tests CASSANDRA-9565
+    public void testDoubleWith() throws Throwable
+    {
+        String[] stmts = new String[] { "ALTER KEYSPACE WITH WITH DURABLE_WRITES = true",
+                                        "ALTER KEYSPACE ks WITH WITH DURABLE_WRITES = true" };
+
+        for (String stmt : stmts) {
+            assertInvalidSyntaxMessage("no viable alternative at input 'WITH'", stmt);
+        }
     }
 }

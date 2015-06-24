@@ -22,7 +22,7 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 
 public class SelectSingleColumnRelationTest extends CQLTester
 {

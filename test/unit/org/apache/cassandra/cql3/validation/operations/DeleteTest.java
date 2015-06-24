@@ -25,7 +25,7 @@ import java.util.List;
 
 import org.junit.Test;
 
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 
 import static org.junit.Assert.assertEquals;
 
