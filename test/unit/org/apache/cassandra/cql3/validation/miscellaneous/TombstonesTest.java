@@ -25,7 +25,7 @@ import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.db.filter.TombstoneOverwhelmingException;
 
 import static junit.framework.Assert.assertTrue;

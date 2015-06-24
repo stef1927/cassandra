@@ -18,12 +18,9 @@
 
 package org.apache.cassandra.cql3.validation.operations;
 
-import org.junit.BeforeClass;
 import org.junit.Test;
 
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.cql3.validation.util.CQLTester;
-import org.apache.cassandra.dht.Murmur3Partitioner;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.exceptions.SyntaxException;
 

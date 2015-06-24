@@ -21,7 +21,7 @@ import java.util.UUID;
 
 import org.junit.Test;
 
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 
 public class CollectionsTest extends CQLTester
 {
@@ -250,13 +250,13 @@ public class CollectionsTest extends CQLTester
         Object m = map("k", "v");
         execute("INSERT INTO %s (k, m) VALUES (10, ?)", m);
         assertRows(execute("SELECT m FROM %s WHERE k = 10"),
-                row(m)
+                   row(m)
         );
 
         // test putting an unset map, should not delete the contents
         execute("INSERT INTO %s (k, m) VALUES (10, ?)", unset());
         assertRows(execute("SELECT m FROM %s WHERE k = 10"),
-                row(m)
+                   row(m)
         );
         // test unset variables in a map update operaiotn, should not delete the contents
         execute("UPDATE %s SET m['k'] = ? WHERE k = 10", unset());
@@ -283,7 +283,7 @@ public class CollectionsTest extends CQLTester
         // replace list with unset value
         execute("INSERT INTO %s (k, l) VALUES (10, ?)", unset());
         assertRows(execute("SELECT l FROM %s WHERE k = 10"),
-                row(l)
+                   row(l)
         );
 
         // add to position

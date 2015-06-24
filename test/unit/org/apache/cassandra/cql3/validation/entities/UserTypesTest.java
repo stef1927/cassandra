@@ -23,7 +23,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.dht.ByteOrderedPartitioner;
 
 public class UserTypesTest extends CQLTester
@@ -134,10 +134,10 @@ public class UserTypesTest extends CQLTester
         createTable("CREATE TABLE %s (k int PRIMARY KEY, v frozen<" + myType + ">, z frozen<" + myOtherType + ">)");
 
         assertInvalidMessage("Invalid unset value for field 'y' of user defined type " + myType,
-                "INSERT INTO %s (k, v) VALUES (10, {x:?, y:?})", 1, unset());
+                             "INSERT INTO %s (k, v) VALUES (10, {x:?, y:?})", 1, unset());
 
         assertInvalidMessage("Invalid unset value for field 'y' of user defined type " + myType,
-                "INSERT INTO %s (k, v, z) VALUES (10, {x:?, y:?}, {a:{x: ?, y: ?}})", 1, 1, 1, unset());
+                             "INSERT INTO %s (k, v, z) VALUES (10, {x:?, y:?}, {a:{x: ?, y: ?}})", 1, 1, 1, unset());
     }
 
     @Test

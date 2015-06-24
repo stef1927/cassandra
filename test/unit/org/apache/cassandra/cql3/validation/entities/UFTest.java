@@ -42,7 +42,7 @@ import org.apache.cassandra.cql3.UntypedResultSet;
 import org.apache.cassandra.cql3.functions.FunctionName;
 import org.apache.cassandra.cql3.functions.Functions;
 import org.apache.cassandra.cql3.functions.UDFunction;
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.db.marshal.CollectionType;
 import org.apache.cassandra.dht.ByteOrderedPartitioner;
 import org.apache.cassandra.exceptions.FunctionExecutionException;

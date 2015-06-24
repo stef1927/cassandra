@@ -19,7 +19,7 @@ package org.apache.cassandra.db;
 
 import org.junit.Test;
 
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.cql3.UntypedResultSet;
 import org.apache.cassandra.service.CacheService;
 import static org.junit.Assert.assertEquals;

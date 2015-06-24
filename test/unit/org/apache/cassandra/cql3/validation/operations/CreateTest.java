@@ -29,7 +29,7 @@ import org.junit.Test;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.config.TriggerDefinition;
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.db.ColumnFamily;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.exceptions.ConfigurationException;
@@ -459,6 +459,18 @@ public class CreateTest extends CQLTester
 
         execute("DROP TRIGGER IF EXISTS trigger_1 ON %s");
         assertTriggerDoesNotExists("trigger_1", TestTrigger.class);
+    }
+
+    @Test
+    // tests CASSANDRA-9565
+    public void testDoubleWith() throws Throwable
+    {
+        String[] stmts = new String[] { "CREATE KEYSPACE WITH WITH DURABLE_WRITES = true",
+                                        "CREATE KEYSPACE ks WITH WITH DURABLE_WRITES = true" };
+
+        for (String stmt : stmts) {
+            assertInvalidSyntaxMessage("no viable alternative at input 'WITH'", stmt);
+        }
     }
 
     private void assertTriggerExists(String name, Class<?> clazz)

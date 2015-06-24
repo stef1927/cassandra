@@ -30,7 +30,7 @@ import org.junit.Test;
 import org.apache.cassandra.cql3.QueryProcessor;
 import org.apache.cassandra.cql3.functions.Functions;
 import org.apache.cassandra.cql3.functions.UDAggregate;
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.exceptions.FunctionExecutionException;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.serializers.Int32Serializer;

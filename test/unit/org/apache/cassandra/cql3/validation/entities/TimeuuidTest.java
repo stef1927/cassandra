@@ -23,7 +23,7 @@ import java.util.UUID;
 
 import org.junit.Test;
 
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.exceptions.SyntaxException;
 import org.apache.cassandra.utils.UUIDGen;
 

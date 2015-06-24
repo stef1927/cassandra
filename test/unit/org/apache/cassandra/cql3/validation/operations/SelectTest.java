@@ -20,12 +20,11 @@ package org.apache.cassandra.cql3.validation.operations;
 import java.nio.ByteBuffer;
 import java.util.UUID;
 
-import org.junit.BeforeClass;
 import org.junit.Test;
 
 import junit.framework.Assert;
 import org.apache.cassandra.cql3.UntypedResultSet;
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;

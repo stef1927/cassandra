@@ -8,7 +8,7 @@ import org.junit.Test;
 import static junit.framework.Assert.assertNull;
 import static org.junit.Assert.assertEquals;
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.dht.ByteOrderedPartitioner;
 
 /**

@@ -19,7 +19,7 @@ package org.apache.cassandra.cql3.validation.entities;
 
 import org.junit.Test;
 
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 
 public class TupleTypeTest extends CQLTester
 {
@@ -106,7 +106,7 @@ public class TupleTypeTest extends CQLTester
         createTable("CREATE TABLE %s (k int PRIMARY KEY, t tuple<int, text, double>)");
         // invalid positional field substitution
         assertInvalidMessage("Invalid unset value for tuple field number 1",
-                "INSERT INTO %s (k, t) VALUES(0, (3, ?, 2.1))", unset());
+                             "INSERT INTO %s (k, t) VALUES(0, (3, ?, 2.1))", unset());
 
         createIndex("CREATE INDEX tuple_index ON %s (t)");
         // select using unset

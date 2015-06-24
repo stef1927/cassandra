@@ -18,15 +18,7 @@
 package org.apache.cassandra.cql3.validation.miscellaneous;
 
 import java.math.BigInteger;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Date;
-import java.util.List;
-import java.util.UUID;
 
-import org.junit.BeforeClass;
 import org.junit.Test;
 
 import static junit.framework.Assert.assertFalse;
@@ -35,16 +27,9 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-import junit.framework.Assert;
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.cql3.UntypedResultSet;
-import org.apache.cassandra.cql3.validation.util.CQLTester;
-import org.apache.cassandra.dht.Murmur3Partitioner;
-import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.exceptions.InvalidRequestException;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.exceptions.SyntaxException;
 import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.UUIDGen;
 
 /**
  * Any tests that do not fit in any other category,

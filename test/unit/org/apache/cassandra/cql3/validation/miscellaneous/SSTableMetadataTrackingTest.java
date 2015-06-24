@@ -19,7 +19,7 @@ package org.apache.cassandra.cql3.validation.miscellaneous;
 
 import org.junit.Test;
 
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.io.sstable.metadata.StatsMetadata;

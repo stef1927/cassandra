@@ -17,10 +17,9 @@
  */
 package org.apache.cassandra.cql3.validation.operations;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 
 import static org.junit.Assert.assertEquals;
 

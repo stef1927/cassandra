@@ -20,7 +20,7 @@ package org.apache.cassandra.cql3.validation.entities;
 import org.junit.Test;
 
 import junit.framework.Assert;
-import org.apache.cassandra.cql3.validation.util.CQLTester;
+import org.apache.cassandra.cql3.CQLTester;
 
 import static junit.framework.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
