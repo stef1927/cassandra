@@ -80,9 +80,6 @@ import org.apache.cassandra.utils.concurrent.Transactional;
  */
 public class TransactionLogs extends Transactional.AbstractTransactional implements Transactional
 {
-    // stef: i'm not too convinced by exposing the same executor again, seems a little confusing to me without any value add
-    // stashing it for local
-    private static final ScheduledThreadPoolExecutor executor = ScheduledExecutors.nonPeriodicTasks;
     private static final Logger logger = LoggerFactory.getLogger(TransactionLogs.class);
 
     /**
@@ -154,6 +151,12 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
             String[] linesArray = new String[lines.size()];
             FileUtils.replace(file, lines.toArray(linesArray));
             return true;
+        }
+
+        public boolean contains(SSTable table)
+        {
+            String relativePath = FileUtils.getRelativePath(parent.getParentFolder(), table.descriptor.baseFilename());
+            return lines.contains(relativePath);
         }
 
         private void deleteContents()
@@ -397,31 +400,48 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     }
 
     /**
-     * Mark this table as new, it must be safe to call this method multiple times.
+     * Track a reader as new.
      **/
-    public TransactionLogs trackNew(SSTable table)
+    public void track(SSTable table)
     {
+        if (!data.newLog().add(table))
+            throw new IllegalStateException(table + " is already tracked as new");
+
         data.newLog().add(table);
+    }
+
+    /**
+     * Stop tracking a reader as new.
+     */
+    public TransactionLogs untrack(SSTable table)
+    {
+        assert data.newLog().contains(table) : table + " is not tracked by new log";
+        data.newLog().remove(table, true);
+
         return this;
     }
 
     /**
-     * Mark this table as old, it must be safe to call this method multiple times.
-     **/
-    public TransactionLogs trackOld(SSTable table)
+     * Schedule a reader for deletion as soon as it is fully unreferenced and the transaction
+     * has been committed.
+     */
+    public SSTableTidier obsoleted(SSTableReader reader)
     {
-        data.oldLog().add(table);
-        return this;
-    }
+        if (data.newLog().contains(reader))
+        {
+            if (data.oldLog().contains(reader))
+                throw new IllegalArgumentException();
 
-    // stef: don't think this should be used anywhere except SSTableRewriter.switchWriter(),
-    // where we find we haven't used the current one. In which case we can also just assert that it is present in newLog()
-    public TransactionLogs untrack(SSTable table, boolean delete)
-    {
-        if (!data.newLog().remove(table, delete))
-            data.oldLog().remove(table, delete);
+            return new SSTableTidier(reader, true, this);
+        }
 
-        return this;
+        if (!data.oldLog().add(reader))
+            throw new IllegalStateException();
+
+        if (tracker != null)
+            tracker.notifyDeleting(reader);
+
+        return new SSTableTidier(reader, false, this);
     }
 
     public OperationType getType()
@@ -510,14 +530,15 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
         private final Descriptor desc;
         private final long sizeOnDisk;
         private final Tracker tracker;
+        private final boolean wasNew;
         private final Ref<TransactionLogs> parentRef;
 
-        public SSTableTidier(SSTableReader referent, TransactionLogs parent)
+        public SSTableTidier(SSTableReader referent, boolean wasNew, TransactionLogs parent)
         {
             this.desc = referent.descriptor;
-            // TODO: (before commit) make sure not run in critical commit() section, or run safely (perhaps stash file pointers and do in run())
             this.sizeOnDisk = referent.bytesOnDisk();
             this.tracker = parent.tracker;
+            this.wasNew = wasNew;
             this.parentRef = parent.selfRef.tryRef();
         }
 
@@ -543,9 +564,15 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
                 return;
             }
 
-            tracker.cfstore.metric.totalDiskSpaceUsed.dec(sizeOnDisk);
+            if (tracker != null && !wasNew)
+                tracker.cfstore.metric.totalDiskSpaceUsed.dec(sizeOnDisk);
 
             // release the referent to the parent so that the all transaction files can be released
+            parentRef.release();
+        }
+
+        public void abort()
+        {
             parentRef.release();
         }
     }
@@ -558,37 +585,19 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     {
         Runnable task;
         while ( null != (task = failedDeletions.poll()))
-            TransactionLogs.executor.submit(task);
+            ScheduledExecutors.nonPeriodicTasks.submit(task);
     }
 
     public static void waitForDeletions()
     {
-        FBUtilities.waitOnFuture(TransactionLogs.executor.schedule(() -> {}, 0, TimeUnit.MILLISECONDS));
+        FBUtilities.waitOnFuture(ScheduledExecutors.nonPeriodicTasks.schedule(() -> {
+        }, 0, TimeUnit.MILLISECONDS));
     }
 
     @VisibleForTesting
     public static void pauseDeletions(boolean stop)
     {
         blocker.block(stop);
-    }
-
-    /**
-     * Schedule a reader for deletion as soon as it is fully unreferenced, make
-     * sure to track it as an old reader so that the global release might delete
-     * any files we were not able to delete.
-     */
-    public SSTableTidier obsoleted(SSTableReader reader)
-    {
-        // stef: I realise this is broken until my other suggestions are implemented, but just wanted to change
-        // this upfront, since it's a little cleaner end result
-        if (!data.oldLog().add(reader))
-            throw new IllegalStateException();
-
-        // stef: think this is better here than in the tidier that is potentially run multiple times
-        if (tracker != null)
-            tracker.notifyDeleting(reader);
-
-        return new SSTableTidier(reader, this);
     }
 
     private Throwable complete(Throwable accumulate, boolean succeeded)

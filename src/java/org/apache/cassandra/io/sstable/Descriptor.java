@@ -45,10 +45,6 @@ import static org.apache.cassandra.io.sstable.Component.separator;
 public class Descriptor
 {
     public static String TMP_EXT = ".tmp";
-    // Before CASSANDRA-7066, temporary files used to start with either tmp or tmplink
-    public static String LEGACY_TMP_PREFIX = "tmp";
-    public static String LEGACY_TMPLINK_PREFIX = "tmplink";
-
     public final File directory;
     /** version has the following format: <code>[a-z]+</code> */
     public final Version version;
@@ -158,9 +154,7 @@ public class Descriptor
     {
         List<File> ret = new ArrayList<>();
         File[] tmpFiles = directory.listFiles((dir, name) ->
-                                              name.endsWith(Descriptor.TMP_EXT) ||
-                                              name.startsWith(LEGACY_TMP_PREFIX) ||
-                                              name.startsWith(LEGACY_TMPLINK_PREFIX));
+                                              name.endsWith(Descriptor.TMP_EXT));
 
         for (File tmpFile : tmpFiles)
             ret.add(tmpFile);
@@ -168,11 +162,21 @@ public class Descriptor
         return ret;
     }
 
+    /**
+     *  Files obsoleted by CASSANDRA-7066 :
+     *  - temporary files used to start with either tmp or tmplink
+     *  - system.compactions_in_progress sstable files
+     */
+    public static boolean isLegacyFile(String fileName)
+    {
+        return fileName.startsWith("compactions_in_progress") ||
+               fileName.startsWith("tmp") ||
+               fileName.startsWith("tmplink");
+    }
+
     public static boolean isValidFile(String fileName)
     {
-        return !fileName.startsWith(LEGACY_TMP_PREFIX) &&
-               !fileName.startsWith(LEGACY_TMPLINK_PREFIX) &&
-               fileName.endsWith(".db");
+        return fileName.endsWith(".db") && !isLegacyFile(fileName);
     }
 
     /**

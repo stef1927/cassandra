@@ -290,7 +290,7 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
             {
                 // delete before untracking
                 writer.abort();
-                transaction.logs().untrack(writer, true);
+                transaction.logs().untrack(writer);
                 writers.remove(writer);
             }
             writer = newWriter;

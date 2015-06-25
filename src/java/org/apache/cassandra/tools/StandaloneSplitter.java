@@ -155,14 +155,17 @@ public class StandaloneSplitter
                     new SSTableSplitter(cfs, transaction, options.sizeInMB).split();
 
                     // Remove the sstable (it's been copied by split and snapshotted)
-                    sstable.markObsolete(transaction.logs());
-                    sstable.selfRef().release();
+                    transaction.obsoleteOriginals();
                 }
                 catch (Exception e)
                 {
                     System.err.println(String.format("Error splitting %s: %s", sstable, e.getMessage()));
                     if (options.debug)
                         e.printStackTrace(System.err);
+                }
+                finally
+                {
+                    sstable.selfRef().release();
                 }
             }
             CompactionManager.instance.finishCompactionsAndShutdown(5, TimeUnit.MINUTES);

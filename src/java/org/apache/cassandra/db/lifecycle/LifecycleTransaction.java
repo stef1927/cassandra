@@ -31,6 +31,8 @@ import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.SSTableReader.UniqueIdentifier;
+import org.apache.cassandra.utils.Pair;
+import org.apache.cassandra.utils.Throwables;
 import org.apache.cassandra.utils.concurrent.Transactional;
 
 import static com.google.common.base.Functions.compose;
@@ -104,6 +106,9 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     // changes that are pending
     private final State staged = new State();
 
+    // the tidiers to be used for marking obsoleted readers during a commit
+    private List<Pair<SSTableReader, TransactionLogs.SSTableTidier>> tidiers;
+
     /**
      * construct a Transaction for use in an offline operation
      */
@@ -133,9 +138,6 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
             originals.add(reader);
             marked.add(reader);
             identities.add(reader.instanceId);
-
-            // stef: don't think this should be done; see comments in LifecycleTransaction.commit)_
-            transactionLogs.trackOld(reader);
         }
     }
 
@@ -177,7 +179,11 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         // it may break this use case, and care is needed
         checkpoint();
 
-        transactionLogs.prepareToCommit();
+        // prepare for compaction obsolete readers as long as they were part of the original set
+        // since those that are not original are early readers that share the same desc with the finals
+        tidiers = prepareForObsoletion(filterIn(logged.obsolete, originals), transactionLogs);
+
+        transactionLogs.finish();
     }
 
     /**
@@ -186,43 +192,13 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     public Throwable doCommit(Throwable accumulate)
     {
         assert staged.isEmpty() : "must be no actions introduced between prepareToCommit and a commit";
-
         logger.debug("Committing update:{}, obsolete:{}", staged.update, staged.obsolete);
 
         // this is now the point of no return; we cannot safely rollback, so we ignore exceptions until we're done
         // we restore state by obsoleting our obsolete files, releasing our references to them, and updating our size
         // and notification status for the obsolete and new files
 
-        // mark as compacted obsolete readers as long as they were part of the original set
-        // since those that are not original are early readers that share the same desc with the finals
-        Iterable<SSTableReader> obsolete = filterIn(logged.obsolete, originals);
-
-        // do not delete original readers that will not become obsolete
-        // stef: this should not be in the commit section; I think it should really never be the case that they are _tracked_
-        // unless they are obsoleted. i.e., they should only be added to the transaction log during the prepareToCommit()
-        // phase that marks them obsolete
-        for (SSTableReader reader : filterOut(originals, logged.obsolete))
-            transactionLogs.untrack(reader, false);
-
-        // stef: these next two steps have the problem that errors can corrupt the state.
-
-        // If anything happens during the transactionLogs.commit() we cannot rollback the state correctly in abort().
-        // Strictly speaking, prepareToCommit() *should* do all of the work that can throw an error, however the semantics
-        // as envisaged do permit us to throw an exception at the very *start* of commit, before any state transitions
-        // happen that cannot be reversed. So, in particular, we need to be certain we do not markObsolete() an sstablereader
-        // if the transactionLogs.commit() can fail and leave the internal state showing it obsolete, but the external state not.
-
-        // AFAICT, this and the above section need a little refactoring: the above untrack needs to happen earlier, as does the
-        // trackOld within the markObsolete calls; these should all preferably happen in a prepareToCommit.
-        // then, the transactionLogs.commit() needs to happen before anything else in this doCommit()
-        // then, finally, we should complete the markObsolete() step by wiring up the in-memory state necessary to perform tidying
-        // since we have total control of this step, we can be certain no exceptions will be thrown
-
-        // if you fancy doing something else as a followup to this, completing the work I started on fault injection
-        // would be tremendously helpful here, to ensure we always safely rollback from any internal or external errors.
-        // See CASSANDRA-9165.
-        accumulate = markObsolete(obsolete, transactionLogs, accumulate);
-        accumulate = transactionLogs.commit(accumulate);
+        accumulate = markObsolete(tidiers, accumulate);
         accumulate = tracker.updateSizeTracking(logged.obsolete, logged.update, accumulate);
         accumulate = release(selfRefs(logged.obsolete), accumulate);
         accumulate = tracker.notifySSTablesChanged(originals, logged.update, transactionLogs.getType(), accumulate);
@@ -238,14 +214,34 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         if (logger.isDebugEnabled())
             logger.debug("Aborting transaction over {}, with ({},{}) logged and ({},{}) staged", originals, logged.update, logged.obsolete, staged.update, staged.obsolete);
 
+        accumulate = abortObsoletion(tidiers, accumulate);
+
         if (logged.isEmpty() && staged.isEmpty())
-            return transactionLogs.abort(accumulate);
+        {
+            if (transactionLogs.state() != AbstractTransactional.State.COMMITTED)
+                return transactionLogs.abort(accumulate);
+            else
+                return accumulate;
+        }
 
         // mark obsolete all readers that are not versions of those present in the original set
         Iterable<SSTableReader> obsolete = filterOut(concatUniq(staged.update, logged.update), originals);
         logger.debug("Obsoleting {}", obsolete);
-        accumulate = markObsolete(obsolete, transactionLogs, accumulate);
-        accumulate = transactionLogs.abort(accumulate);
+
+        try
+        {
+            tidiers = null;
+            tidiers = prepareForObsoletion(obsolete, transactionLogs);
+        }
+        catch (Throwable t)
+        {
+            accumulate = Throwables.merge(accumulate, t);
+        }
+
+        if (transactionLogs.state() != AbstractTransactional.State.COMMITTED)
+            accumulate = transactionLogs.abort(accumulate);
+
+        accumulate = markObsolete(tidiers, accumulate);
 
         // replace all updated readers with a version restored to its original state
         accumulate = tracker.apply(updateLiveSet(logged.update, restoreUpdatedOriginals()), accumulate);
@@ -454,7 +450,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         marked.remove(cancel);
         maybeFail(unmarkCompacting(singleton(cancel), null));
 
-        transactionLogs.untrack(cancel, false);
+        //transactionLogs.untrack(cancel, false);
     }
 
     /**

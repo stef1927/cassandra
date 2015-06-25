@@ -18,6 +18,7 @@
 */
 package org.apache.cassandra.db.lifecycle;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -36,7 +37,11 @@ import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.big.BigTableReader;
+import org.apache.cassandra.utils.Pair;
 import org.apache.cassandra.utils.concurrent.Refs;
+
+import static junit.framework.Assert.assertEquals;
+import static junit.framework.Assert.assertNotNull;
 
 public class HelpersTest
 {
@@ -151,7 +156,7 @@ public class HelpersTest
         for (SSTableReader reader : readers)
             Assert.assertTrue(reader.isReplaced());
         accumulate = Helpers.setReplaced(readers, null);
-        Assert.assertNotNull(accumulate);
+        assertNotNull(accumulate);
     }
 
     @Test
@@ -160,12 +165,19 @@ public class HelpersTest
         ColumnFamilyStore cfs = MockSchema.newCFS();
         TransactionLogs txnLogs = new TransactionLogs(OperationType.UNKNOWN, cfs.metadata);
         Iterable<SSTableReader> readers = Lists.newArrayList(MockSchema.sstable(1, cfs), MockSchema.sstable(2, cfs));
-        Throwable accumulate = Helpers.markObsolete(readers, txnLogs, null);
+
+        List<Pair<SSTableReader, TransactionLogs.SSTableTidier>> tidiers = Helpers.prepareForObsoletion(readers, txnLogs);
+        assertNotNull(tidiers);
+        assertEquals(2, tidiers.size());
+
+        Throwable accumulate = Helpers.markObsolete(tidiers, null);
         Assert.assertNull(accumulate);
         for (SSTableReader reader : readers)
             Assert.assertTrue(reader.isMarkedCompacted());
-        accumulate = Helpers.markObsolete(readers, txnLogs, null);
-        Assert.assertNotNull(accumulate);
+
+        accumulate = Helpers.markObsolete(tidiers, null);
+        assertNotNull(accumulate);
+
         txnLogs.finish();
     }
 }

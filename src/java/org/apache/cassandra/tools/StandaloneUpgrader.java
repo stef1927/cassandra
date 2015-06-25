@@ -104,21 +104,17 @@ public class StandaloneUpgrader
                 try (LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.UPGRADE_SSTABLES, sstable))
                 {
                     Upgrader upgrader = new Upgrader(cfs, txn, handler);
-                    upgrader.upgrade();
-
-                    if (!options.keepSource)
-                    {
-                        // Remove the sstable (it's been copied by upgrade)
-                        System.out.format("Deleting table %s.%n", sstable.descriptor.baseFilename());
-                        sstable.markObsolete(txn.logs());
-                        sstable.selfRef().release();
-                    }
+                    upgrader.upgrade(options.keepSource);
                 }
                 catch (Exception e)
                 {
                     System.err.println(String.format("Error upgrading %s: %s", sstable, e.getMessage()));
                     if (options.debug)
                         e.printStackTrace(System.err);
+                }
+                finally
+                {
+                    sstable.selfRef().release();
                 }
             }
             CompactionManager.instance.finishCompactionsAndShutdown(5, TimeUnit.MINUTES);

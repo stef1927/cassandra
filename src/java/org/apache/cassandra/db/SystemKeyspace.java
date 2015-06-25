@@ -47,9 +47,12 @@ import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.exceptions.ConfigurationException;
+import org.apache.cassandra.exceptions.StartupException;
+import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.util.DataInputBuffer;
 import org.apache.cassandra.io.util.DataOutputBuffer;
+import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.io.util.NIODataInputStream;
 import org.apache.cassandra.locator.IEndpointSnitch;
 import org.apache.cassandra.metrics.RestorableMeter;
@@ -1140,7 +1143,7 @@ public final class SystemKeyspace
      *
      * @throws IOException
      */
-    public static void snapshotOnVersionChange() throws IOException
+    public static boolean snapshotOnVersionChange() throws IOException
     {
         String previous = getPreviousVersionString();
         String next = FBUtilities.getReleaseVersionString();
@@ -1155,7 +1158,10 @@ public final class SystemKeyspace
                                                                                     next));
             Keyspace systemKs = Keyspace.open(SystemKeyspace.NAME);
             systemKs.snapshot(snapshotName, null);
+            return true;
         }
+
+        return false;
     }
 
     /**
@@ -1193,6 +1199,36 @@ public final class SystemKeyspace
         }
         // report back whatever we found in the system table
         return result.one().getString("release_version");
+    }
+
+    /**
+     * Check data directories for old files that can be removed when migrating from 2.2 to 3.0,
+     * these checks can be removed in 4.0, see CASSANDRA-7066
+     */
+    public static void migrateDataDirs()
+    {
+        Iterable<String> dirs = Arrays.asList(DatabaseDescriptor.getAllDataFileLocations());
+        for (String dataDir : dirs)
+        {
+            logger.debug("Checking directory {} for old files", dataDir);
+            File dir = new File(dataDir);
+            assert dir.exists() : dir + " should have been created by startup checks";
+
+            for (File ksdir : dir.listFiles((d, n) -> d.isDirectory()))
+            {
+                for (File cfdir : ksdir.listFiles((d, n) -> d.isDirectory()))
+                {
+                    if (Descriptor.isLegacyFile(cfdir.getName()))
+                    {
+                        FileUtils.deleteRecursive(cfdir);
+                    }
+                    else
+                    {
+                        FileUtils.delete(cfdir.listFiles((d, n) -> Descriptor.isLegacyFile(n)));
+                    }
+                }
+            }
+        }
     }
 
     private static ByteBuffer rangeToBytes(Range<Token> range)

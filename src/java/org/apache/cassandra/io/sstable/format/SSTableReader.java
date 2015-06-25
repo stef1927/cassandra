@@ -1172,7 +1172,6 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
             long newSize = bytesOnDisk();
             StorageMetrics.load.inc(newSize - oldSize);
             parent.metric.liveDiskSpaceUsed.inc(newSize - oldSize);
-            // stef: by introducing this here, we can remove the precalculation of sizeOnDisk for release, and just decrement the amount present
             parent.metric.totalDiskSpaceUsed.inc(newSize - oldSize);
 
             return cloneAndReplace(first, OpenReason.METADATA_CHANGE, newSummary);
@@ -1654,7 +1653,7 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
      * @return true if the this is the first time the file was marked obsolete.  Calling this
      * multiple times is usually buggy (see exceptions in Tracker.unmarkCompacting and removeOldSSTablesSize).
      */
-    public void markObsolete(TransactionLogs txnLogs)
+    public void markObsolete(TransactionLogs.SSTableTidier tidier)
     {
         if (logger.isDebugEnabled())
             logger.debug("Marking {} compacted", getFilename());
@@ -1664,7 +1663,7 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
             assert !tidy.isReplaced;
             assert tidy.global.obsoletion == null: this + " was already marked compacted";
 
-            tidy.global.obsoletion = txnLogs.obsoleted(this);
+            tidy.global.obsoletion = tidier;
             tidy.global.stopReadMeterPersistence();
         }
     }
@@ -2135,8 +2134,6 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
             else
                 barrier = null;
 
-            // stef: seems a bit confusing to me to use the TransactionLogs executor here, even if it is the same
-            // since it does a lot more than just clean them up
             ScheduledExecutors.nonPeriodicTasks.execute(new Runnable()
             {
                 public void run()
@@ -2192,8 +2189,6 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
         // sstable have been released
         private ScheduledFuture readMeterSyncFuture;
         // shared state managing if the logical sstable has been compacted; this is used in cleanup
-        // stef: thought it was a bit cleaner to just make it clear what we're doing on global release,
-        // especially with the fact that both replace and set functionality were both used for the same behaviour
         private volatile TransactionLogs.SSTableTidier obsoletion;
 
         GlobalTidy(final SSTableReader reader)
@@ -2227,7 +2222,6 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
             }, 1, 5, TimeUnit.MINUTES);
         }
 
-        // stef: minor clarifying unrelated refactor
         private void stopReadMeterPersistence()
         {
             if (readMeterSyncFuture != null)
@@ -2242,7 +2236,7 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
             lookup.remove(desc);
 
             if (obsoletion != null)
-                obsoletion.released(desc);
+                obsoletion.run();
 
             // don't ideally want to dropPageCache for the file until all instances have been released
             CLibrary.trySkipCache(desc.filenameFor(Component.DATA), 0, 0);

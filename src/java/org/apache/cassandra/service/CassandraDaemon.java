@@ -165,7 +165,10 @@ public class CassandraDaemon
 
         try
         {
-            SystemKeyspace.snapshotOnVersionChange();
+            if (SystemKeyspace.snapshotOnVersionChange())
+            {
+                SystemKeyspace.migrateDataDirs();
+            }
         }
         catch (IOException e)
         {

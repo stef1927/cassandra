@@ -163,8 +163,10 @@ public class Tracker
                 accumulate = merge(accumulate, t);
             }
         }
+
         StorageMetrics.load.inc(add - subtract);
         cfstore.metric.liveDiskSpaceUsed.inc(add - subtract);
+
         // we don't subtract from total until the sstable is deleted, see TransactionLogs.SSTableTidier
         cfstore.metric.totalDiskSpaceUsed.inc(add);
         return accumulate;
@@ -227,8 +229,32 @@ public class Tracker
     {
         try (TransactionLogs txnLogs = new TransactionLogs(operationType, cfstore.metadata, this))
         {
-            accumulate = dropSSTables(remove, txnLogs, accumulate);
-            txnLogs.finish();
+            Pair<View, View> result = apply(view -> {
+                Set<SSTableReader> toremove = copyOf(filter(view.sstables, and(remove, notIn(view.compacting))));
+                return updateLiveSet(toremove, emptySet()).apply(view);
+            });
+
+            Set<SSTableReader> removed = Sets.difference(result.left.sstables, result.right.sstables);
+            assert Iterables.all(removed, remove);
+
+            List<Pair<SSTableReader, TransactionLogs.SSTableTidier>> tidiers = prepareForObsoletion(removed, txnLogs);
+            try
+            {
+                txnLogs.finish();
+                if (!removed.isEmpty())
+                {
+                    accumulate = markObsolete(tidiers, accumulate);
+                    accumulate = updateSizeTracking(removed, emptySet(), accumulate);
+                    accumulate = release(selfRefs(removed), accumulate);
+                    // notifySSTablesChanged -> LeveledManifest.promote doesn't like a no-op "promotion"
+                    accumulate = notifySSTablesChanged(removed, Collections.<SSTableReader>emptySet(), txnLogs.getType(), accumulate);
+                }
+            }
+            catch (Throwable t)
+            {
+                accumulate = abortObsoletion(tidiers, accumulate);
+                accumulate = Throwables.merge(accumulate, t);
+            }
         }
         catch (Throwable t)
         {
@@ -238,26 +264,6 @@ public class Tracker
         return accumulate;
     }
 
-    public Throwable dropSSTables(final Predicate<SSTableReader> remove, TransactionLogs txnLogs, Throwable accumulate)
-    {
-        Pair<View, View> result = apply(view -> {
-            Set<SSTableReader> toremove = copyOf(filter(view.sstables, and(remove, notIn(view.compacting))));
-            return updateLiveSet(toremove, emptySet()).apply(view);
-        });
-
-        Set<SSTableReader> removed = Sets.difference(result.left.sstables, result.right.sstables);
-        assert Iterables.all(removed, remove);
-
-        if (!removed.isEmpty())
-        {
-            // notifySSTablesChanged -> LeveledManifest.promote doesn't like a no-op "promotion"
-            accumulate = notifySSTablesChanged(removed, Collections.<SSTableReader>emptySet(), txnLogs.getType(), accumulate);
-            accumulate = updateSizeTracking(removed, emptySet(), accumulate);
-            accumulate = markObsolete(removed, txnLogs, accumulate);
-            accumulate = release(selfRefs(removed), accumulate);
-        }
-        return accumulate;
-    }
 
     /**
      * Removes every SSTable in the directory from the Tracker's view.

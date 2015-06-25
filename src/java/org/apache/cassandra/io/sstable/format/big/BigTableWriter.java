@@ -46,7 +46,6 @@ import org.apache.cassandra.utils.FilterFactory;
 import org.apache.cassandra.utils.IFilter;
 import org.apache.cassandra.utils.concurrent.Transactional;
 
-import static org.apache.cassandra.utils.Throwables.merge;
 import org.apache.cassandra.utils.SyncUtil;
 
 public class BigTableWriter extends SSTableWriter
@@ -69,6 +68,7 @@ public class BigTableWriter extends SSTableWriter
                           TransactionLogs txnLogs)
     {
         super(descriptor, keyCount, repairedAt, metadata, partitioner, metadataCollector, header);
+        txnLogs.track(this); // must track before any files are created
 
         if (compression)
         {

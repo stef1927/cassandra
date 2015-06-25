@@ -90,13 +90,14 @@ public class TransactionLogsTest extends SchemaLoader
         assertNotNull(transactionLogs.getId());
         Assert.assertEquals(OperationType.COMPACTION, transactionLogs.getType());
 
-        transactionLogs.trackOld(sstableOld);
-        transactionLogs.trackNew(sstableNew);
+        transactionLogs.track(sstableNew);
+        TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstableOld);
+        assertNotNull(tidier);
 
-        transactionLogs.obsoleted(sstableOld);
         transactionLogs.finish();
-
+        sstableOld.markObsolete(tidier);
         sstableOld.selfRef().release();
+
         TransactionLogs.waitForDeletions();
 
         assertFiles(transactionLogs.getDataFolder(), new HashSet<>(sstableNew.getAllFilePaths()));
@@ -117,9 +118,11 @@ public class TransactionLogsTest extends SchemaLoader
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.trackOld(sstableOld);
-        transactionLogs.trackNew(sstableNew);
+        transactionLogs.track(sstableNew);
+        TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstableOld);
+        assertNotNull(tidier);
 
+        tidier.abort();
         transactionLogs.abort();
 
         assertFiles(transactionLogs.getDataFolder(), new HashSet<>(sstableOld.getAllFilePaths()));
@@ -134,27 +137,22 @@ public class TransactionLogsTest extends SchemaLoader
     public void testCancel() throws Throwable
     {
         ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
-        SSTableReader sstableOld = sstable(cfs, 0, 128);
         SSTableReader sstableNew = sstable(cfs, 1, 128);
 
-        // simulate tracking sstables with a failed transaction (new log file NOT deleted)
+        // complete a transaction without keep the new files since they were untracked
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.trackOld(sstableOld);
-        transactionLogs.trackNew(sstableNew);
-
-        transactionLogs.untrack(sstableOld, false);
-        transactionLogs.untrack(sstableNew, true);
+        transactionLogs.track(sstableNew);
+        transactionLogs.untrack(sstableNew);
 
         transactionLogs.finish();
 
-        assertFiles(transactionLogs.getDataFolder(), new HashSet<>(sstableOld.getAllFilePaths()));
+        assertFiles(transactionLogs.getDataFolder(), Collections.<String>emptySet());
         assertFiles(transactionLogs.getLogsFolder(), Collections.<String>emptySet());
         assertEquals(0, TransactionLogs.getLogFiles(cfs.metadata).size());
 
         sstableNew.selfRef().release();
-        sstableOld.selfRef().release();
     }
 
     @Test
@@ -168,15 +166,20 @@ public class TransactionLogsTest extends SchemaLoader
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.trackOld(sstableOld1);
-        transactionLogs.trackNew(sstableNew);
-        transactionLogs.trackOld(sstableOld2);
+        transactionLogs.track(sstableNew);
 
-        transactionLogs.obsoleted(sstableOld2);
+        sstableOld1.setReplaced();
+
+        TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstableOld2);
+        assertNotNull(tidier);
+
         transactionLogs.finish();
+
+        sstableOld2.markObsolete(tidier);
 
         sstableOld1.selfRef().release();
         sstableOld2.selfRef().release();
+
         TransactionLogs.waitForDeletions();
 
         assertFiles(transactionLogs.getDataFolder(), new HashSet<>(sstableNew.getAllFilePaths()));
@@ -195,7 +198,7 @@ public class TransactionLogsTest extends SchemaLoader
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.trackNew(sstable);
+        transactionLogs.track(sstable);
         transactionLogs.finish();
 
         assertFiles(transactionLogs.getDataFolder(), new HashSet<>(sstable.getAllFilePaths()));
@@ -214,14 +217,18 @@ public class TransactionLogsTest extends SchemaLoader
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.trackOld(sstable);
+        TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstable);
+        assertNotNull(tidier);
+
         transactionLogs.finish();
+        sstable.markObsolete(tidier);
+        sstable.selfRef().release();
+
+        TransactionLogs.waitForDeletions();
 
         assertFiles(transactionLogs.getDataFolder(), new HashSet<>());
         assertFiles(transactionLogs.getLogsFolder(), Collections.<String>emptySet());
         assertEquals(0, TransactionLogs.getLogFiles(cfs.metadata).size());
-
-        sstable.selfRef().release();
     }
 
     @Test
@@ -233,14 +240,14 @@ public class TransactionLogsTest extends SchemaLoader
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.trackNew(sstable);
+        transactionLogs.track(sstable);
         transactionLogs.abort();
+
+        sstable.selfRef().release();
 
         assertFiles(transactionLogs.getDataFolder(), new HashSet<>());
         assertFiles(transactionLogs.getLogsFolder(), Collections.<String>emptySet());
         assertEquals(0, TransactionLogs.getLogFiles(cfs.metadata).size());
-
-        sstable.selfRef().release();
     }
 
     @Test
@@ -252,14 +259,17 @@ public class TransactionLogsTest extends SchemaLoader
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.trackOld(sstable);
+        TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstable);
+        assertNotNull(tidier);
+
+        tidier.abort();
         transactionLogs.abort();
+
+        sstable.selfRef().release();
 
         assertFiles(transactionLogs.getDataFolder(), new HashSet<>(sstable.getAllFilePaths()));
         assertFiles(transactionLogs.getLogsFolder(), Collections.<String>emptySet());
         assertEquals(0, TransactionLogs.getLogFiles(cfs.metadata).size());
-
-        sstable.selfRef().release();
     }
 
     @Test
@@ -273,14 +283,15 @@ public class TransactionLogsTest extends SchemaLoader
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.trackOld(sstableOld);
-        transactionLogs.trackNew(sstableNew);
-
-        sstableNew.selfRef().release();
+        transactionLogs.track(sstableNew);
+        TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstableOld);
 
         Set<File> tmpFiles = new HashSet<>(TransactionLogs.getLogFiles(cfs.metadata));
         for (String p : sstableNew.getAllFilePaths())
             tmpFiles.add(new File(p));
+
+        sstableNew.selfRef().release();
+        sstableOld.selfRef().release();
 
         Assert.assertEquals(tmpFiles, TransactionLogs.getTemporaryFiles(cfs.metadata, sstableNew.descriptor.directory));
 
@@ -295,7 +306,7 @@ public class TransactionLogsTest extends SchemaLoader
         assertFiles(transactionLogs.getDataFolder(), new HashSet<>(sstableOld.getAllFilePaths()));
         assertFiles(transactionLogs.getLogsFolder(), Collections.<String>emptySet());
 
-        sstableOld.selfRef().release();
+        tidier.run();
         transactionLogs.close();
     }
 
@@ -310,16 +321,17 @@ public class TransactionLogsTest extends SchemaLoader
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.trackOld(sstableOld);
-        transactionLogs.trackNew(sstableNew);
+        transactionLogs.track(sstableNew);
+        TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstableOld);
 
         transactionLogs.getData().newLog().delete(false);
-
-        sstableOld.selfRef().release();
 
         Set<File> tmpFiles = new HashSet<>(TransactionLogs.getLogFiles(cfs.metadata));
         for (String p : sstableOld.getAllFilePaths())
             tmpFiles.add(new File(p));
+
+        sstableNew.selfRef().release();
+        sstableOld.selfRef().release();
 
         Assert.assertEquals(tmpFiles, TransactionLogs.getTemporaryFiles(cfs.metadata, sstableOld.descriptor.directory));
 
@@ -334,7 +346,7 @@ public class TransactionLogsTest extends SchemaLoader
         assertFiles(transactionLogs.getDataFolder(), new HashSet<>(sstableNew.getAllFilePaths()));
         assertFiles(transactionLogs.getLogsFolder(), Collections.<String>emptySet());
 
-        sstableNew.selfRef().release();
+        tidier.run();
         transactionLogs.close();
     }
 
@@ -356,7 +368,7 @@ public class TransactionLogsTest extends SchemaLoader
         File[] beforeSecondSSTable = dataFolder.listFiles(pathname -> !pathname.isDirectory());
 
         SSTableReader sstable2 = sstable(cfs, 1, 128);
-        transactionLogs.trackNew(sstable2);
+        transactionLogs.track(sstable2);
 
         Map<Descriptor, Set<Component>> sstables = directories.sstableLister().list();
         assertEquals(2, sstables.size());
