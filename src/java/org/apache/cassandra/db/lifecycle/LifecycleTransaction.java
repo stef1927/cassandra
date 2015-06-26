@@ -449,8 +449,6 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         originals.remove(cancel);
         marked.remove(cancel);
         maybeFail(unmarkCompacting(singleton(cancel), null));
-
-        //transactionLogs.untrack(cancel, false);
     }
 
     /**
