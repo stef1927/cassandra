@@ -186,7 +186,7 @@ public abstract class SegmentedFile extends SharedCloseableImpl
             ChannelProxy channelCopy = getChannel(path);
             try
             {
-                return complete(channelCopy, overrideLength);
+                return complete(channelCopy, bufferSize, overrideLength);
             }
             catch (Throwable t)
             {
@@ -218,7 +218,7 @@ public abstract class SegmentedFile extends SharedCloseableImpl
         private int bufferSize(StatsMetadata stats)
         {
             // 2x to make sure the average is not too small, and 2x to make sure we don't miss it through alignment
-            return roundBufferSize(stats.estimatedRowSize.mean() * 4);
+            return roundBufferSize(stats.estimatedPartitionSize.mean() * 4);
         }
 
         private int bufferSize(Descriptor desc, IndexSummary indexSummary)
