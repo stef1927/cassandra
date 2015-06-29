@@ -37,16 +37,6 @@ SYSTEM_KEYSPACES = ('system', 'system_schema', 'system_traces', 'system_auth', '
 NONALTERBALE_KEYSPACES = ('system', 'system_schema')
 
 class Cql3ParsingRuleSet(CqlParsingRuleSet):
-    keywords = set((
-        'select', 'from', 'where', 'and', 'key', 'insert', 'update', 'with',
-        'limit', 'using', 'use', 'set',
-        'begin', 'apply', 'batch', 'truncate', 'delete', 'in', 'create',
-        'function', 'aggregate', 'keyspace', 'schema', 'columnfamily', 'table', 'index', 'on', 'drop',
-        'primary', 'into', 'values', 'date', 'time', 'timestamp', 'ttl', 'alter', 'add', 'type',
-        'compact', 'storage', 'order', 'by', 'asc', 'desc', 'clustering',
-        'token', 'writetime', 'map', 'list', 'to', 'custom', 'if', 'not',
-        'materialized', 'view'
-    ))
 
     columnfamily_layout_options = (
         ('bloom_filter_fp_chance', None),
@@ -271,7 +261,7 @@ JUNK ::= /([ \t\r\f\v]+|(--|[/][/])[^\n\r]*([\n\r]|$)|[/][*].*?[*][/])/ ;
                            ;
 
 # timestamp is included here, since it's also a keyword
-<simpleStorageType> ::= typename=( <identifier> | <stringLiteral> | <K_TIMESTAMP> ) ;
+<simpleStorageType> ::= typename=( <identifier> | <stringLiteral> | "timestamp" ) ;
 
 <userType> ::= utname=<cfOrKsName> ;
 
@@ -304,13 +294,13 @@ JUNK ::= /([ \t\r\f\v]+|(--|[/][/])[^\n\r]*([\n\r]|$)|[/][*].*?[*][/])/ ;
                | <unreservedKeyword>;
 
 <unreservedKeyword> ::= nocomplete=
-                        ( <K_KEY>
-                        | <K_CLUSTERING>
-                        | <K_TTL>
-                        | <K_COMPACT>
-                        | <K_STORAGE>
-                        | <K_TYPE>
-                        | <K_VALUES> )
+                        ( "key"
+                        | "clustering"
+                        | "ttl"
+                        | "compact"
+                        | "storage"
+                        | "type"
+                        | "values" )
                       ;
 
 <property> ::= [propname]=<cident> propeq="=" [propval]=<propertyValue>
@@ -1337,7 +1327,7 @@ def username_name_completer(ctxt, cass):
         return "'%s'" % name
 
     # disable completion for CREATE USER.
-    if ctxt.matched[0][0] == 'K_CREATE':
+    if ctxt.matched[0][0] == 'create':
         return [Hint('<username>')]
 
     session = cass.session
