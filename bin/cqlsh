@@ -173,7 +173,7 @@ parser.add_option('--cqlversion', default=DEFAULT_CQLVER,
                   help='Specify a particular CQL version (default: %default).'
                        ' Examples: "3.0.3", "3.1.0"')
 parser.add_option("-e", "--execute", help='Execute the statement and quit.')
-parser.add_option("--connect_timeout", default=DEFAULT_CONNECT_TIMEOUT_SECONDS,
+parser.add_option("--connect-timeout", default=DEFAULT_CONNECT_TIMEOUT_SECONDS, dest='connect_timeout',
                   help='Specify the connection timeout in seconds (default: %default seconds).')
 
 optvalues = optparse.Values()
