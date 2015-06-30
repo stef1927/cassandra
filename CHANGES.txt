@@ -1,4 +1,5 @@
 2.1.8
+ * Warn when an extra-large partition is compacted (CASSANDRA-9643)
  * Update internal python driver for cqlsh (CASSANDRA-9064)
  * Fix IndexOutOfBoundsException when inserting tuple with too many
    elements using the string literal notation (CASSANDRA-9559)
