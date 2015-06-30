@@ -79,7 +79,7 @@ class PeriodicCommitLogExecutorService implements ICommitLogExecutorService
                     }
                     catch (Throwable t)
                     {
-                        if (!CommitLog.handleCommitError("Failed to persist commits to disk", t))
+                        if (!CommitLogErrorHandler.handleCommitError("Failed to persist commits to disk", t))
                         {
                             PeriodicCommitLogExecutorService.this.run = false;
                             try

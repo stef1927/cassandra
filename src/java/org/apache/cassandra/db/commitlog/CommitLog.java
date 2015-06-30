@@ -408,25 +408,4 @@ public class CommitLog implements CommitLogMBean
         }
     }
 
-    @VisibleForTesting
-    public static boolean handleCommitError(String message, Throwable t)
-    {
-        switch (DatabaseDescriptor.getCommitFailurePolicy())
-        {
-            case die:
-                Killer.kill(t);
-            case stop:
-                StorageService.instance.stopTransports();
-            case stop_commit:
-                logger.error(String.format("%s. Commit disk failure policy is %s; terminating thread", message, DatabaseDescriptor.getCommitFailurePolicy()), t);
-                return false;
-            case ignore:
-                logger.error(message, t);
-                Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
-                return true;
-            default:
-                throw new AssertionError(DatabaseDescriptor.getCommitFailurePolicy());
-        }
-    }
-
 }

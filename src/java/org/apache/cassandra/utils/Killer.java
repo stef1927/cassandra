@@ -73,7 +73,6 @@ public final class Killer
          */
         protected void kill(Throwable t)
         {
-            t.printStackTrace(System.err);
             logger.error("Exiting forcefully due to:", t);
             StorageService.instance.removeShutdownHook();
             System.exit(100);

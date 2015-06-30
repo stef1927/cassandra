@@ -33,6 +33,7 @@ import com.google.common.util.concurrent.Uninterruptibles;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.ColumnFamilyStore;
@@ -40,6 +41,7 @@ import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.utils.Killer;
 import org.apache.cassandra.utils.Pair;
 import org.apache.cassandra.utils.WrappedRunnable;
 
@@ -113,7 +115,7 @@ public class CommitLogAllocator
                     }
                     catch (Throwable t)
                     {
-                        if (!CommitLog.handleCommitError("Failed to allocate new commit log segments", t))
+                        if (!CommitLogErrorHandler.handleCommitError("Failed to allocate new commit log segments", t))
                             return;
                     }
                 }

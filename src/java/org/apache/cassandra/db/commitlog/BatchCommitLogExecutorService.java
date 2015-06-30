@@ -56,7 +56,7 @@ class BatchCommitLogExecutorService extends AbstractCommitLogExecutorService
                     }
                     catch (Throwable t)
                     {
-                        if (!CommitLog.handleCommitError("Failed to persist commits to disk", t))
+                        if (!CommitLogErrorHandler.handleCommitError("Failed to persist commits to disk", t))
                             return;
                     }
                 }

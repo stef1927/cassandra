@@ -35,6 +35,7 @@ import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.commitlog.CommitLog;
 import org.apache.cassandra.db.commitlog.CommitLogDescriptor;
+import org.apache.cassandra.db.commitlog.CommitLogErrorHandler;
 import org.apache.cassandra.db.commitlog.ReplayPosition;
 import org.apache.cassandra.db.filter.NamesQueryFilter;
 import org.apache.cassandra.exceptions.ConfigurationException;
@@ -248,7 +249,7 @@ public class CommitLogTest extends SchemaLoader
         try
         {
             DatabaseDescriptor.setCommitFailurePolicy(Config.CommitFailurePolicy.stop);
-            CommitLog.handleCommitError("Test stop error", new Throwable());
+            CommitLogErrorHandler.handleCommitError("Test stop error", new Throwable());
             Assert.assertFalse(Gossiper.instance.isEnabled());
         }
         finally
@@ -288,7 +289,7 @@ public class CommitLogTest extends SchemaLoader
         try
         {
             DatabaseDescriptor.setCommitFailurePolicy(Config.CommitFailurePolicy.die);
-            CommitLog.handleCommitError("Testing die policy", new Throwable());
+            CommitLogErrorHandler.handleCommitError("Testing die policy", new Throwable());
             Assert.assertTrue(killerForTests.wasKilled());
         }
         finally
