@@ -36,13 +36,11 @@ import com.google.common.collect.Iterators;
 import org.apache.cassandra.*;
 import org.apache.cassandra.config.*;
 import org.apache.cassandra.cql3.Operator;
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.db.partitions.*;
 import org.apache.cassandra.db.marshal.*;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.io.sstable.Component;
-import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.metrics.ClearableHistogram;
@@ -391,72 +389,6 @@ public class ColumnFamilyStoreTest
 //        assertEquals(ByteBufferUtil.bytes("B"), cfSliced.getColumn(CellNames.compositeDense(superColName, ByteBufferUtil.bytes("b"))).value());
 //    }
 
-    // TODO: fix once SSTableSimpleWriter's back in
-//    @Test
-//    public void testRemoveUnfinishedCompactionLeftovers() throws Throwable
-//    {
-//        String ks = KEYSPACE1;
-//        String cf = CF_STANDARD3; // should be empty
-//
-//        final CFMetaData cfmeta = Schema.instance.getCFMetaData(ks, cf);
-//        Directories dir = new Directories(cfmeta);
-//        ByteBuffer key = bytes("key");
-//
-//        // 1st sstable
-//        SSTableSimpleWriter writer = new SSTableSimpleWriter(dir.getDirectoryForNewSSTables(), cfmeta, StorageService.getPartitioner());
-//        writer.newRow(key);
-//        writer.addColumn(bytes("col"), bytes("val"), 1);
-//        writer.close();
-//
-//        Map<Descriptor, Set<Component>> sstables = dir.sstableLister().list();
-//        assertEquals(1, sstables.size());
-//
-//        Map.Entry<Descriptor, Set<Component>> sstableToOpen = sstables.entrySet().iterator().next();
-//        final SSTableReader sstable1 = SSTableReader.open(sstableToOpen.getKey());
-//
-//        // simulate incomplete compaction
-//        writer = new SSTableSimpleWriter(dir.getDirectoryForNewSSTables(),
-//                                         cfmeta, StorageService.getPartitioner())
-//        {
-//            protected SSTableWriter getWriter()
-//            {
-//                MetadataCollector collector = new MetadataCollector(cfmeta.comparator);
-//                collector.addAncestor(sstable1.descriptor.generation); // add ancestor from previously written sstable
-//                return SSTableWriter.create(createDescriptor(directory, metadata.ksName, metadata.cfName, DatabaseDescriptor.getSSTableFormat()),
-//                        0L,
-//                        ActiveRepairService.UNREPAIRED_SSTABLE,
-//                        metadata,
-//                        DatabaseDescriptor.getPartitioner(),
-//                        collector);
-//            }
-//        };
-//        writer.newRow(key);
-//        writer.addColumn(bytes("col"), bytes("val"), 1);
-//        writer.close();
-//
-//        // should have 2 sstables now
-//        sstables = dir.sstableLister().list();
-//        assertEquals(2, sstables.size());
-//
-//        SSTableReader sstable2 = SSTableReader.open(sstable1.descriptor);
-//        UUID compactionTaskID = SystemKeyspace.startCompaction(
-//                Keyspace.open(ks).getColumnFamilyStore(cf),
-//                Collections.singleton(sstable2));
-//
-//        Map<Integer, UUID> unfinishedCompaction = new HashMap<>();
-//        unfinishedCompaction.put(sstable1.descriptor.generation, compactionTaskID);
-//        ColumnFamilyStore.removeUnfinishedCompactionLeftovers(cfmeta, unfinishedCompaction);
-//
-//        // 2nd sstable should be removed (only 1st sstable exists in set of size 1)
-//        sstables = dir.sstableLister().list();
-//        assertEquals(1, sstables.size());
-//        assertTrue(sstables.containsKey(sstable1.descriptor));
-//
-//        Map<Pair<String, String>, Map<Integer, UUID>> unfinished = SystemKeyspace.getUnfinishedCompactions();
-//        assertTrue(unfinished.isEmpty());
-//        sstable1.selfRef().release();
-//        sstable2.selfRef().release();
-//    }
 
     // TODO: Fix once SSTableSimpleWriter's back in
     // @see <a href="https://issues.apache.org/jira/browse/CASSANDRA-6086">CASSANDRA-6086</a>
@@ -585,7 +517,7 @@ public class ColumnFamilyStoreTest
 
         ColumnFamilyStore.scrubDataDirectories(cfs.metadata);
 
-        new RowUpdateBuilder(cfs.metadata, 2, "key1").clustering("c1").add("a", 2).build().applyUnsafe();
+        new RowUpdateBuilder(cfs.metadata, 2, "key").clustering("name").add("val", "2").build().applyUnsafe();
         cfs.forceBlockingFlush();
 
         // Nuke the metadata and reload that sstable

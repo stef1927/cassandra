@@ -504,14 +504,14 @@ public class TransactionLogsTest extends SchemaLoader
 
     private SSTableReader getSSTable(ColumnFamilyStore cfs, int numPartitions) throws IOException
     {
-        addContentAndFlush(cfs, numPartitions);
+        createSSTable(cfs, numPartitions);
 
         Set<SSTableReader> sstables = new HashSet<>(cfs.getSSTables());
         assertEquals(1, sstables.size());
         return sstables.iterator().next();
     }
 
-    private void addContentAndFlush(ColumnFamilyStore cfs, int numPartitions) throws IOException
+    private void createSSTable(ColumnFamilyStore cfs, int numPartitions) throws IOException
     {
         cfs.truncateBlocking();
 
@@ -520,6 +520,7 @@ public class TransactionLogsTest extends SchemaLoader
 
         try (CQLSSTableWriter writer = CQLSSTableWriter.builder()
                                                        .withPartitioner(StorageService.getPartitioner())
+                                                       .inDirectory(cfs.directories.getDirectoryForNewSSTables())
                                                        .forTable(String.format(schema, cfs.keyspace.getName(), cfs.name))
                                                        .using(String.format(query, cfs.keyspace.getName(), cfs.name))
                                                        .build())
@@ -528,7 +529,7 @@ public class TransactionLogsTest extends SchemaLoader
                 writer.addRow(String.format("key%d", j), "col1", "0");
         }
 
-        cfs.forceBlockingFlush();
+        cfs.loadNewSSTables();
     }
 
     private SSTableReader replaceSSTable(ColumnFamilyStore cfs, LifecycleTransaction txn, boolean fail)

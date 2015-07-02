@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
@@ -609,7 +610,7 @@ public class SSTableRewriterTest extends SchemaLoader
         }
 
         TransactionLogs.waitForDeletions();
-        assertFileCounts(s.descriptor.directory.list(), 0, 0);
+        assertFileCounts(s.descriptor.directory.list());
         validateCFS(cfs);
     }
 
@@ -762,7 +763,7 @@ public class SSTableRewriterTest extends SchemaLoader
             assertEquals(0, cfs.getSSTables().size());
             cfs.truncateBlocking();
         }
-        filecount = assertFileCounts(s.descriptor.directory.list(), 0, 0);
+        filecount = assertFileCounts(s.descriptor.directory.list());
         if (offline)
         {
             // the file is not added to the CFS, therefore not truncated away above
@@ -925,7 +926,7 @@ public class SSTableRewriterTest extends SchemaLoader
     {
         cfs.truncateBlocking();
         TransactionLogs.waitForDeletions();
-        Uninterruptibles.sleepUninterruptibly(10L,TimeUnit.MILLISECONDS);
+        Uninterruptibles.sleepUninterruptibly(10L, TimeUnit.MILLISECONDS);
         assertEquals(0, cfs.metric.liveDiskSpaceUsed.getCount());
         assertEquals(0, cfs.metric.totalDiskSpaceUsed.getCount());
         validateCFS(cfs);
@@ -989,7 +990,7 @@ public class SSTableRewriterTest extends SchemaLoader
         assertTrue(cfs.getTracker().getCompacting().isEmpty());
     }
 
-    public static int assertFileCounts(String [] files, int expectedtmplinkCount, int expectedtmpCount)
+    public static int assertFileCounts(String [] files)
     {
         int tmplinkcount = 0;
         int tmpcount = 0;

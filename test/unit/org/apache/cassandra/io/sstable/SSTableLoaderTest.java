@@ -104,7 +104,7 @@ public class SSTableLoaderTest
 
         String schema = "CREATE TABLE %s.%s (key ascii, name ascii, val ascii, val1 ascii, PRIMARY KEY (key, name))";
         String query = "INSERT INTO %s.%s (key, name, val) VALUES (?, ?, ?)";
-                                                           ;
+
         try (CQLSSTableWriter writer = CQLSSTableWriter.builder()
                                                        .inDirectory(dataDir)
                                                        .withPartitioner(StorageService.getPartitioner())
@@ -132,20 +132,20 @@ public class SSTableLoaderTest
     {
         File dataDir = new File(tmpdir.getAbsolutePath() + File.separator + KEYSPACE1 + File.separator + CF_STANDARD2);
         assert dataDir.mkdirs();
-        CFMetaData cfmeta = Schema.instance.getCFMetaData(KEYSPACE1, CF_STANDARD2);
 
         //make sure we have no tables...
         assertTrue(dataDir.listFiles().length == 0);
 
         String schema = "CREATE TABLE %s.%s (key ascii, name ascii, val ascii, val1 ascii, PRIMARY KEY (key, name))";
         String query = "INSERT INTO %s.%s (key, name, val) VALUES (?, ?, ?)";
-                                                           ;
+
         CQLSSTableWriter writer = CQLSSTableWriter.builder()
-                                                       .inDirectory(dataDir)
-                                                       .withPartitioner(StorageService.getPartitioner())
-                                                       .forTable(String.format(schema, KEYSPACE1, CF_STANDARD2))
-                                                       .using(String.format(query, KEYSPACE1, CF_STANDARD2))
-                                                       .build();
+                                                  .inDirectory(dataDir)
+                                                  .withPartitioner(StorageService.getPartitioner())
+                                                  .forTable(String.format(schema, KEYSPACE1, CF_STANDARD2))
+                                                  .using(String.format(query, KEYSPACE1, CF_STANDARD2))
+                                                  .withBufferSizeInMB(1)
+                                                  .build();
 
         for (int i = 0; i < 1000; i++) // make sure to write more than 1 MB
         {
