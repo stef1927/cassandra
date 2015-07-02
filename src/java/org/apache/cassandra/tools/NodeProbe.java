@@ -27,7 +27,6 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.rmi.server.RMIClientSocketFactory;
 import java.rmi.server.RMISocketFactory;
-import java.text.SimpleDateFormat;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -237,47 +236,47 @@ public class NodeProbe implements AutoCloseable
         jmxc.close();
     }
 
-    public int forceKeyspaceCleanup(String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
+    public int forceKeyspaceCleanup(String keyspaceName, String... tables) throws IOException, ExecutionException, InterruptedException
     {
-        return ssProxy.forceKeyspaceCleanup(keyspaceName, columnFamilies);
+        return ssProxy.forceKeyspaceCleanup(keyspaceName, tables);
     }
 
-    public int scrub(boolean disableSnapshot, boolean skipCorrupted, boolean checkData, String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
+    public int scrub(boolean disableSnapshot, boolean skipCorrupted, boolean checkData, String keyspaceName, String... tables) throws IOException, ExecutionException, InterruptedException
     {
-        return ssProxy.scrub(disableSnapshot, skipCorrupted, checkData, keyspaceName, columnFamilies);
+        return ssProxy.scrub(disableSnapshot, skipCorrupted, checkData, keyspaceName, tables);
     }
 
-    public int verify(boolean extendedVerify, String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
+    public int verify(boolean extendedVerify, String keyspaceName, String... tableNames) throws IOException, ExecutionException, InterruptedException
     {
-        return ssProxy.verify(extendedVerify, keyspaceName, columnFamilies);
+        return ssProxy.verify(extendedVerify, keyspaceName, tableNames);
     }
 
-    public int upgradeSSTables(String keyspaceName, boolean excludeCurrentVersion, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
+    public int upgradeSSTables(String keyspaceName, boolean excludeCurrentVersion, String... tableNames) throws IOException, ExecutionException, InterruptedException
     {
-        return ssProxy.upgradeSSTables(keyspaceName, excludeCurrentVersion, columnFamilies);
+        return ssProxy.upgradeSSTables(keyspaceName, excludeCurrentVersion, tableNames);
     }
 
-    public void forceKeyspaceCleanup(PrintStream out, String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
+    public void forceKeyspaceCleanup(PrintStream out, String keyspaceName, String... tableNames) throws IOException, ExecutionException, InterruptedException
     {
-        if (forceKeyspaceCleanup(keyspaceName, columnFamilies) != 0)
+        if (forceKeyspaceCleanup(keyspaceName, tableNames) != 0)
         {
             failed = true;
             out.println("Aborted cleaning up at least one table in keyspace "+keyspaceName+", check server logs for more information.");
         }
     }
 
-    public void scrub(PrintStream out, boolean disableSnapshot, boolean skipCorrupted, boolean checkData, String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
+    public void scrub(PrintStream out, boolean disableSnapshot, boolean skipCorrupted, boolean checkData, String keyspaceName, String... tables) throws IOException, ExecutionException, InterruptedException
     {
-        if (scrub(disableSnapshot, skipCorrupted, checkData, keyspaceName, columnFamilies) != 0)
+        if (scrub(disableSnapshot, skipCorrupted, checkData, keyspaceName, tables) != 0)
         {
             failed = true;
             out.println("Aborted scrubbing at least one table in keyspace "+keyspaceName+", check server logs for more information.");
         }
     }
 
-    public void verify(PrintStream out, boolean extendedVerify, String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
+    public void verify(PrintStream out, boolean extendedVerify, String keyspaceName, String... tableNames) throws IOException, ExecutionException, InterruptedException
     {
-        if (verify(extendedVerify, keyspaceName, columnFamilies) != 0)
+        if (verify(extendedVerify, keyspaceName, tableNames) != 0)
         {
             failed = true;
             out.println("Aborted verifying at least one table in keyspace "+keyspaceName+", check server logs for more information.");
@@ -285,9 +284,9 @@ public class NodeProbe implements AutoCloseable
     }
 
 
-    public void upgradeSSTables(PrintStream out, String keyspaceName, boolean excludeCurrentVersion, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
+    public void upgradeSSTables(PrintStream out, String keyspaceName, boolean excludeCurrentVersion, String... tableNames) throws IOException, ExecutionException, InterruptedException
     {
-        if (upgradeSSTables(keyspaceName, excludeCurrentVersion, columnFamilies) != 0)
+        if (upgradeSSTables(keyspaceName, excludeCurrentVersion, tableNames) != 0)
         {
             failed = true;
             out.println("Aborted upgrading sstables for atleast one table in keyspace "+keyspaceName+", check server logs for more information.");
@@ -295,14 +294,14 @@ public class NodeProbe implements AutoCloseable
     }
 
 
-    public void forceKeyspaceCompaction(boolean splitOutput, String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
+    public void forceKeyspaceCompaction(boolean splitOutput, String keyspaceName, String... tableNames) throws IOException, ExecutionException, InterruptedException
     {
-        ssProxy.forceKeyspaceCompaction(splitOutput, keyspaceName, columnFamilies);
+        ssProxy.forceKeyspaceCompaction(splitOutput, keyspaceName, tableNames);
     }
 
-    public void forceKeyspaceFlush(String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
+    public void forceKeyspaceFlush(String keyspaceName, String... tableNames) throws IOException, ExecutionException, InterruptedException
     {
-        ssProxy.forceKeyspaceFlush(keyspaceName, columnFamilies);
+        ssProxy.forceKeyspaceFlush(keyspaceName, tableNames);
     }
 
     public void repairAsync(final PrintStream out, final String keyspace, Map<String, String> options) throws IOException
@@ -509,18 +508,18 @@ public class NodeProbe implements AutoCloseable
      * Take a snapshot of all the keyspaces, optionally specifying only a specific column family.
      *
      * @param snapshotName the name of the snapshot.
-     * @param columnFamily the column family to snapshot or all on null
+     * @param table the table to snapshot or all on null
      * @param keyspaces the keyspaces to snapshot
      */
-    public void takeSnapshot(String snapshotName, String columnFamily, String... keyspaces) throws IOException
+    public void takeSnapshot(String snapshotName, String table, String... keyspaces) throws IOException
     {
-        if (columnFamily != null)
+        if (table != null)
         {
             if (keyspaces.length != 1)
             {
                 throw new IOException("When specifying the table for a snapshot, you must specify one and only one keyspace");
             }
-            ssProxy.takeColumnFamilySnapshot(keyspaces[0], columnFamily, snapshotName);
+            ssProxy.takeTableSnapshot(keyspaces[0], table, snapshotName);
         }
         else
             ssProxy.takeSnapshot(snapshotName, keyspaces);
@@ -531,15 +530,15 @@ public class NodeProbe implements AutoCloseable
      * 
      * @param snapshotName
      *            the name of the snapshot.
-     * @param columnFamilyList
+     * @param tableList
      *            list of columnfamily from different keyspace in the form of ks1.cf1 ks2.cf2
      */
-    public void takeMultipleColumnFamilySnapshot(String snapshotName, String... columnFamilyList)
+    public void takeMultipleTableSnapshot(String snapshotName, String... tableList)
             throws IOException
     {
-        if (null != columnFamilyList && columnFamilyList.length != 0)
+        if (null != tableList && tableList.length != 0)
         {
-            ssProxy.takeMultipleColumnFamilySnapshot(snapshotName, columnFamilyList);
+            ssProxy.takeMultipleTableSnapshot(snapshotName, tableList);
         }
         else
         {
@@ -618,14 +617,14 @@ public class NodeProbe implements AutoCloseable
         cfsProxy.setCompactionThresholds(minimumCompactionThreshold, maximumCompactionThreshold);
     }
 
-    public void disableAutoCompaction(String ks, String ... columnFamilies) throws IOException
+    public void disableAutoCompaction(String ks, String ... tables) throws IOException
     {
-        ssProxy.disableAutoCompaction(ks, columnFamilies);
+        ssProxy.disableAutoCompaction(ks, tables);
     }
 
-    public void enableAutoCompaction(String ks, String ... columnFamilies) throws IOException
+    public void enableAutoCompaction(String ks, String ... tableNames) throws IOException
     {
-        ssProxy.enableAutoCompaction(ks, columnFamilies);
+        ssProxy.enableAutoCompaction(ks, tableNames);
     }
 
     public void setIncrementalBackupsEnabled(boolean enabled)
@@ -707,11 +706,11 @@ public class NodeProbe implements AutoCloseable
         return ssProxy.isStarting();
     }
 
-    public void truncate(String keyspaceName, String cfName)
+    public void truncate(String keyspaceName, String tableName)
     {
         try
         {
-            ssProxy.truncate(keyspaceName, cfName);
+            ssProxy.truncate(keyspaceName, tableName);
         }
         catch (TimeoutException e)
         {
