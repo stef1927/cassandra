@@ -55,6 +55,7 @@ Merged from 2.1:
  * Fix startup error when upgrading nodes (CASSANDRA-10136)
  * Base table PRIMARY KEY can be assumed to be NOT NULL in MV creation (CASSANDRA-10147)
  * Improve batchlog write patch (CASSANDRA-9673)
+ * Abort in-progress queries that time out (CASSANDRA-7392)
  * Re-apply MaterializedView updates on commitlog replay (CASSANDRA-10164)
  * Require AbstractType.isByteOrderComparable declaration in constructor (CASSANDRA-9901)
  * Avoid digest mismatch on upgrade to 3.0 (CASSANDRA-9554)

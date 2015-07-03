@@ -335,6 +335,10 @@ public final class MessagingService implements MessagingServiceMBean
     }
     // total dropped message counts for server lifetime
     private final Map<Verb, DroppedMessages> droppedMessagesMap = new EnumMap<>(Verb.class);
+    /**
+     * Verbs that can be monitored during processing, currently only for aborting them on timeout.
+     */
+    public static final EnumSet<Verb> MONITORABLE_VERBS = EnumSet.of(Verb.READ);
 
     private final List<ILatencySubscriber> subscribers = new ArrayList<ILatencySubscriber>();
 
@@ -789,7 +793,7 @@ public final class MessagingService implements MessagingServiceMBean
         }
     }
 
-    public void receive(MessageIn message, int id, long timestamp, boolean isCrossNodeTimestamp)
+    public void receive(MessageIn message, int id)
     {
         TraceState state = Tracing.instance.initializeFromMessage(message);
         if (state != null)
@@ -800,7 +804,7 @@ public final class MessagingService implements MessagingServiceMBean
             if (!ms.allowIncomingMessage(message, id))
                 return;
 
-        Runnable runnable = new MessageDeliveryTask(message, id, timestamp, isCrossNodeTimestamp);
+        Runnable runnable = new MessageDeliveryTask(message, id);
         TracingAwareExecutorService stage = StageManager.getStage(message.getMessageType());
         assert stage != null : "No stage for message type " + message.verb;
 
@@ -935,6 +939,11 @@ public final class MessagingService implements MessagingServiceMBean
     public void incrementDroppedMessages(Verb verb)
     {
         incrementDroppedMessages(verb, false);
+    }
+
+    public void incrementDroppedMessages(MessageIn message)
+    {
+        incrementDroppedMessages(message.verb, message.constructionTime.isCrossNode);
     }
 
     public void incrementDroppedMessages(Verb verb, boolean isCrossNodeTimeout)

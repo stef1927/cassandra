@@ -19,8 +19,9 @@ package org.apache.cassandra.db;
 
 import org.apache.cassandra.index.Index;
 import org.apache.cassandra.utils.concurrent.OpOrder;
+import org.apache.cassandra.utils.concurrent.OpState;
 
-public class ReadOrderGroup implements AutoCloseable
+public class ReadExecutionController implements AutoCloseable
 {
     // For every reads
     private final OpOrder.Group baseOp;
@@ -29,11 +30,15 @@ public class ReadOrderGroup implements AutoCloseable
     private final OpOrder.Group indexOp;
     private final OpOrder.Group writeOp;
 
-    private ReadOrderGroup(OpOrder.Group baseOp, OpOrder.Group indexOp, OpOrder.Group writeOp)
+    // The state of the execution, can be used to abort it
+    private final OpState state;
+
+    private ReadExecutionController(OpOrder.Group baseOp, OpOrder.Group indexOp, OpOrder.Group writeOp, OpState state)
     {
         this.baseOp = baseOp;
         this.indexOp = indexOp;
         this.writeOp = writeOp;
+        this.state = state;
     }
 
     public OpOrder.Group baseReadOpOrderGroup()
@@ -51,19 +56,21 @@ public class ReadOrderGroup implements AutoCloseable
         return writeOp;
     }
 
-    public static ReadOrderGroup emptyGroup()
+    public OpState state() { return state; }
+
+    public static ReadExecutionController empty()
     {
-        return new ReadOrderGroup(null, null, null);
+        return new ReadExecutionController(null, null, null, new OpState());
     }
 
-    public static ReadOrderGroup forCommand(ReadCommand command)
+    public static ReadExecutionController forCommand(ReadCommand command, OpState state)
     {
         ColumnFamilyStore baseCfs = Keyspace.openAndGetStore(command.metadata());
         ColumnFamilyStore indexCfs = maybeGetIndexCfs(baseCfs, command);
 
         if (indexCfs == null)
         {
-            return new ReadOrderGroup(baseCfs.readOrdering.start(), null, null);
+            return new ReadExecutionController(baseCfs.readOrdering.start(), null, null, state);
         }
         else
         {
@@ -76,7 +83,7 @@ public class ReadOrderGroup implements AutoCloseable
                 // TODO: this should perhaps not open and maintain a writeOp for the full duration, but instead only *try* to delete stale entries, without blocking if there's no room
                 // as it stands, we open a writeOp and keep it open for the duration to ensure that should this CF get flushed to make room we don't block the reclamation of any room being made
                 writeOp = baseCfs.keyspace.writeOrder.start();
-                return new ReadOrderGroup(baseOp, indexOp, writeOp);
+                return new ReadExecutionController(baseOp, indexOp, writeOp, state);
             }
             catch (RuntimeException e)
             {
