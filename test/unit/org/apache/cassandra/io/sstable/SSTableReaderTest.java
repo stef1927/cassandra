@@ -54,6 +54,7 @@ import org.apache.cassandra.schema.KeyspaceParams;
 import org.apache.cassandra.service.CacheService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.Pair;
+import org.apache.cassandra.utils.concurrent.OpState;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -549,9 +550,9 @@ public class SSTableReaderTest
                                              .build();
         Index.Searcher searcher = indexedCFS.indexManager.getBestIndexFor(rc).searcherFor(rc);
         assertNotNull(searcher);
-        try (ReadOrderGroup orderGroup = ReadOrderGroup.forCommand(rc))
+        try (ReadExecutionController executionController = ReadExecutionController.forCommand(rc, new OpState()))
         {
-            assertEquals(1, Util.size(UnfilteredPartitionIterators.filter(searcher.search(orderGroup), rc.nowInSec())));
+            assertEquals(1, Util.size(UnfilteredPartitionIterators.filter(searcher.search(executionController), rc.nowInSec())));
         }
     }
 

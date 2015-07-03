@@ -45,6 +45,7 @@ import org.apache.cassandra.service.StorageProxy;
 import org.apache.cassandra.service.pager.*;
 import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.utils.concurrent.OpOrder;
+import org.apache.cassandra.utils.concurrent.OpState;
 
 /**
  * A read command that selects a (part of a) single partition.
@@ -254,12 +255,12 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
         metric.readLatency.addNano(latencyNanos);
     }
 
-    protected UnfilteredPartitionIterator queryStorage(final ColumnFamilyStore cfs, ReadOrderGroup orderGroup)
+    protected UnfilteredPartitionIterator queryStorage(final ColumnFamilyStore cfs, ReadExecutionController executionController)
     {
         @SuppressWarnings("resource") // we close the created iterator through closing the result of this method (and SingletonUnfilteredPartitionIterator ctor cannot fail)
         UnfilteredRowIterator partition = cfs.isRowCacheEnabled()
-                                        ? getThroughCache(cfs, orderGroup.baseReadOpOrderGroup())
-                                        : queryMemtableAndDisk(cfs, orderGroup.baseReadOpOrderGroup());
+                                        ? getThroughCache(cfs, executionController)
+                                        : queryMemtableAndDisk(cfs, executionController);
         return new SingletonUnfilteredPartitionIterator(partition, isForThrift());
     }
 
@@ -272,7 +273,7 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
      * If the partition is is not cached, we figure out what filter is "biggest", read
      * that from disk, then filter the result and either cache that or return it.
      */
-    private UnfilteredRowIterator getThroughCache(ColumnFamilyStore cfs, OpOrder.Group readOp)
+    private UnfilteredRowIterator getThroughCache(ColumnFamilyStore cfs, ReadExecutionController executionController)
     {
         assert !cfs.isIndex(); // CASSANDRA-5732
         assert cfs.isRowCacheEnabled() : String.format("Row cache is not enabled on table [%s]", cfs.name);
@@ -290,7 +291,7 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
                 // Some other read is trying to cache the value, just do a normal non-caching read
                 Tracing.trace("Row cache miss (race)");
                 cfs.metric.rowCacheMiss.inc();
-                return queryMemtableAndDisk(cfs, readOp);
+                return queryMemtableAndDisk(cfs, executionController);
             }
 
             CachedPartition cachedPartition = (CachedPartition)cached;
@@ -303,7 +304,7 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
 
             cfs.metric.rowCacheHitOutOfRange.inc();
             Tracing.trace("Ignoring row cache as cached value could not satisfy query");
-            return queryMemtableAndDisk(cfs, readOp);
+            return queryMemtableAndDisk(cfs, executionController);
         }
 
         cfs.metric.rowCacheMiss.inc();
@@ -328,7 +329,7 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
             {
                 int rowsToCache = metadata().params.caching.rowsPerPartitionToCache();
                 @SuppressWarnings("resource") // we close on exception or upon closing the result of this method
-                UnfilteredRowIterator iter = SinglePartitionReadCommand.fullPartitionRead(metadata(), nowInSec(), partitionKey()).queryMemtableAndDisk(cfs, readOp);
+                UnfilteredRowIterator iter = SinglePartitionReadCommand.fullPartitionRead(metadata(), nowInSec(), partitionKey()).queryMemtableAndDisk(cfs, executionController);
                 try
                 {
                     // We want to cache only rowsToCache rows
@@ -368,7 +369,7 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
         }
 
         Tracing.trace("Fetching data but not populating cache as query does not query from the start of the partition");
-        return queryMemtableAndDisk(cfs, readOp);
+        return queryMemtableAndDisk(cfs, executionController);
     }
 
     /**
@@ -388,13 +389,23 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
      */
     public UnfilteredRowIterator queryMemtableAndDisk(ColumnFamilyStore cfs, OpOrder.Group readOp)
     {
+        return queryMemtableAndDiskInternal(cfs, new OpState());
+    }
+
+    public UnfilteredRowIterator queryMemtableAndDisk(ColumnFamilyStore cfs, ReadExecutionController executionController)
+    {
+        return queryMemtableAndDiskInternal(cfs, executionController.state());
+    }
+
+    private UnfilteredRowIterator queryMemtableAndDiskInternal(ColumnFamilyStore cfs, OpState state)
+    {
         Tracing.trace("Executing single-partition query on {}", cfs.name);
 
         boolean copyOnHeap = Memtable.MEMORY_POOL.needToCopyOnHeap();
-        return queryMemtableAndDiskInternal(cfs, copyOnHeap);
+        return queryMemtableAndDiskInternal(cfs, copyOnHeap, state);
     }
 
-    protected abstract UnfilteredRowIterator queryMemtableAndDiskInternal(ColumnFamilyStore cfs, boolean copyOnHeap);
+    protected abstract UnfilteredRowIterator queryMemtableAndDiskInternal(ColumnFamilyStore cfs, boolean copyOnHeap, OpState state);
 
     @Override
     public String toString()
@@ -487,18 +498,18 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
             return commands.get(0).metadata();
         }
 
-        public ReadOrderGroup startOrderGroup()
+        public ReadExecutionController executionController()
         {
             // Note that the only difference between the command in a group must be the partition key on which
             // they applied. So as far as ReadOrderGroup is concerned, we can use any of the commands to start one.
-            return commands.get(0).startOrderGroup();
+            return commands.get(0).executionController();
         }
 
-        public PartitionIterator executeInternal(ReadOrderGroup orderGroup)
+        public PartitionIterator executeInternal(ReadExecutionController controller)
         {
             List<PartitionIterator> partitions = new ArrayList<>(commands.size());
             for (SinglePartitionReadCommand cmd : commands)
-                partitions.add(cmd.executeInternal(orderGroup));
+                partitions.add(cmd.executeInternal(controller));
 
             // Because we only have enforce the limit per command, we need to enforce it globally.
             return limits.filter(PartitionIterators.concat(partitions), nowInSec);
