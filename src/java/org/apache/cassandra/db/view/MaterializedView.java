@@ -48,7 +48,7 @@ import org.apache.cassandra.db.LivenessInfo;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.RangeTombstone;
 import org.apache.cassandra.db.ReadCommand;
-import org.apache.cassandra.db.ReadOrderGroup;
+import org.apache.cassandra.db.ReadExecutionController;
 import org.apache.cassandra.db.SinglePartitionReadCommand;
 import org.apache.cassandra.db.Slice;
 import org.apache.cassandra.db.compaction.CompactionManager;
@@ -492,8 +492,8 @@ public class MaterializedView
                 // Add all of the rows which were recovered from the query to the row set
                 while (!pager.isExhausted())
                 {
-                    try (ReadOrderGroup orderGroup = pager.startOrderGroup();
-                         PartitionIterator iter = pager.fetchPageInternal(128, orderGroup))
+                    try (ReadExecutionController executionController = pager.executionController();
+                         PartitionIterator iter = pager.fetchPageInternal(128, executionController))
                     {
                         if (!iter.hasNext())
                             break;
@@ -548,8 +548,8 @@ public class MaterializedView
 
         while (!pager.isExhausted())
         {
-            try (ReadOrderGroup orderGroup = pager.startOrderGroup();
-                 PartitionIterator iter = pager.fetchPageInternal(128, orderGroup))
+            try (ReadExecutionController executionController = pager.executionController();
+                 PartitionIterator iter = pager.fetchPageInternal(128, executionController))
             {
                 while (iter.hasNext())
                 {

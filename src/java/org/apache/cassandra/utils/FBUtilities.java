@@ -774,4 +774,16 @@ public class FBUtilities
         if (toThrow != null)
             throw toThrow;
     }
+
+    public static void sleepQuietly(long millis)
+    {
+        try
+        {
+            Thread.sleep(millis);
+        }
+        catch (InterruptedException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
 }

@@ -729,7 +729,7 @@ public abstract class Slices implements Iterable<Slice>
 
             public boolean isEQ()
             {
-                return startValue.equals(endValue);
+                return Objects.equals(startValue, endValue);
             }
         }
     }

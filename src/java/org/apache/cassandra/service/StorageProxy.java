@@ -69,6 +69,8 @@ import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.triggers.TriggerExecutor;
 import org.apache.cassandra.utils.AbstractIterator;
 import org.apache.cassandra.utils.*;
+import org.apache.cassandra.utils.concurrent.OpMonitoring;
+import org.apache.cassandra.utils.concurrent.OpState;
 
 public class StorageProxy implements StorageProxyMBean
 {
@@ -1650,10 +1652,26 @@ public class StorageProxy implements StorageProxyMBean
         {
             try
             {
-                try (ReadOrderGroup orderGroup = command.startOrderGroup(); UnfilteredPartitionIterator iterator = command.executeLocally(orderGroup))
+                OpState state = new OpState(command.toCQLString());
+                ScheduledFuture<?> monitor = OpMonitoring.schedule(constructionTime, timeout, state);
+                ReadResponse response;
+                try (ReadExecutionController executionController = command.executionController(state);
+                     UnfilteredPartitionIterator iterator = command.executeLocally(executionController))
                 {
-                    handler.response(command.createResponse(iterator, command.columnFilter()));
+                    response = command.createResponse(iterator, command.columnFilter());
                 }
+
+                if (state.complete())
+                {
+                    monitor.cancel(false);
+                    handler.response(response);
+                }
+                else
+                {
+                    MessagingService.instance().incrementDroppedMessages(verb);
+                    handler.onFailure(FBUtilities.getBroadcastAddress());
+                }
+
                 MessagingService.instance().addLatency(FBUtilities.getBroadcastAddress(), TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
             }
             catch (Throwable t)
@@ -2286,18 +2304,20 @@ public class StorageProxy implements StorageProxyMBean
      */
     private static abstract class DroppableRunnable implements Runnable
     {
-        private final long constructionTime = System.nanoTime();
-        private final MessagingService.Verb verb;
+        final long constructionTime;
+        final MessagingService.Verb verb;
+        final long timeout;
 
         public DroppableRunnable(MessagingService.Verb verb)
         {
+            this.constructionTime = System.currentTimeMillis();
             this.verb = verb;
+            this.timeout = DatabaseDescriptor.getTimeout(verb);
         }
 
         public final void run()
         {
-
-            if (TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - constructionTime) > DatabaseDescriptor.getTimeout(verb))
+            if (System.currentTimeMillis() > constructionTime + timeout)
             {
                 MessagingService.instance().incrementDroppedMessages(verb);
                 return;

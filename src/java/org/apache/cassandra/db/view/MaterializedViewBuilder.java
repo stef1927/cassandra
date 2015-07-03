@@ -32,7 +32,7 @@ import org.apache.cassandra.concurrent.ScheduledExecutors;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.Mutation;
-import org.apache.cassandra.db.ReadOrderGroup;
+import org.apache.cassandra.db.ReadExecutionController;
 import org.apache.cassandra.db.SinglePartitionReadCommand;
 import org.apache.cassandra.db.SystemKeyspace;
 import org.apache.cassandra.db.compaction.CompactionInfo;
@@ -81,8 +81,8 @@ public class MaterializedViewBuilder extends CompactionInfo.Holder
 
         while (!pager.isExhausted())
         {
-           try (ReadOrderGroup orderGroup = pager.startOrderGroup();
-                PartitionIterator partitionIterator = pager.fetchPageInternal(128, orderGroup))
+           try (ReadExecutionController executionController = pager.executionController();
+                PartitionIterator partitionIterator = pager.fetchPageInternal(128, executionController))
            {
                if (!partitionIterator.hasNext())
                    return;

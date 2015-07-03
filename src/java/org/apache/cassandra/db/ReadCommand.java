@@ -41,7 +41,9 @@ import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.ClientWarn;
 import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.utils.ByteBufferUtil;
+import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Pair;
+import org.apache.cassandra.utils.concurrent.OpState;
 
 /**
  * General interface for storage-engine read commands (common to both range and
@@ -51,8 +53,8 @@ import org.apache.cassandra.utils.Pair;
  */
 public abstract class ReadCommand implements ReadQuery
 {
+    private static final int TEST_ITERATION_DELAY_MILLIS = Integer.valueOf(System.getProperty("cassandra.test.read_iteration_delay_ms", "0"));
     protected static final Logger logger = LoggerFactory.getLogger(ReadCommand.class);
-
     public static final IVersionedSerializer<ReadCommand> serializer = new Serializer();
     // For RANGE_SLICE verb: will either dispatch on 'serializer' for 3.0 or 'legacyRangeSliceCommandSerializer' for earlier version.
     // Can be removed (and replaced by 'serializer') once we drop pre-3.0 backward compatibility.
@@ -276,7 +278,7 @@ public abstract class ReadCommand implements ReadQuery
      */
     public abstract boolean selects(DecoratedKey partitionKey, Clustering clustering);
 
-    protected abstract UnfilteredPartitionIterator queryStorage(ColumnFamilyStore cfs, ReadOrderGroup orderGroup);
+    protected abstract UnfilteredPartitionIterator queryStorage(ColumnFamilyStore cfs, ReadExecutionController executionController);
 
     protected abstract int oldestUnrepairedTombstone();
 
@@ -295,13 +297,13 @@ public abstract class ReadCommand implements ReadQuery
     /**
      * Executes this command on the local host.
      *
-     * @param orderGroup the operation group spanning this command
+     * @param executionController the execution controller spanning this command
      *
      * @return an iterator over the result of executing this command locally.
      */
     @SuppressWarnings("resource") // The result iterator is closed upon exceptions (we know it's fine to potentially not close the intermediary
                                   // iterators created inside the try as long as we do close the original resultIterator), or by closing the result.
-    public UnfilteredPartitionIterator executeLocally(ReadOrderGroup orderGroup)
+    public UnfilteredPartitionIterator executeLocally(ReadExecutionController executionController)
     {
         long startTimeNanos = System.nanoTime();
 
@@ -310,11 +312,12 @@ public abstract class ReadCommand implements ReadQuery
         Index.Searcher searcher = index == null ? null : index.searcherFor(this);
 
         UnfilteredPartitionIterator resultIterator = searcher == null
-                                         ? queryStorage(cfs, orderGroup)
-                                         : searcher.search(orderGroup);
+                                         ? queryStorage(cfs, executionController)
+                                         : searcher.search(executionController);
 
         try
         {
+            resultIterator = withStateTracking(resultIterator, executionController.state());
             resultIterator = withMetricsRecording(withoutPurgeableTombstones(resultIterator, cfs), cfs.metric, startTimeNanos);
 
             // If we've used a 2ndary index, we know the result already satisfy the primary expression used, so
@@ -338,14 +341,19 @@ public abstract class ReadCommand implements ReadQuery
 
     protected abstract void recordLatency(TableMetrics metric, long latencyNanos);
 
-    public PartitionIterator executeInternal(ReadOrderGroup orderGroup)
+    public PartitionIterator executeInternal(ReadExecutionController controller)
     {
-        return UnfilteredPartitionIterators.filter(executeLocally(orderGroup), nowInSec());
+        return UnfilteredPartitionIterators.filter(executeLocally(controller), nowInSec());
     }
 
-    public ReadOrderGroup startOrderGroup()
+    public ReadExecutionController executionController()
     {
-        return ReadOrderGroup.forCommand(this);
+        return executionController(new OpState());
+    }
+
+    public ReadExecutionController executionController(OpState state)
+    {
+        return ReadExecutionController.forCommand(this, state);
     }
 
     /**
@@ -439,6 +447,48 @@ public abstract class ReadCommand implements ReadQuery
                 }
             }
         };
+    }
+
+    protected UnfilteredPartitionIterator withStateTracking(UnfilteredPartitionIterator iter, final OpState state)
+    {
+        return new WrappingUnfilteredPartitionIterator(iter)
+        {
+            @Override
+            public UnfilteredRowIterator computeNext(UnfilteredRowIterator iter)
+            {
+                if (state.aborted())
+                    return null;
+
+                if (TEST_ITERATION_DELAY_MILLIS > 0)
+                    maybeDelayForTesting();
+
+                return iter;
+            }
+        };
+    }
+
+    protected UnfilteredRowIterator withStateTracking(UnfilteredRowIterator iter, final OpState state)
+    {
+        return new WrappingUnfilteredRowIterator(iter)
+        {
+            @Override
+            public boolean hasNext()
+            {
+                if (state.aborted())
+                    return false;
+
+                if (TEST_ITERATION_DELAY_MILLIS > 0)
+                    maybeDelayForTesting();
+
+                return super.hasNext();
+            }
+        };
+    }
+
+    private void maybeDelayForTesting()
+    {
+        if (!metadata.ksName.startsWith("system"))
+            FBUtilities.sleepQuietly(TEST_ITERATION_DELAY_MILLIS);
     }
 
     /**

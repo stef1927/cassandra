@@ -42,6 +42,7 @@ import org.apache.cassandra.db.rows.UnfilteredRowIterator;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.concurrent.OpState;
 
 import static org.apache.cassandra.Util.throwAssert;
 import static org.junit.Assert.assertArrayEquals;
@@ -429,8 +430,8 @@ public class CassandraIndexTest extends CQLTester
                                                                                indexKey,
                                                                                ColumnFilter.all(indexCfs.metadata),
                                                                                filter);
-        try (ReadOrderGroup orderGroup = ReadOrderGroup.forCommand(command);
-             UnfilteredRowIterator iter = command.queryMemtableAndDisk(indexCfs, orderGroup.indexReadOpOrderGroup()))
+        try (ReadExecutionController executionController = ReadExecutionController.forCommand(command, new OpState());
+             UnfilteredRowIterator iter = command.queryMemtableAndDisk(indexCfs, executionController.indexReadOpOrderGroup()))
         {
             while( iter.hasNext())
             {
