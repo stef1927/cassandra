@@ -50,6 +50,7 @@ import org.apache.cassandra.db.filter.ColumnSlice;
 import org.apache.cassandra.db.index.SecondaryIndex;
 import org.apache.cassandra.db.lifecycle.Tracker;
 import org.apache.cassandra.dht.*;
+import org.apache.cassandra.io.FSError;
 import org.apache.cassandra.io.compress.CompressionMetadata;
 import org.apache.cassandra.io.sstable.*;
 import org.apache.cassandra.io.sstable.metadata.*;
@@ -491,9 +492,21 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
                     {
                         sstable = open(entry.getKey(), entry.getValue(), metadata, partitioner);
                     }
+                    catch (CorruptSSTableException ex)
+                    {
+                        logger.error("Corrupt sstable {}; skipping table", entry, ex);
+                        FileUtils.handleCorruptSSTable(ex);
+                        return;
+                    }
+                    catch (FSError ex)
+                    {
+                        logger.error("Cannot read sstable {}; file system error, skipping table", entry, ex);
+                        FileUtils.handleFSError(ex);
+                        return;
+                    }
                     catch (IOException ex)
                     {
-                        logger.error("Corrupt sstable {}; skipped", entry, ex);
+                        logger.error("Cannot read sstable {}; other IO error, skipping table", entry, ex);
                         return;
                     }
                     sstables.add(sstable);
