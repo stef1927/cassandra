@@ -23,7 +23,6 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -57,6 +56,11 @@ import org.apache.cassandra.utils.concurrent.RefCounted;
 import org.apache.cassandra.utils.concurrent.Transactional;
 
 /**
+ * IMPORTANT: When this object is involved in a transactional graph, and is not encapsulated in a LifecycleTransaction,
+ * for correct behaviour its commit MUST occur before any others, since it may legitimately fail. This is consistent
+ * with the Transactional API, which permits one failing action to occur at the beginning of the commit phase, but also
+ * *requires* that the prepareToCommit() phase only take actions that can be rolled back.
+ *
  * A class that tracks sstable files involved in a transaction across sstables:
  * if the transaction succeeds the old files should be deleted and the new ones kept; vice-versa if it fails.
  *
@@ -161,6 +165,12 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
 
         private void deleteContents()
         {
+            // review: there's some correctness ugliness we must endure here:
+            // the *other* log file must be irrevocably deleted before we start deleting other files (at least on *commit*)
+            // which means: 1) ensuring it is always deleted first (reinforcing the no-untrack comment I made elsewhere, and/or using a LinkedHashSet)
+            // and 2) that the parent directory file descriptor is also synced after this deletion.
+            // We could achieve this by simply syncing the parent descriptor after every delete, or by special casing the first
+            // We should ensure some clear comments persist for future authors about this also.
             lines.forEach(line -> delete(line));
         }
 
@@ -169,6 +179,8 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
             getTrackedFiles(relativePath).forEach(file -> delete(file));
         }
 
+        // review: should this be a static method of the outer class, since it's used by SSTableTidier also,
+        // and does nothing specific to this inner class?
         static void delete(File file)
         {
             try
@@ -213,14 +225,17 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
 
         public void delete(boolean deleteContents)
         {
+            // review: not sure this early exit is helpful, and could mask errors...?
             if (!file.exists())
                 return;
 
             if (deleteContents)
                 deleteContents();
 
-            delete(file);
+            // we sync the parent file descriptor between contents and log deletion
+            // to ensure there is a happens before edge between them
             parent.sync();
+            delete(file);
         }
 
         public boolean exists()
@@ -230,13 +245,8 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     }
 
     /**
-     * The transaction data. It contains the two transaction log files,
-     * the folder path and descriptor, the transaction id, type and
-     * the final result, succeeded, which indicates if the transaction was
-     * committed or aborted.
-     *
      * We split the transaction data from the behavior because we need
-     * the data to reconstruct any left-overs and clean them up, as well as work
+     * to reconstruct any left-overs and clean them up, as well as work
      * out which files are temporary. So for these cases we don't want the full
      * transactional behavior, plus it's handy for the TransactionTidier.
      */
@@ -316,6 +326,9 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
         {
             try
             {
+                // review: this worries me a little: we should IMO have callers indicate what they expect to be entailed in cleanup
+                // and we should just confirm the disk state matches. We know if we aborted/completed when tidying the transaction logs,
+                // so this can be made safer against current or future errors on our part.
                 if (newLog().exists())
                     newLog().delete(true);
                 else
@@ -518,6 +531,19 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
         }
     }
 
+    // review: introduced this class for aesthetics
+    public static class Obsoletion
+    {
+        final SSTableReader reader;
+        final SSTableTidier tidier;
+
+        public Obsoletion(SSTableReader reader, SSTableTidier tidier)
+        {
+            this.reader = reader;
+            this.tidier = tidier;
+        }
+    }
+
     /**
      * The SSTableReader tidier. When a reader is fully released and no longer referenced
      * by any one, we run this. It keeps a reference to the parent transaction and releases
@@ -604,6 +630,8 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     {
         try
         {
+            // review: these actions should each be wrapped in their own try/catch/accumulate
+            // else we may abort midway through cleanup we can (and should) perform
             if (succeeded)
                 data.newLog().delete(false);
             else

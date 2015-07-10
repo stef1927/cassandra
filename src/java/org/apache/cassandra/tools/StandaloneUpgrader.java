@@ -114,7 +114,9 @@ public class StandaloneUpgrader
                 }
                 finally
                 {
-                    sstable.selfRef().release();
+                    // we should have released this through commit of the LifecycleTransaction,
+                    // but in case the upgrade failed (or something else went wrong) make sure we don't retain a reference
+                    sstable.selfRef().ensureReleased();
                 }
             }
             CompactionManager.instance.finishCompactionsAndShutdown(5, TimeUnit.MINUTES);

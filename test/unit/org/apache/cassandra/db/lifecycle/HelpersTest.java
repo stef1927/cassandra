@@ -18,6 +18,7 @@
 */
 package org.apache.cassandra.db.lifecycle;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -166,16 +167,17 @@ public class HelpersTest
         TransactionLogs txnLogs = new TransactionLogs(OperationType.UNKNOWN, cfs.metadata);
         Iterable<SSTableReader> readers = Lists.newArrayList(MockSchema.sstable(1, cfs), MockSchema.sstable(2, cfs));
 
-        List<Pair<SSTableReader, TransactionLogs.SSTableTidier>> tidiers = Helpers.prepareForObsoletion(readers, txnLogs);
-        assertNotNull(tidiers);
-        assertEquals(2, tidiers.size());
+        List<TransactionLogs.Obsoletion> obsoletions = new ArrayList<>();
+        Assert.assertNull(Helpers.prepareForObsoletion(readers, txnLogs, obsoletions, null));
+        assertNotNull(obsoletions);
+        assertEquals(2, obsoletions.size());
 
-        Throwable accumulate = Helpers.markObsolete(tidiers, null);
+        Throwable accumulate = Helpers.markObsolete(obsoletions, null);
         Assert.assertNull(accumulate);
         for (SSTableReader reader : readers)
             Assert.assertTrue(reader.isMarkedCompacted());
 
-        accumulate = Helpers.markObsolete(tidiers, null);
+        accumulate = Helpers.markObsolete(obsoletions, null);
         assertNotNull(accumulate);
 
         txnLogs.finish();

@@ -31,8 +31,6 @@ import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.SSTableReader.UniqueIdentifier;
-import org.apache.cassandra.utils.Pair;
-import org.apache.cassandra.utils.Throwables;
 import org.apache.cassandra.utils.concurrent.Transactional;
 
 import static com.google.common.base.Functions.compose;
@@ -47,6 +45,12 @@ import static org.apache.cassandra.utils.Throwables.maybeFail;
 import static org.apache.cassandra.utils.concurrent.Refs.release;
 import static org.apache.cassandra.utils.concurrent.Refs.selfRefs;
 
+/**
+ * IMPORTANT: When this object is involved in a transactional graph, for correct behaviour its commit MUST occur before
+ * any others, since it may legitimately fail. This is consistent with the Transactional API, which permits one failing
+ * action to occur at the beginning of the commit phase, but also *requires* that the prepareToCommit() phase only take
+ * actions that can be rolled back.
+ */
 public class LifecycleTransaction extends Transactional.AbstractTransactional
 {
     private static final Logger logger = LoggerFactory.getLogger(LifecycleTransaction.class);
@@ -106,8 +110,8 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     // changes that are pending
     private final State staged = new State();
 
-    // the tidiers to be used for marking obsoleted readers during a commit
-    private List<Pair<SSTableReader, TransactionLogs.SSTableTidier>> tidiers;
+    // the tidier and their readers, to be used for marking readers obsoleted during a commit
+    private List<TransactionLogs.Obsoletion> obsoletions;
 
     /**
      * construct a Transaction for use in an offline operation
@@ -181,9 +185,8 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
 
         // prepare for compaction obsolete readers as long as they were part of the original set
         // since those that are not original are early readers that share the same desc with the finals
-        tidiers = prepareForObsoletion(filterIn(logged.obsolete, originals), transactionLogs);
-
-        transactionLogs.finish();
+        maybeFail(prepareForObsoletion(filterIn(logged.obsolete, originals), transactionLogs, obsoletions = new ArrayList<>(), null));
+        transactionLogs.prepareToCommit();
     }
 
     /**
@@ -194,11 +197,16 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         assert staged.isEmpty() : "must be no actions introduced between prepareToCommit and a commit";
         logger.debug("Committing update:{}, obsolete:{}", staged.update, staged.obsolete);
 
+        // accumulate must be null if we have been used correctly, so fail immediately if it is not
+        maybeFail(accumulate);
+        // transaction log commit failure means we must abort; safe commit is not possible
+        maybeFail(transactionLogs.commit(null));
+
         // this is now the point of no return; we cannot safely rollback, so we ignore exceptions until we're done
         // we restore state by obsoleting our obsolete files, releasing our references to them, and updating our size
         // and notification status for the obsolete and new files
 
-        accumulate = markObsolete(tidiers, accumulate);
+        accumulate = markObsolete(obsoletions, accumulate);
         accumulate = tracker.updateSizeTracking(logged.obsolete, logged.update, accumulate);
         accumulate = release(selfRefs(logged.obsolete), accumulate);
         accumulate = tracker.notifySSTablesChanged(originals, logged.update, transactionLogs.getType(), accumulate);
@@ -214,34 +222,20 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         if (logger.isDebugEnabled())
             logger.debug("Aborting transaction over {}, with ({},{}) logged and ({},{}) staged", originals, logged.update, logged.obsolete, staged.update, staged.obsolete);
 
-        accumulate = abortObsoletion(tidiers, accumulate);
+        accumulate = abortObsoletion(obsoletions, accumulate);
 
         if (logged.isEmpty() && staged.isEmpty())
-        {
-            if (transactionLogs.state() != AbstractTransactional.State.COMMITTED)
-                return transactionLogs.abort(accumulate);
-            else
-                return accumulate;
-        }
+            return transactionLogs.abort(accumulate);
 
         // mark obsolete all readers that are not versions of those present in the original set
         Iterable<SSTableReader> obsolete = filterOut(concatUniq(staged.update, logged.update), originals);
         logger.debug("Obsoleting {}", obsolete);
 
-        try
-        {
-            tidiers = null;
-            tidiers = prepareForObsoletion(obsolete, transactionLogs);
-        }
-        catch (Throwable t)
-        {
-            accumulate = Throwables.merge(accumulate, t);
-        }
-
-        if (transactionLogs.state() != AbstractTransactional.State.COMMITTED)
-            accumulate = transactionLogs.abort(accumulate);
-
-        accumulate = markObsolete(tidiers, accumulate);
+        accumulate = prepareForObsoletion(obsolete, transactionLogs, obsoletions = new ArrayList<>(), accumulate);
+        // review: can always safely abort even if committed, as it will just report a failure to abort;
+        // given changes to commit above, this would also be a legitimate error, so one we want to report
+        accumulate = transactionLogs.abort(accumulate);
+        accumulate = markObsolete(obsoletions, accumulate);
 
         // replace all updated readers with a version restored to its original state
         accumulate = tracker.apply(updateLiveSet(logged.update, restoreUpdatedOriginals()), accumulate);

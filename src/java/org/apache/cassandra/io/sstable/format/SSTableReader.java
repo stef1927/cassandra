@@ -1004,7 +1004,6 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
         }
     }
 
-    
     private static class AndThen implements Runnable
     {
         final Runnable runFirst;

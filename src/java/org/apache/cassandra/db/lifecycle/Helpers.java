@@ -23,7 +23,7 @@ import com.google.common.base.Predicate;
 import com.google.common.collect.*;
 
 import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.apache.cassandra.utils.Pair;
+import org.apache.cassandra.utils.Throwables;
 
 import static com.google.common.base.Predicates.*;
 import static com.google.common.collect.Iterables.any;
@@ -116,25 +116,16 @@ class Helpers
             assert !reader.isReplaced();
     }
 
-    static List<Pair<SSTableReader, TransactionLogs.SSTableTidier>> prepareForObsoletion(Iterable<SSTableReader> readers, TransactionLogs txnLogs)
+    static Throwable markObsolete(List<TransactionLogs.Obsoletion> obsoletions, Throwable accumulate)
     {
-        List<Pair<SSTableReader, TransactionLogs.SSTableTidier>> ret = new ArrayList<>();
-        for (SSTableReader reader : readers)
-            ret.add(Pair.create(reader, txnLogs.obsoleted(reader)));
-
-        return ret;
-    }
-
-    static Throwable markObsolete(List<Pair<SSTableReader, TransactionLogs.SSTableTidier>> pairs, Throwable accumulate)
-    {
-        if (pairs == null || pairs.isEmpty())
+        if (obsoletions == null || obsoletions.isEmpty())
             return accumulate;
 
-        for (Pair<SSTableReader, TransactionLogs.SSTableTidier> pair : pairs)
+        for (TransactionLogs.Obsoletion obsoletion : obsoletions)
         {
             try
             {
-                pair.left.markObsolete(pair.right);
+                obsoletion.reader.markObsolete(obsoletion.tidier);
             }
             catch (Throwable t)
             {
@@ -144,16 +135,32 @@ class Helpers
         return accumulate;
     }
 
-    static Throwable abortObsoletion(List<Pair<SSTableReader, TransactionLogs.SSTableTidier>> pairs, Throwable accumulate)
+    static Throwable prepareForObsoletion(Iterable<SSTableReader> readers, TransactionLogs txnLogs, List<TransactionLogs.Obsoletion> obsoletions, Throwable accumulate)
     {
-        if (pairs == null || pairs.isEmpty())
-            return accumulate;
-
-        for (Pair<SSTableReader, TransactionLogs.SSTableTidier> pair : pairs)
+        for (SSTableReader reader : readers)
         {
             try
             {
-                pair.right.abort();
+                obsoletions.add(new TransactionLogs.Obsoletion(reader, txnLogs.obsoleted(reader)));
+            }
+            catch (Throwable t)
+            {
+                accumulate = Throwables.merge(accumulate, t);
+            }
+        }
+        return accumulate;
+    }
+
+    static Throwable abortObsoletion(List<TransactionLogs.Obsoletion> obsoletions, Throwable accumulate)
+    {
+        if (obsoletions == null || obsoletions.isEmpty())
+            return accumulate;
+
+        for (TransactionLogs.Obsoletion obsoletion : obsoletions)
+        {
+            try
+            {
+                obsoletion.tidier.abort();
             }
             catch (Throwable t)
             {

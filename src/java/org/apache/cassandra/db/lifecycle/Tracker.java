@@ -237,13 +237,16 @@ public class Tracker
             Set<SSTableReader> removed = Sets.difference(result.left.sstables, result.right.sstables);
             assert Iterables.all(removed, remove);
 
-            List<Pair<SSTableReader, TransactionLogs.SSTableTidier>> tidiers = prepareForObsoletion(removed, txnLogs);
+            // review: we must ensure any method accepting/returning a Throwable never throws an exception, and does its best
+            // to complete the instructions given to it
+            List<TransactionLogs.Obsoletion> obsoletions = new ArrayList<>();
+            accumulate = prepareForObsoletion(removed, txnLogs, obsoletions, accumulate);
             try
             {
                 txnLogs.finish();
                 if (!removed.isEmpty())
                 {
-                    accumulate = markObsolete(tidiers, accumulate);
+                    accumulate = markObsolete(obsoletions, accumulate);
                     accumulate = updateSizeTracking(removed, emptySet(), accumulate);
                     accumulate = release(selfRefs(removed), accumulate);
                     // notifySSTablesChanged -> LeveledManifest.promote doesn't like a no-op "promotion"
@@ -252,7 +255,7 @@ public class Tracker
             }
             catch (Throwable t)
             {
-                accumulate = abortObsoletion(tidiers, accumulate);
+                accumulate = abortObsoletion(obsoletions, accumulate);
                 accumulate = Throwables.merge(accumulate, t);
             }
         }
