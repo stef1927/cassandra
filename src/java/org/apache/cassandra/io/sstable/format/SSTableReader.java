@@ -494,14 +494,14 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
                     }
                     catch (CorruptSSTableException ex)
                     {
-                        logger.error("Corrupt sstable {}; skipping table", entry, ex);
                         FileUtils.handleCorruptSSTable(ex);
+                        logger.error("Corrupt sstable {}; skipping table", entry, ex);
                         return;
                     }
                     catch (FSError ex)
                     {
-                        logger.error("Cannot read sstable {}; file system error, skipping table", entry, ex);
                         FileUtils.handleFSError(ex);
+                        logger.error("Cannot read sstable {}; file system error, skipping table", entry, ex);
                         return;
                     }
                     catch (IOException ex)
