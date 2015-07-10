@@ -15,10 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db;
+package org.apache.cassandra.db.batch;
 
 import static org.apache.cassandra.utils.ByteBufferUtil.bytes;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import java.net.InetAddress;
 import java.util.Collections;
@@ -32,8 +33,6 @@ import org.apache.cassandra.schema.KeyspaceParams;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import com.google.common.collect.Lists;
@@ -48,6 +47,12 @@ import org.apache.cassandra.Util.PartitionerSwitcher;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.cql3.QueryProcessor;
 import org.apache.cassandra.cql3.UntypedResultSet;
+import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.db.Keyspace;
+import org.apache.cassandra.db.Mutation;
+import org.apache.cassandra.db.RowUpdateBuilder;
+import org.apache.cassandra.db.SystemKeyspace;
 import org.apache.cassandra.db.commitlog.ReplayPosition;
 import org.apache.cassandra.db.marshal.BytesType;
 import org.apache.cassandra.db.marshal.LongType;
@@ -124,55 +129,78 @@ public class BatchlogManagerTest
         Util.assertEmpty(Util.cmd(cfs, dk).build());
     }
 
-    // TODO: Fix. Currently endlessly looping on BatchLogManager.replayAllFailedBatches
     @Test
     public void testReplay() throws Exception
+    {
+        testReplay(false);
+    }
+
+    @Test
+    public void testLegacyReplay() throws Exception
+    {
+        testReplay(true);
+    }
+
+    private void testReplay(boolean legacy) throws Exception
     {
         long initialAllBatches = BatchlogManager.instance.countAllBatches();
         long initialReplayedBatches = BatchlogManager.instance.getTotalBatchesReplayed();
 
         CFMetaData cfm = Keyspace.open(KEYSPACE1).getColumnFamilyStore(CF_STANDARD1).metadata;
 
-        // Generate 1000 mutations and put them all into the batchlog.
-        // Half (500) ready to be replayed, half not.
-        for (int i = 0; i < 1000; i++)
+        // Generate 1000 mutations (100 batches of 10 mutations each) and put them all into the batchlog.
+        // Half batches (50) ready to be replayed, half not.
+        for (int i = 0; i < 100; i++)
         {
-            Mutation m = new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), bytes(i))
-                    .clustering("name" + i)
-                    .add("val", "val" + i)
-                    .build();
+            List<Mutation> mutations = new ArrayList<>(10);
+            for (int j = 0; j < 10; j++)
+            {
+                mutations.add(new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), bytes(i))
+                              .clustering("name" + j)
+                              .add("val", "val" + j)
+                              .build());
+            }
 
-            long timestamp = i < 500
+            long timestamp = i < 50
                            ? (System.currentTimeMillis() - BatchlogManager.instance.getBatchlogTimeout())
                            : (System.currentTimeMillis() + BatchlogManager.instance.getBatchlogTimeout());
 
-            BatchlogManager.getBatchlogMutationFor(Collections.singleton(m),
-                                                   UUIDGen.getTimeUUID(timestamp, i),
-                                                   MessagingService.current_version)
-                           .applyUnsafe();
+            BatchStore batchStore = new BatchStore(UUIDGen.getTimeUUID(timestamp, i), FBUtilities.timestampMicros()).mutations(mutations);
+            Mutation mutation = legacy ? batchStore.getLegacyMutation(MessagingService.current_version) : batchStore.getMutation(MessagingService.current_version);
+            mutation.applyUnsafe();
         }
 
         // Flush the batchlog to disk (see CASSANDRA-6822).
         Keyspace.open(SystemKeyspace.NAME).getColumnFamilyStore(SystemKeyspace.BATCHES).forceBlockingFlush();
 
-        assertEquals(1000, BatchlogManager.instance.countAllBatches() - initialAllBatches);
+        assertEquals(100, BatchlogManager.instance.countAllBatches() - initialAllBatches);
         assertEquals(0, BatchlogManager.instance.getTotalBatchesReplayed() - initialReplayedBatches);
 
         // Force batchlog replay and wait for it to complete.
         BatchlogManager.instance.startBatchlogReplay().get();
 
         // Ensure that the first half, and only the first half, got replayed.
-        assertEquals(500, BatchlogManager.instance.countAllBatches() - initialAllBatches);
-        assertEquals(500, BatchlogManager.instance.getTotalBatchesReplayed() - initialReplayedBatches);
+        assertEquals(50, BatchlogManager.instance.countAllBatches() - initialAllBatches);
+        assertEquals(50, BatchlogManager.instance.getTotalBatchesReplayed() - initialReplayedBatches);
 
-        for (int i = 0; i < 1000; i++)
+        for (int i = 0; i < 100; i++)
         {
-            UntypedResultSet result = QueryProcessor.executeInternal(String.format("SELECT * FROM \"%s\".\"%s\" WHERE key = intAsBlob(%d)", KEYSPACE1, CF_STANDARD1, i));
-            if (i < 500)
+            String query = String.format("SELECT * FROM \"%s\".\"%s\" WHERE key = intAsBlob(%d)", KEYSPACE1, CF_STANDARD1, i);
+            UntypedResultSet result = QueryProcessor.executeInternal(query);
+            if (i < 50)
             {
-                assertEquals(bytes(i), result.one().getBytes("key"));
-                assertEquals("name" + i, result.one().getString("name"));
-                assertEquals("val" + i, result.one().getString("val"));
+                Iterator<UntypedResultSet.Row> it = result.iterator();
+                for (int j = 0; j < 10; j++)
+                {
+                    assertTrue(it.hasNext());
+                    UntypedResultSet.Row row = it.next();
+
+                    assertEquals(bytes(i), row.getBytes("key"));
+                    assertEquals("name" + j, row.getString("name"));
+                    assertEquals("val" + j, row.getString("val"));
+                }
+
+                assertFalse(it.hasNext());
             }
             else
             {
@@ -220,10 +248,10 @@ public class BatchlogManagerTest
             else
                 timestamp--;
 
-            BatchlogManager.getBatchlogMutationFor(mutations,
-                                                   UUIDGen.getTimeUUID(timestamp, i),
-                                                   MessagingService.current_version)
-                           .applyUnsafe();
+            new BatchStore(UUIDGen.getTimeUUID(timestamp, i), FBUtilities.timestampMicros())
+            .mutations(mutations)
+            .getMutation(MessagingService.current_version)
+            .applyUnsafe();
         }
 
         // Flush the batchlog to disk (see CASSANDRA-6822).
@@ -257,34 +285,18 @@ public class BatchlogManagerTest
         }
     }
 
-    static Mutation fakeVersion12MutationFor(Collection<Mutation> mutations, long now) throws IOException
+    static Mutation fakeVersion12MutationFor(Collection<Mutation> mutations, long now)
     {
-        // Serialization can't write version 1.2 mutations, pretend this is old by using random id and written_at and
-        // saving it in the legacy batchlog.
-        UUID uuid = UUID.randomUUID();
-        ByteBuffer writtenAt = LongType.instance.decompose(now);
-        int version = MessagingService.VERSION_30;
-        ByteBuffer data = BatchlogManager.serializeMutations(mutations, version);
-
-        return new RowUpdateBuilder(SystemKeyspace.LegacyBatchlog, FBUtilities.timestampMicros(), uuid)
-            .clustering()
-            .add("written_at", writtenAt)
-            .add("data", data)
-            .add("version", version)
-            .build();
+        return new BatchStore(UUID.randomUUID(), now * 1000)
+               .mutations(mutations)
+               .getLegacyMutation(MessagingService.VERSION_30);
     }
 
     static Mutation fakeVersion20MutationFor(Collection<Mutation> mutations, UUID uuid)
     {
-        // Serialization can't write version 1.2 mutations, pretend this is old by saving it in the legacy batchlog.
-        int version = MessagingService.VERSION_30;
-        ByteBuffer writtenAt = LongType.instance.decompose(UUIDGen.unixTimestamp(uuid));
-        return new RowUpdateBuilder(SystemKeyspace.LegacyBatchlog, FBUtilities.timestampMicros(), uuid)
-               .clustering()
-               .add("data", BatchlogManager.serializeMutations(mutations, version))
-               .add("written_at", writtenAt)
-               .add("version", version)
-               .build();
+        return new BatchStore(uuid, UUIDGen.unixTimestamp(uuid) * 1000)
+               .mutations(mutations)
+               .getLegacyMutation(MessagingService.VERSION_30);
     }
 
     @Test
@@ -341,10 +353,10 @@ public class BatchlogManagerTest
                            : (System.currentTimeMillis() + BatchlogManager.instance.getBatchlogTimeout());
 
 
-            BatchlogManager.getBatchlogMutationFor(Collections.singleton(mutation),
-                                                   UUIDGen.getTimeUUID(timestamp, i),
-                                                   MessagingService.current_version)
-                           .applyUnsafe();
+            new BatchStore(UUIDGen.getTimeUUID(timestamp, i), FBUtilities.timestampMicros())
+            .mutations(Collections.singleton(mutation))
+            .getMutation(MessagingService.current_version)
+            .applyUnsafe();
         }
 
         // Flush the batchlog to disk (see CASSANDRA-6822).

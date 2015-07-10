@@ -27,11 +27,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 
+import com.google.common.base.Function;
 import com.google.common.base.Predicate;
 import com.google.common.cache.CacheLoader;
 import com.google.common.collect.*;
 import com.google.common.util.concurrent.Uninterruptibles;
 
+import org.apache.cassandra.db.marshal.UUIDType;
 import org.apache.cassandra.db.view.MaterializedViewManager;
 import org.apache.cassandra.db.view.MaterializedViewUtils;
 import org.apache.cassandra.metrics.*;
@@ -45,11 +47,14 @@ import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.*;
+import org.apache.cassandra.db.batch.BatchCallback;
+import org.apache.cassandra.db.batch.BatchStore;
+import org.apache.cassandra.db.batch.BatchRemove;
+import org.apache.cassandra.db.batch.BatchlogManager;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.db.partitions.*;
 import org.apache.cassandra.db.filter.TombstoneOverwhelmingException;
 import org.apache.cassandra.db.index.SecondaryIndexSearcher;
-import org.apache.cassandra.db.marshal.UUIDType;
 import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.Bounds;
 import org.apache.cassandra.dht.RingPosition;
@@ -675,7 +680,9 @@ public class StorageProxy implements StorageProxyMBean
                 wrappers.add(wrapper);
 
                 //Apply to local batchlog memtable in this thread
-                BatchlogManager.getBatchlogMutationFor(mutations, batchUUID, MessagingService.current_version).apply();
+                new BatchStore(batchUUID, FBUtilities.timestampMicros()).mutations(mutations)
+                                                                        .getMutation(MessagingService.current_version)
+                                                                        .apply();
             }
 
             // now actually perform the writes and wait for them to complete
@@ -763,16 +770,18 @@ public class StorageProxy implements StorageProxyMBean
                     batchConsistencyLevel = consistency_level;
             }
 
-            final Collection<InetAddress> batchlogEndpoints = getBatchlogEndpoints(localDataCenter, batchConsistencyLevel);
+            //final Collection<InetAddress> batchlogEndpoints = getBatchlogEndpoints(localDataCenter, batchConsistencyLevel);
+            ImmutableListMultimap<Boolean, InetAddress> batchlogEndpoints =
+                Multimaps.index(getBatchlogEndpoints(localDataCenter, consistency_level), new Function<InetAddress, Boolean>()
+                {
+                    public Boolean apply(InetAddress ep)
+                    {
+                        return MessagingService.instance().getVersion(ep) >= MessagingService.VERSION_30;
+                    }
+                });
             final UUID batchUUID = UUIDGen.getTimeUUID();
             BatchlogResponseHandler.BatchlogCleanup cleanup = new BatchlogResponseHandler.BatchlogCleanup(mutations.size(),
-                                                                                                          new BatchlogResponseHandler.BatchlogCleanupCallback()
-                                                                                                          {
-                                                                                                              public void invoke()
-                                                                                                              {
-                                                                                                                  asyncRemoveFromBatchlog(batchlogEndpoints, batchUUID);
-                                                                                                              }
-                                                                                                          });
+                                                                                                          () -> asyncRemoveFromBatchlog(batchlogEndpoints, batchUUID));
 
             // add a handler for each mutation - includes checking availability, but doesn't initiate any writes, yet
             for (Mutation mutation : mutations)
@@ -822,8 +831,49 @@ public class StorageProxy implements StorageProxyMBean
         return replica.equals(FBUtilities.getBroadcastAddress());
     }
 
+    private static void syncWriteToBatchlog(Collection<Mutation> mutations, ImmutableListMultimap<Boolean, InetAddress> endpoints, UUID uuid)
+    throws WriteTimeoutException, WriteFailureException
+    {
+        BatchCallback callback = null;
+        AbstractWriteResponseHandler<?> legacyCallback = null;
 
-    private static void syncWriteToBatchlog(Collection<Mutation> mutations, Collection<InetAddress> endpoints, UUID uuid)
+        if (endpoints.containsKey(Boolean.TRUE))
+            callback = syncWriteToBatchlog(mutations, endpoints.get(Boolean.TRUE), uuid);
+
+        if (endpoints.containsKey(Boolean.FALSE))
+            legacyCallback = legacySyncWriteToBatchlog(mutations, endpoints.get(Boolean.FALSE), uuid);
+
+        // wait for at least one callback
+        if (callback != null)
+            callback.await();
+        else if (legacyCallback != null)
+            legacyCallback.get();
+    }
+
+    private static BatchCallback syncWriteToBatchlog(Collection<Mutation> mutations, Collection<InetAddress> endpoints, UUID uuid)
+    throws WriteTimeoutException, WriteFailureException
+    {
+        BatchCallback callback = new BatchCallback();
+        MessageOut<BatchStore> message = new BatchStore(uuid, FBUtilities.timestampMicros())
+                                         .mutations(mutations)
+                                         .createMessage();
+
+        for (InetAddress target : endpoints)
+        {
+            if (canDoLocalRequest(target))
+            {
+                performLocally(Stage.BATCHLOG_MUTATION, () -> message.payload.getMutation(MessagingService.current_version).apply(), callback);
+            }
+            else
+            {
+                MessagingService.instance().sendRR(message, target, callback);
+            }
+        }
+
+        return callback;
+    }
+
+    private static AbstractWriteResponseHandler<?> legacySyncWriteToBatchlog(Collection<Mutation> mutations, Collection<InetAddress> endpoints, UUID uuid)
     throws WriteTimeoutException, WriteFailureException
     {
         AbstractWriteResponseHandler<IMutation> handler = new WriteResponseHandler<>(endpoints,
@@ -833,33 +883,45 @@ public class StorageProxy implements StorageProxyMBean
                                                                         null,
                                                                         WriteType.BATCH_LOG);
 
-        MessageOut<Mutation> message = BatchlogManager.getBatchlogMutationFor(mutations, uuid, MessagingService.current_version)
-                                                      .createMessage(MessagingService.Verb.BATCHLOG_MUTATION);
+        BatchStore batchStore = new BatchStore(uuid, FBUtilities.timestampMicros()).mutations(mutations);
+
         for (InetAddress target : endpoints)
         {
             int targetVersion = MessagingService.instance().getVersion(target);
-            if (canDoLocalRequest(target))
-            {
-                insertLocal(Stage.BATCHLOG_MUTATION, message.payload, handler);
-            }
-            else if (targetVersion < MessagingService.VERSION_30)
-            {
-                MessagingService.instance().sendRR(BatchlogManager.getBatchlogMutationFor(mutations, uuid, targetVersion)
-                                                                  .createMessage(MessagingService.Verb.MUTATION),
-                                                   target,
-                                                   handler,
-                                                   false);
-            }
-            else
-            {
-                MessagingService.instance().sendRR(message, target, handler, false);
-            }
+            MessagingService.instance().sendRR(batchStore.getLegacyMutation(targetVersion)
+                                                         .createMessage(MessagingService.Verb.MUTATION),
+                                               target,
+                                               handler,
+                                               false);
+
         }
 
-        handler.get();
+        return handler;
+    }
+
+    private static void asyncRemoveFromBatchlog(ImmutableListMultimap<Boolean, InetAddress> endpoints, UUID uuid)
+    {
+        if (endpoints.containsKey(Boolean.TRUE))
+            asyncRemoveFromBatchlog(endpoints.get(Boolean.TRUE), uuid);
+
+        if (endpoints.containsKey(Boolean.FALSE))
+            legacyAsyncRemoveFromBatchlog(endpoints.get(Boolean.FALSE), uuid);
     }
 
     private static void asyncRemoveFromBatchlog(Collection<InetAddress> endpoints, UUID uuid)
+    {
+        MessageOut<BatchRemove> message = new BatchRemove(uuid).createMessage();
+        for (InetAddress target : endpoints)
+        {
+            if (canDoLocalRequest(target))
+                performLocally(Stage.BATCHLOG_MUTATION, () -> message.payload.getMutation().apply());
+            else
+                MessagingService.instance().sendOneWay(message, target);
+        }
+
+    }
+
+    private static void legacyAsyncRemoveFromBatchlog(Collection<InetAddress> endpoints, UUID uuid)
     {
         AbstractWriteResponseHandler<IMutation> handler = new WriteResponseHandler<>(endpoints,
                                                                         Collections.<InetAddress>emptyList(),
@@ -867,31 +929,10 @@ public class StorageProxy implements StorageProxyMBean
                                                                         Keyspace.open(SystemKeyspace.NAME),
                                                                         null,
                                                                         WriteType.SIMPLE);
-        Mutation mutation = new Mutation(
-                PartitionUpdate.fullPartitionDelete(SystemKeyspace.Batches,
-                                                    UUIDType.instance.decompose(uuid),
-                                                    FBUtilities.timestampMicros(),
-                                                    FBUtilities.nowInSeconds()));
-        MessageOut<Mutation> message = mutation.createMessage(MessagingService.Verb.BATCHLOG_MUTATION);
+        Mutation mutation = BatchRemove.getMutation(uuid);
+
         for (InetAddress target : endpoints)
-        {
-            int targetVersion = MessagingService.instance().getVersion(target);
-            if (canDoLocalRequest(target))
-            {
-                insertLocal(Stage.BATCHLOG_MUTATION, message.payload, handler);
-            }
-            else if (targetVersion < MessagingService.VERSION_30)
-            {
-                MessagingService.instance().sendRR(mutation.createMessage(MessagingService.Verb.MUTATION),
-                                                   target,
-                                                   handler,
-                                                   false);
-            }
-            else
-            {
-                MessagingService.instance().sendRR(message, target, handler, false);
-            }
-        }
+            MessagingService.instance().sendRR(mutation.createMessage(MessagingService.Verb.MUTATION), target, handler, false);
     }
 
     private static void asyncWriteBatchedMutations(List<WriteResponseHandlerWrapper> wrappers, String localDataCenter, Stage stage)
@@ -1072,7 +1113,6 @@ public class StorageProxy implements StorageProxyMBean
 
         boolean insertLocal = false;
 
-
         for (InetAddress destination : targets)
         {
             // avoid OOMing due to excess hints.  we need to do this check even for "live" nodes, since we can
@@ -1091,7 +1131,8 @@ public class StorageProxy implements StorageProxyMBean
                 if (canDoLocalRequest(destination))
                 {
                     insertLocal = true;
-                } else
+                }
+                else
                 {
                     // belongs on a different server
                     if (message == null)
@@ -1102,7 +1143,8 @@ public class StorageProxy implements StorageProxyMBean
                     if (localDataCenter.equals(dc))
                     {
                         MessagingService.instance().sendRR(message, destination, responseHandler, true);
-                    } else
+                    }
+                    else
                     {
                         Collection<InetAddress> messages = (dcGroups != null) ? dcGroups.get(dc) : null;
                         if (messages == null)
@@ -1115,7 +1157,8 @@ public class StorageProxy implements StorageProxyMBean
                         messages.add(destination);
                     }
                 }
-            } else
+            }
+            else
             {
                 if (!shouldHint(destination))
                     continue;
@@ -1126,7 +1169,7 @@ public class StorageProxy implements StorageProxyMBean
         }
 
         if (insertLocal)
-            insertLocal(stage, mutation, responseHandler);
+            performLocally(stage, () -> mutation.apply(), responseHandler);
 
         if (dcGroups != null)
         {
@@ -1235,7 +1278,7 @@ public class StorageProxy implements StorageProxyMBean
         }
     }
 
-    private static void insertLocal(Stage stage, final Mutation mutation, final AbstractWriteResponseHandler<IMutation> responseHandler)
+    private static void performLocally(Stage stage, final Runnable runnable)
     {
         StageManager.getStage(stage).maybeExecuteImmediately(new LocalMutationRunnable()
         {
@@ -1243,14 +1286,32 @@ public class StorageProxy implements StorageProxyMBean
             {
                 try
                 {
-                    mutation.apply();
-                    responseHandler.response(null);
+                    runnable.run();
+                }
+                catch (Exception ex)
+                {
+                    logger.error("Failed to apply mutation locally : {}", ex);
+                }
+            }
+        });
+    }
+
+    private static void performLocally(Stage stage, final Runnable runnable, final IAsyncCallbackWithFailure<?> handler)
+    {
+        StageManager.getStage(stage).maybeExecuteImmediately(new LocalMutationRunnable()
+        {
+            public void runMayThrow()
+            {
+                try
+                {
+                    runnable.run();
+                    handler.response(null);
                 }
                 catch (Exception ex)
                 {
                     if (!(ex instanceof WriteTimeoutException))
                         logger.error("Failed to apply mutation locally : {}", ex);
-                    responseHandler.onFailure(FBUtilities.getBroadcastAddress());
+                    handler.onFailure(FBUtilities.getBroadcastAddress());
                 }
             }
         });

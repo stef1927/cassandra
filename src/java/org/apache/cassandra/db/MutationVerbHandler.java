@@ -29,8 +29,6 @@ import org.apache.cassandra.tracing.Tracing;
 
 public class MutationVerbHandler implements IVerbHandler<Mutation>
 {
-    private static final boolean TEST_FAIL_WRITES = System.getProperty("cassandra.test.fail_writes", "false").equalsIgnoreCase("true");
-
     public void doVerb(MessageIn<Mutation> message, int id)  throws IOException
     {
             // Check if there were any forwarding headers in this message

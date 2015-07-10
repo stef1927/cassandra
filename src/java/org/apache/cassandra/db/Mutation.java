@@ -58,7 +58,7 @@ public class Mutation implements IMutation
     public final long createdAt = System.currentTimeMillis();
     public Mutation(String keyspaceName, DecoratedKey key)
     {
-        this(keyspaceName, key, new HashMap<UUID, PartitionUpdate>());
+        this(keyspaceName, key, new HashMap<>());
     }
 
     public Mutation(PartitionUpdate update)

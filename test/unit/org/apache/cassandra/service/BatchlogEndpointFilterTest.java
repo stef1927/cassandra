@@ -27,7 +27,7 @@ import com.google.common.collect.Multimap;
 import org.junit.Test;
 import org.junit.matchers.JUnitMatchers;
 
-import org.apache.cassandra.db.BatchlogManager;
+import org.apache.cassandra.db.batch.BatchlogManager;
 
 import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assert.assertThat;

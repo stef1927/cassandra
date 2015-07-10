@@ -125,6 +125,9 @@ public final class SystemKeyspace
                 .compaction(CompactionParams.scts(singletonMap("enabled", "false")))
                 .gcGraceSeconds(0);
 
+    /** Starting with 3.0 (CASSANDRA-9673) mutations are sent and stored as a list (mutations field)
+     * but we still need to keep backward compatibility with 2.1 and 2.2 nodes, which will send a serialized
+     * list of mutations as a blob (data), we handle the two cases during the replay.*/
     public static final CFMetaData Batches =
         compile(BATCHES,
                 "batches awaiting replay",
@@ -132,6 +135,7 @@ public final class SystemKeyspace
                 + "id timeuuid,"
                 + "data blob,"
                 + "version int,"
+                + "mutations list<blob>,"
                 + "PRIMARY KEY ((id)))")
                 .copy(new LocalPartitioner(TimeUUIDType.instance))
                 .compaction(CompactionParams.scts(singletonMap("min_threshold", "2")))
