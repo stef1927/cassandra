@@ -145,6 +145,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     public final CFMetaData metadata;
     public final IPartitioner partitioner;
     private final String mbeanName;
+    @Deprecated
+    private final String oldMBeanName;
     private volatile boolean valid = true;
 
     /**
@@ -374,13 +376,20 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         if (registerBookkeeping)
         {
             // register the mbean
-            String type = this.partitioner instanceof LocalPartitioner ? "IndexColumnFamilies" : "ColumnFamilies";
-            mbeanName = "org.apache.cassandra.db:type=" + type + ",keyspace=" + this.keyspace.getName() + ",columnfamily=" + name;
+            mbeanName = String.format("org.apache.cassandra.db:type=%s,keyspace=%s,table=%s",
+                                         isIndex() ? "IndexTables" : "Tables",
+                                         keyspace.getName(), name);
+            oldMBeanName = String.format("org.apache.cassandra.db:type=%s,keyspace=%s,columnfamily=%s",
+                                         isIndex() ? "IndexColumnFamilies" : "ColumnFamilies",
+                                         keyspace.getName(), name);
             try
             {
                 MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-                ObjectName nameObj = new ObjectName(mbeanName);
-                mbs.registerMBean(this, nameObj);
+                ObjectName[] objectNames = {new ObjectName(mbeanName), new ObjectName(oldMBeanName)};
+                for (ObjectName objectName : objectNames)
+                {
+                    mbs.registerMBean(this, objectName);
+                }
             }
             catch (Exception e)
             {
@@ -413,6 +422,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         {
             latencyCalculator = ScheduledExecutors.optionalTasks.schedule(Runnables.doNothing(), 0, TimeUnit.NANOSECONDS);
             mbeanName = null;
+            oldMBeanName= null;
         }
     }
 
@@ -462,9 +472,12 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     void unregisterMBean() throws MalformedObjectNameException, InstanceNotFoundException, MBeanRegistrationException
     {
         MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-        ObjectName nameObj = new ObjectName(mbeanName);
-        if (mbs.isRegistered(nameObj))
-            mbs.unregisterMBean(nameObj);
+        ObjectName[] objectNames = {new ObjectName(mbeanName), new ObjectName(oldMBeanName)};
+        for (ObjectName objectName : objectNames)
+        {
+            if (mbs.isRegistered(objectName))
+                mbs.unregisterMBean(objectName);
+        }
 
         // unregister metrics
         metric.release();
@@ -823,7 +836,13 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         }
     }
 
+    @Deprecated
     public String getColumnFamilyName()
+    {
+        return getTableName();
+    }
+
+    public String getTableName()
     {
         return name;
     }
