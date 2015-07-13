@@ -172,7 +172,7 @@ public class StorageServiceServerTest
     public void testTableSnapshot() throws IOException
     {
         // no need to insert extra data, even an "empty" database will have a little information in the system keyspace
-        StorageService.instance.takeTableSnapshot(SchemaKeyspace.NAME, SchemaKeyspace.KEYSPACES, "cf_snapshot");
+        StorageService.instance.takeTableSnapshot(SystemKeyspace.NAME, LegacySchemaTables.KEYSPACES, "cf_snapshot");
     }
 
     @Test
