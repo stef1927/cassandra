@@ -66,10 +66,14 @@ public class ReadResponse
         return digest;
     }
 
-    public boolean updateDigest(ByteBuffer digest)
+    public void setDigest(ByteBuffer digest)
     {
         ByteBuffer curr = this.digest;
-        return digestUpdater.compareAndSet(this, curr, digest);
+        if (!digestUpdater.compareAndSet(this, curr, digest))
+        {
+            assert digest.equals(this.digest) :
+                String.format("Digest mismatch : %s vs %s", digest.array(), this.digest.array());
+        }
     }
 
     public boolean isDigestQuery()
