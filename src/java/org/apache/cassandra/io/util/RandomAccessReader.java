@@ -27,7 +27,7 @@ import org.apache.cassandra.utils.memory.BufferPool;
 
 public class RandomAccessReader extends AbstractDataInput implements FileDataInput
 {
-    public static final int DEFAULT_BUFFER_SIZE = 4 * 1024;
+    public static final int DEFAULT_BUFFER_SIZE = 4096;
 
     // the IO channel to the file, we do not own a reference to this due to
     // performance reasons (CASSANDRA-9379) so it's up to the owner of the RAR to
@@ -59,6 +59,9 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         buffer.limit(0);
     }
 
+    /** The buffer size is typically already page aligned but if that is not the case
+     * make sure that it is a multiple of the page size, 4096.
+     * */
     protected int getBufferSize(int size)
     {
         if ((size & ~4095) != size)

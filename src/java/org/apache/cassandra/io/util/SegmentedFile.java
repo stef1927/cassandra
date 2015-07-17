@@ -217,17 +217,47 @@ public abstract class SegmentedFile extends SharedCloseableImpl
 
         private int bufferSize(StatsMetadata stats)
         {
-            // 2x to make sure the average is not too small, and 2x to make sure we don't miss it through alignment
-            return roundBufferSize(stats.estimatedRowSize.mean() * 4);
+            return bufferSize(stats.estimatedRowSize.percentile(DatabaseDescriptor.getDiskOptimizationRecordSizePercentile()));
         }
 
         private int bufferSize(Descriptor desc, IndexSummary indexSummary)
         {
             File file = new File(desc.filenameFor(Component.PRIMARY_INDEX));
-            return roundBufferSize(file.length() / indexSummary.size() * 4);
+            return bufferSize(file.length() / indexSummary.size());
         }
 
-        /** Round up to the next multiple of 4k but no more than 64k */
+        /**
+            Return the buffer size for a given record size. For spinning disks always add one page.
+            For solid state disks only add one page if the chance of crossing to the next page is more
+            than a predifined value, @see Config.disk_optimization_crossing_chance.
+         */
+        private int bufferSize(long recordSize)
+        {
+            Config.DiskOptimizationStrategy strategy = DatabaseDescriptor.getDiskOptimizationStrategy();
+            if (strategy == Config.DiskOptimizationStrategy.ssd)
+            {
+                // The crossing probability is calculated assuming a uniform distribution of record
+                // start position in a page, so it's the record size modulo the page size divided by
+                // the total page size.
+                double crossingProbability = (recordSize % 4096) / 4096;
+                return roundBufferSize(recordSize +
+                       crossingProbability > DatabaseDescriptor.getDiskOptimizationCrossingChance()
+                       ? 4096
+                       : 0);
+            }
+            else if (strategy == Config.DiskOptimizationStrategy.spinning)
+            {
+                return roundBufferSize(recordSize + 4096);
+            }
+            else
+            {
+                throw new IllegalStateException("Unsupported disk optimization strategy: " + strategy);
+            }
+        }
+
+        /**
+           Round up to the next multiple of 4k but no more than 64k
+         */
         static int roundBufferSize(long size)
         {
             if (size <= 0)

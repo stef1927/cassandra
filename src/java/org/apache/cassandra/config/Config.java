@@ -228,6 +228,12 @@ public class Config
 
     public boolean buffer_pool_use_heap_if_exhausted = true;
 
+    public DiskOptimizationStrategy disk_optimization_strategy = DiskOptimizationStrategy.ssd;
+
+    public int disk_optimization_record_size_percentile = 95;
+
+    public double disk_optimization_crossing_chance = 0.1;
+
     public boolean inter_dc_tcp_nodelay = true;
 
     public MemtableAllocationType memtable_allocation_type = MemtableAllocationType.heap_buffers;
@@ -321,17 +327,17 @@ public class Config
         }
     }
 
-    public static enum CommitLogSync
+    public enum CommitLogSync
     {
         periodic,
         batch
     }
-    public static enum InternodeCompression
+    public enum InternodeCompression
     {
         all, none, dc
     }
 
-    public static enum DiskAccessMode
+    public enum DiskAccessMode
     {
         auto,
         mmap,
@@ -339,7 +345,7 @@ public class Config
         standard,
     }
 
-    public static enum MemtableAllocationType
+    public enum MemtableAllocationType
     {
         unslabbed_heap_buffers,
         heap_buffers,
@@ -347,7 +353,7 @@ public class Config
         offheap_objects
     }
 
-    public static enum DiskFailurePolicy
+    public enum DiskFailurePolicy
     {
         best_effort,
         stop,
@@ -356,7 +362,7 @@ public class Config
         die
     }
 
-    public static enum CommitFailurePolicy
+    public enum CommitFailurePolicy
     {
         stop,
         stop_commit,
@@ -364,8 +370,14 @@ public class Config
         die,
     }
 
-    public static enum RequestSchedulerId
+    public enum RequestSchedulerId
     {
         keyspace
+    }
+
+    public enum DiskOptimizationStrategy
+    {
+        ssd,
+        spinning
     }
 }
