@@ -1493,6 +1493,21 @@ public class DatabaseDescriptor
         return conf.buffer_pool_use_heap_if_exhausted;
     }
 
+    public static Config.DiskOptimizationStrategy getDiskOptimizationStrategy()
+    {
+        return conf.disk_optimization_strategy;
+    }
+
+    public static int getDiskOptimizationRecordSizePercentile()
+    {
+        return conf.disk_optimization_record_size_percentile;
+    }
+
+    public static double getDiskOptimizationCrossingChance()
+    {
+        return conf.disk_optimization_crossing_chance;
+    }
+
     public static long getTotalCommitlogSpaceInMB()
     {
         return conf.commitlog_total_space_in_mb;
