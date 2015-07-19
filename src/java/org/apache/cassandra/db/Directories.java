@@ -44,7 +44,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.*;
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
+import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.io.FSError;
 import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.io.util.FileUtils;
@@ -649,7 +649,7 @@ public class Directories
         private FileFilter getFilter(File location)
         {
            final Set<File> temporaryFiles = skipTemporary || onlyTemporary
-                                            ? TransactionLogs.getTemporaryFiles(metadata, location)
+                                            ? LifecycleTransaction.getTemporaryFiles(metadata, location)
                                             : Collections.<File>emptySet();
 
             return new FileFilter()

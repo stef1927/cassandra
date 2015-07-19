@@ -142,19 +142,13 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
             return true;
         }
 
-        public boolean remove(SSTable table, boolean delete)
+        public void remove(SSTable table)
         {
             String relativePath = FileUtils.getRelativePath(parent.getParentFolder(), table.descriptor.baseFilename());
-            if (!lines.contains(relativePath))
-                return false;
+            assert lines.contains(relativePath) : String.format("%s is not tracked by %s", relativePath, file);
 
             lines.remove(relativePath);
-            if (delete)
-                delete(relativePath);
-
-            String[] linesArray = new String[lines.size()];
-            FileUtils.replace(file, lines.toArray(linesArray));
-            return true;
+            delete(relativePath);
         }
 
         public boolean contains(SSTable table)
@@ -165,40 +159,29 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
 
         private void deleteContents()
         {
-            // review: there's some correctness ugliness we must endure here:
-            // the *other* log file must be irrevocably deleted before we start deleting other files (at least on *commit*)
-            // which means: 1) ensuring it is always deleted first (reinforcing the no-untrack comment I made elsewhere, and/or using a LinkedHashSet)
-            // and 2) that the parent directory file descriptor is also synced after this deletion.
-            // We could achieve this by simply syncing the parent descriptor after every delete, or by special casing the first
-            // We should ensure some clear comments persist for future authors about this also.
+            deleteOpposite();
+
+            // we sync the parent file descriptor between opposite log deletion and
+            // contents deletion to ensure there is a happens before edge between them
+            parent.sync();
+
             lines.forEach(line -> delete(line));
+            lines.clear();
+        }
+
+        private void deleteOpposite()
+        {
+            Type oppositeType = type == Type.NEW ? Type.OLD : Type.NEW;
+            String oppositeFile = FileUtils.getRelativePath(parent.getParentFolder(), parent.getFileName(oppositeType));
+            assert lines.contains(oppositeFile) : String.format("Could not find %s amongst lines", oppositeFile);
+
+            delete(oppositeFile);
+            lines.remove(oppositeFile);
         }
 
         private void delete(String relativePath)
         {
-            getTrackedFiles(relativePath).forEach(file -> delete(file));
-        }
-
-        // review: should this be a static method of the outer class, since it's used by SSTableTidier also,
-        // and does nothing specific to this inner class?
-        static void delete(File file)
-        {
-            try
-            {
-                if (logger.isDebugEnabled())
-                    logger.debug("Deleting {}", file);
-
-                Files.delete(file.toPath());
-            }
-            catch (NoSuchFileException e)
-            {
-                logger.warn("Unable to delete {} as it does not exist", file);
-            }
-            catch (IOException e)
-            {
-                logger.error("Unable to delete {}", file, e);
-                throw new RuntimeException(e);
-            }
+            getTrackedFiles(relativePath).forEach(file -> TransactionLogs.delete(file));
         }
 
         public Set<File> getTrackedFiles()
@@ -225,9 +208,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
 
         public void delete(boolean deleteContents)
         {
-            // review: not sure this early exit is helpful, and could mask errors...?
-            if (!file.exists())
-                return;
+            assert file.exists() : String.format("Expected %s to exists", file);
 
             if (deleteContents)
                 deleteContents();
@@ -235,7 +216,8 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
             // we sync the parent file descriptor between contents and log deletion
             // to ensure there is a happens before edge between them
             parent.sync();
-            delete(file);
+
+            TransactionLogs.delete(file);
         }
 
         public boolean exists()
@@ -257,6 +239,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
         private final File folder;
         private final TransactionFile[] files;
         private int folderDescriptor;
+        private boolean succeeded;
 
         static TransactionData make(File logFile)
         {
@@ -279,6 +262,12 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
                 this.files[t.idx] = new TransactionFile(t, this);
 
             this.folderDescriptor = CLibrary.tryOpenDirectory(folder.getPath());
+            this.succeeded = !newLog().exists() && oldLog().exists();
+        }
+
+        public void succeeded(boolean succeeded)
+        {
+            this.succeeded = succeeded;
         }
 
         public void close()
@@ -326,13 +315,10 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
         {
             try
             {
-                // review: this worries me a little: we should IMO have callers indicate what they expect to be entailed in cleanup
-                // and we should just confirm the disk state matches. We know if we aborted/completed when tidying the transaction logs,
-                // so this can be made safer against current or future errors on our part.
-                if (newLog().exists())
-                    newLog().delete(true);
-                else
+                if (succeeded)
                     oldLog().delete(true);
+                else
+                    newLog().delete(true);
             }
             catch (Throwable t)
             {
@@ -384,22 +370,22 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     private static final Queue<Runnable> failedDeletions = new ConcurrentLinkedQueue<>();
     private static final Blocker blocker = new Blocker();
 
-    public TransactionLogs(OperationType opType, CFMetaData metadata)
+    TransactionLogs(OperationType opType, CFMetaData metadata)
     {
         this(opType, metadata, null);
     }
 
-    public TransactionLogs(OperationType opType, CFMetaData metadata, Tracker tracker)
+    TransactionLogs(OperationType opType, CFMetaData metadata, Tracker tracker)
     {
         this(opType, new Directories(metadata), tracker);
     }
 
-    public TransactionLogs(OperationType opType, Directories directories, Tracker tracker)
+    TransactionLogs(OperationType opType, Directories directories, Tracker tracker)
     {
         this(opType, directories.getDirectoryForNewSSTables(), tracker);
     }
 
-    public TransactionLogs(OperationType opType, File folder, Tracker tracker)
+    TransactionLogs(OperationType opType, File folder, Tracker tracker)
     {
         this.tracker = tracker;
         this.data = new TransactionData(opType,
@@ -415,7 +401,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     /**
      * Track a reader as new.
      **/
-    public void track(SSTable table)
+    void track(SSTable table)
     {
         if (!data.newLog().add(table))
             throw new IllegalStateException(table + " is already tracked as new");
@@ -426,19 +412,16 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     /**
      * Stop tracking a reader as new.
      */
-    public TransactionLogs untrack(SSTable table)
+    void untrack(SSTable table)
     {
-        assert data.newLog().contains(table) : table + " is not tracked by new log";
-        data.newLog().remove(table, true);
-
-        return this;
+        data.newLog().remove(table);
     }
 
     /**
      * Schedule a reader for deletion as soon as it is fully unreferenced and the transaction
      * has been committed.
      */
-    public SSTableTidier obsoleted(SSTableReader reader)
+    SSTableTidier obsoleted(SSTableReader reader)
     {
         if (data.newLog().contains(reader))
         {
@@ -457,12 +440,12 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
         return new SSTableTidier(reader, false, this);
     }
 
-    public OperationType getType()
+    OperationType getType()
     {
         return data.getType();
     }
 
-    public UUID getId()
+    UUID getId()
     {
         return data.getId();
     }
@@ -483,6 +466,26 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     TransactionData getData()
     {
         return data;
+    }
+
+    private static void delete(File file)
+    {
+        try
+        {
+            if (logger.isDebugEnabled())
+                logger.debug("Deleting {}", file);
+
+            Files.delete(file.toPath());
+        }
+        catch (NoSuchFileException e)
+        {
+            logger.warn("Unable to delete {} as it does not exist", file);
+        }
+        catch (IOException e)
+        {
+            logger.error("Unable to delete {}", file, e);
+            throw new RuntimeException(e);
+        }
     }
 
     /**
@@ -531,8 +534,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
         }
     }
 
-    // review: introduced this class for aesthetics
-    public static class Obsoletion
+    static class Obsoletion
     {
         final SSTableReader reader;
         final SSTableTidier tidier;
@@ -579,7 +581,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
                 // If we can't successfully delete the DATA component, set the task to be retried later: see TransactionTidier
                 File datafile = new File(desc.filenameFor(Component.DATA));
 
-                TransactionFile.delete(datafile);
+                delete(datafile);
                 // let the remainder be cleaned up by delete
                 SSTable.delete(desc, SSTable.discoverComponentsFor(desc));
             }
@@ -614,6 +616,10 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
             ScheduledExecutors.nonPeriodicTasks.submit(task);
     }
 
+    /**
+     * Deletions run on the nonPeriodicTasks executor, (both failedDeletions or global tidiers in SSTableReader)
+     * so by scheduling a new empty task and waiting for it we ensure any prior deletion has completed.
+     */
     public static void waitForDeletions()
     {
         FBUtilities.waitOnFuture(ScheduledExecutors.nonPeriodicTasks.schedule(() -> {
@@ -626,16 +632,21 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
         blocker.block(stop);
     }
 
-    private Throwable complete(Throwable accumulate, boolean succeeded)
+    private Throwable complete(Throwable accumulate)
     {
         try
         {
-            // review: these actions should each be wrapped in their own try/catch/accumulate
-            // else we may abort midway through cleanup we can (and should) perform
-            if (succeeded)
-                data.newLog().delete(false);
-            else
-                data.oldLog().delete(false);
+            try
+            {
+                if (data.succeeded)
+                    data.newLog().delete(false);
+                else
+                    data.oldLog().delete(false);
+            }
+            catch (Throwable t)
+            {
+                accumulate = merge(accumulate, t);
+            }
 
             selfRef.release();
             return accumulate;
@@ -649,12 +660,14 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
 
     protected Throwable doCommit(Throwable accumulate)
     {
-        return complete(accumulate, true);
+        data.succeeded(true);
+        return complete(accumulate);
     }
 
     protected Throwable doAbort(Throwable accumulate)
     {
-        return complete(accumulate, false);
+        data.succeeded(false);
+        return complete(accumulate);
     }
 
     protected void doPrepare() { }
@@ -667,7 +680,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
      * along with its contents, which includes the old file, else if only the old file exists
      * it means the operation has completed and we only cleanup the old file with its contents.
      */
-    public static void removeUnfinishedLeftovers(CFMetaData metadata)
+    static void removeUnfinishedLeftovers(CFMetaData metadata)
     {
         Throwable accumulate = null;
         Set<UUID> ids = new HashSet<>();
@@ -703,7 +716,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
      * Only return the files that exist and that are located in the folder
      * specified as a parameter or its sub-folders.
      */
-    public static Set<File> getTemporaryFiles(CFMetaData metadata, File folder)
+    static Set<File> getTemporaryFiles(CFMetaData metadata, File folder)
     {
         Set<File> ret = new HashSet<>();
         Set<UUID> ids = new HashSet<>();
@@ -737,7 +750,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     /**
      * Return the transaction log files that currently exist for this table.
      */
-    public static Set<File> getLogFiles(CFMetaData metadata)
+    static Set<File> getLogFiles(CFMetaData metadata)
     {
         Set<File> ret = new HashSet<>();
         for (File dir : getFolders(metadata, null))

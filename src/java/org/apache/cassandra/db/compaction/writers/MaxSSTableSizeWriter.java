@@ -59,7 +59,7 @@ public class MaxSSTableSizeWriter extends CompactionAwareWriter
                                                     cfs.partitioner,
                                                     new MetadataCollector(allSSTables, cfs.metadata.comparator, level),
                                                     SerializationHeader.make(cfs.metadata, nonExpiredSSTables),
-                                                    txn.logs());
+                                                    txn);
         sstableWriter.switchWriter(writer);
     }
 
@@ -78,7 +78,7 @@ public class MaxSSTableSizeWriter extends CompactionAwareWriter
                                                         cfs.partitioner,
                                                         new MetadataCollector(allSSTables, cfs.metadata.comparator, level),
                                                         SerializationHeader.make(cfs.metadata, nonExpiredSSTables),
-                                                        txn.logs());
+                                                        txn);
 
             sstableWriter.switchWriter(writer);
         }

@@ -86,7 +86,7 @@ public class Upgrader
                                     cfs.partitioner,
                                     sstableMetadataCollector,
                                     SerializationHeader.make(cfs.metadata, Sets.newHashSet(sstable)),
-                                    transaction.logs());
+                                    transaction);
     }
 
     public void upgrade(boolean keepOriginals)

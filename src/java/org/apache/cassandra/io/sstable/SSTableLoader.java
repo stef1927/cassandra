@@ -28,7 +28,7 @@ import com.google.common.collect.Multimap;
 
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
+import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
@@ -108,7 +108,7 @@ public class SSTableLoader implements StreamEventHandler
                 Set<File> temporaryFiles = allTemporaryFiles.get(dir);
                 if (temporaryFiles == null)
                 {
-                    temporaryFiles = TransactionLogs.getTemporaryFiles(metadata, dir);
+                    temporaryFiles = LifecycleTransaction.getTemporaryFiles(metadata, dir);
                     allTemporaryFiles.put(dir, temporaryFiles);
                 }
 

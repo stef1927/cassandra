@@ -20,11 +20,13 @@ package org.apache.cassandra.db.lifecycle;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 
 import com.google.common.collect.ImmutableSet;
-import org.apache.commons.lang3.StringUtils;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Sets;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -34,107 +36,169 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import junit.framework.Assert;
 import org.apache.cassandra.MockSchema;
-import org.apache.cassandra.SchemaLoader;
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Directories;
-import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.SerializationHeader;
 import org.apache.cassandra.db.compaction.*;
 import org.apache.cassandra.dht.Murmur3Partitioner;
 import org.apache.cassandra.io.sstable.*;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.apache.cassandra.io.sstable.format.SSTableWriter;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.io.sstable.metadata.MetadataType;
 import org.apache.cassandra.io.sstable.metadata.StatsMetadata;
 import org.apache.cassandra.io.util.BufferedSegmentedFile;
 import org.apache.cassandra.io.util.ChannelProxy;
 import org.apache.cassandra.io.util.SegmentedFile;
-import org.apache.cassandra.schema.KeyspaceParams;
-import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.AlwaysPresentFilter;
-import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.concurrent.AbstractTransactionalTest;
+import org.apache.cassandra.utils.concurrent.Transactional;
 
-public class TransactionLogsTest extends SchemaLoader
+public class TransactionLogsTest extends AbstractTransactionalTest
 {
     private static final String KEYSPACE = "TransactionLogsTest";
-    private static final String REWRITE_FINISHED_CF = "RewriteFinished";
-    private static final String REWRITE_ABORTED_CF = "RewriteAborted";
-    private static final String FLUSH_CF = "Flush";
 
     @BeforeClass
     public static void setUp()
     {
         MockSchema.cleanup();
-
-        SchemaLoader.prepareServer();
-        SchemaLoader.createKeyspace(KEYSPACE,
-                                    KeyspaceParams.simple(1),
-                                    SchemaLoader.standardCFMD(KEYSPACE, REWRITE_FINISHED_CF),
-                                    SchemaLoader.standardCFMD(KEYSPACE, REWRITE_ABORTED_CF),
-                                    SchemaLoader.standardCFMD(KEYSPACE, FLUSH_CF));
     }
 
-    @Test
-    public void testCommit() throws Throwable
+    protected AbstractTransactionalTest.TestableTransaction newTest() throws Exception
     {
-        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
-        SSTableReader sstableOld = sstable(cfs, 0, 128);
-        SSTableReader sstableNew = sstable(cfs, 1, 128);
-
-        TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
-        assertNotNull(transactionLogs);
-        assertNotNull(transactionLogs.getId());
-        Assert.assertEquals(OperationType.COMPACTION, transactionLogs.getType());
-
-        transactionLogs.track(sstableNew);
-        TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstableOld);
-        assertNotNull(tidier);
-
-        transactionLogs.finish();
-        sstableOld.markObsolete(tidier);
-        sstableOld.selfRef().release();
-
         TransactionLogs.waitForDeletions();
-
-        assertFiles(transactionLogs.getDataFolder(), new HashSet<>(sstableNew.getAllFilePaths()));
-        assertFiles(transactionLogs.getLogsFolder(), Collections.<String>emptySet());
-        assertEquals(0, TransactionLogs.getLogFiles(cfs.metadata).size());
-
-        sstableNew.selfRef().release();
+        SSTableReader.resetTidying();
+        return new TxnTest();
     }
 
-    @Test
-    public void testAbort() throws Throwable
+    private static final class TxnTest extends TestableTransaction
     {
-        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
-        SSTableReader sstableOld = sstable(cfs, 0, 128);
-        SSTableReader sstableNew = sstable(cfs, 1, 128);
+        private final static class Transaction extends Transactional.AbstractTransactional implements Transactional
+        {
+            final ColumnFamilyStore cfs;
+            final TransactionLogs txnLogs;
+            final SSTableReader sstableOld;
+            final SSTableReader sstableNew;
+            final TransactionLogs.SSTableTidier tidier;
 
-        // simulate tracking sstables with a failed transaction (new log file NOT deleted)
-        TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
-        assertNotNull(transactionLogs);
+            public Transaction(ColumnFamilyStore cfs, TransactionLogs txnLogs) throws IOException
+            {
+                this.cfs = cfs;
+                this.txnLogs = txnLogs;
+                this.sstableOld = sstable(cfs, 0, 128);
+                this.sstableNew = sstable(cfs, 1, 128);
 
-        transactionLogs.track(sstableNew);
-        TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstableOld);
-        assertNotNull(tidier);
+                assertNotNull(txnLogs);
+                assertNotNull(txnLogs.getId());
+                Assert.assertEquals(OperationType.COMPACTION, txnLogs.getType());
 
-        tidier.abort();
-        transactionLogs.abort();
+                txnLogs.track(sstableNew);
+                tidier = txnLogs.obsoleted(sstableOld);
+                assertNotNull(tidier);
+            }
 
-        assertFiles(transactionLogs.getDataFolder(), new HashSet<>(sstableOld.getAllFilePaths()));
-        assertFiles(transactionLogs.getLogsFolder(), Collections.<String>emptySet());
-        assertEquals(0, TransactionLogs.getLogFiles(cfs.metadata).size());
+            protected Throwable doCommit(Throwable accumulate)
+            {
+                sstableOld.markObsolete(tidier);
+                sstableOld.selfRef().release();
+                TransactionLogs.waitForDeletions();
 
-        sstableNew.selfRef().release();
-        sstableOld.selfRef().release();
+                Throwable ret = txnLogs.commit(accumulate);
+
+                sstableNew.selfRef().release();
+                return ret;
+            }
+
+            protected Throwable doAbort(Throwable accumulate)
+            {
+                tidier.abort();
+                TransactionLogs.waitForDeletions();
+
+                Throwable ret = txnLogs.abort(accumulate);
+
+                sstableNew.selfRef().release();
+                sstableOld.selfRef().release();
+                return ret;
+            }
+
+            protected void doPrepare()
+            {
+                txnLogs.prepareToCommit();
+            }
+
+            protected void assertInProgress() throws Exception
+            {
+                assertFiles(txnLogs.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(),
+                                                                                      sstableOld.getAllFilePaths())));
+                assertFiles(txnLogs.getLogsFolder(), Sets.newHashSet(txnLogs.getData().oldLog().file.getPath(),
+                                                                     txnLogs.getData().newLog().file.getPath()));
+                assertEquals(2, TransactionLogs.getLogFiles(cfs.metadata).size());
+            }
+
+            protected void assertPrepared() throws Exception
+            {
+            }
+
+            protected void assertAborted() throws Exception
+            {
+                assertFiles(txnLogs.getDataFolder(), new HashSet<>(sstableOld.getAllFilePaths()));
+                assertFiles(txnLogs.getLogsFolder(), Collections.<String>emptySet());
+                assertEquals(0, TransactionLogs.getLogFiles(cfs.metadata).size());
+            }
+
+            protected void assertCommitted() throws Exception
+            {
+                assertFiles(txnLogs.getDataFolder(), new HashSet<>(sstableNew.getAllFilePaths()));
+                assertFiles(txnLogs.getLogsFolder(), Collections.<String>emptySet());
+                assertEquals(0, TransactionLogs.getLogFiles(cfs.metadata).size());
+            }
+        }
+
+        final Transaction txn;
+
+        private TxnTest() throws IOException
+        {
+            this(MockSchema.newCFS(KEYSPACE));
+        }
+
+        private TxnTest(ColumnFamilyStore cfs) throws IOException
+        {
+            this(cfs, new TransactionLogs(OperationType.COMPACTION, cfs.metadata));
+        }
+
+        private TxnTest(ColumnFamilyStore cfs, TransactionLogs txnLogs) throws IOException
+        {
+            this(new Transaction(cfs, txnLogs));
+        }
+
+        private TxnTest(Transaction txn)
+        {
+            super(txn);
+            this.txn = txn;
+        }
+
+        protected void assertInProgress() throws Exception
+        {
+            txn.assertInProgress();
+        }
+
+        protected void assertPrepared() throws Exception
+        {
+            txn.assertPrepared();
+        }
+
+        protected void assertAborted() throws Exception
+        {
+            txn.assertAborted();
+        }
+
+        protected void assertCommitted() throws Exception
+        {
+            txn.assertCommitted();
+        }
     }
 
     @Test
-    public void testCancel() throws Throwable
+    public void testUntrack() throws Throwable
     {
         ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
         SSTableReader sstableNew = sstable(cfs, 1, 128);
@@ -272,6 +336,14 @@ public class TransactionLogsTest extends SchemaLoader
         assertEquals(0, TransactionLogs.getLogFiles(cfs.metadata).size());
     }
 
+    private File copyToTmpFile(File file) throws IOException
+    {
+        File ret = File.createTempFile(file.getName(), ".tmp");
+        ret.deleteOnExit();
+        Files.copy(file.toPath(), ret.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        return ret;
+    }
+
     @Test
     public void testRemoveUnfinishedLeftovers_newLogFound() throws Throwable
     {
@@ -285,6 +357,9 @@ public class TransactionLogsTest extends SchemaLoader
 
         transactionLogs.track(sstableNew);
         TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstableOld);
+
+        File tmpNewLog = copyToTmpFile(transactionLogs.getData().newLog().file);
+        File tmpOldLog = copyToTmpFile(transactionLogs.getData().oldLog().file);
 
         Set<File> tmpFiles = new HashSet<>(TransactionLogs.getLogFiles(cfs.metadata));
         for (String p : sstableNew.getAllFilePaths())
@@ -307,6 +382,11 @@ public class TransactionLogsTest extends SchemaLoader
         assertFiles(transactionLogs.getLogsFolder(), Collections.<String>emptySet());
 
         tidier.run();
+
+        // copy old transaction files contents back or transactionlogs will throw assertions
+        Files.move(tmpNewLog.toPath(), transactionLogs.getData().newLog().file.toPath());
+        Files.move(tmpOldLog.toPath(), transactionLogs.getData().oldLog().file.toPath());
+
         transactionLogs.close();
     }
 
@@ -323,6 +403,9 @@ public class TransactionLogsTest extends SchemaLoader
 
         transactionLogs.track(sstableNew);
         TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstableOld);
+
+        File tmpNewLog = copyToTmpFile(transactionLogs.getData().newLog().file);
+        File tmpOldLog = copyToTmpFile(transactionLogs.getData().oldLog().file);
 
         transactionLogs.getData().newLog().delete(false);
 
@@ -347,6 +430,11 @@ public class TransactionLogsTest extends SchemaLoader
         assertFiles(transactionLogs.getLogsFolder(), Collections.<String>emptySet());
 
         tidier.run();
+
+        // copy old transaction files contents back or transactionlogs will throw assertions
+        Files.move(tmpNewLog.toPath(), transactionLogs.getData().newLog().file.toPath());
+        Files.move(tmpOldLog.toPath(), transactionLogs.getData().oldLog().file.toPath());
+
         transactionLogs.close();
     }
 
@@ -452,139 +540,7 @@ public class TransactionLogsTest extends SchemaLoader
         return reader;
     }
 
-    // Following tests simulate real compactions and flushing with SSTableRewriter, ColumnFamilyStore, etc
-
-    @Test
-    public void testRewriteFinished() throws IOException
-    {
-        Keyspace keyspace = Keyspace.open(KEYSPACE);
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(REWRITE_FINISHED_CF);
-
-        SSTableReader oldSSTable = getSSTable(cfs, 1);
-        LifecycleTransaction txn = cfs.getTracker().tryModify(oldSSTable, OperationType.COMPACTION);
-        SSTableReader newSSTable = replaceSSTable(cfs, txn, false);
-        TransactionLogs.waitForDeletions();
-
-        assertFiles(txn.logs().getDataFolder(), new HashSet<>(newSSTable.getAllFilePaths()));
-        assertFiles(txn.logs().getLogsFolder(), Collections.<String>emptySet());
-    }
-
-    @Test
-    public void testRewriteAborted() throws IOException
-    {
-        Keyspace keyspace = Keyspace.open(KEYSPACE);
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(REWRITE_ABORTED_CF);
-
-        SSTableReader oldSSTable = getSSTable(cfs, 1);
-        LifecycleTransaction txn = cfs.getTracker().tryModify(oldSSTable, OperationType.COMPACTION);
-
-        replaceSSTable(cfs, txn, true);
-        TransactionLogs.waitForDeletions();
-
-        assertFiles(txn.logs().getDataFolder(), new HashSet<>(oldSSTable.getAllFilePaths()));
-        assertFiles(txn.logs().getLogsFolder(), Collections.<String>emptySet());
-    }
-
-    @Test
-    public void testFlush() throws IOException
-    {
-        Keyspace keyspace = Keyspace.open(KEYSPACE);
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(FLUSH_CF);
-
-        SSTableReader ssTableReader = getSSTable(cfs, 100);
-
-        String dataFolder = cfs.getSSTables().iterator().next().descriptor.directory.getPath();
-        String transactionLogsFolder = StringUtils.join(dataFolder, File.separator, Directories.TRANSACTIONS_SUBDIR);
-
-        assertTrue(new File(transactionLogsFolder).exists());
-        assertFiles(transactionLogsFolder, Collections.<String>emptySet());
-
-        assertFiles(dataFolder, new HashSet<>(ssTableReader.getAllFilePaths()));
-    }
-
-    private SSTableReader getSSTable(ColumnFamilyStore cfs, int numPartitions) throws IOException
-    {
-        createSSTable(cfs, numPartitions);
-
-        Set<SSTableReader> sstables = new HashSet<>(cfs.getSSTables());
-        assertEquals(1, sstables.size());
-        return sstables.iterator().next();
-    }
-
-    private void createSSTable(ColumnFamilyStore cfs, int numPartitions) throws IOException
-    {
-        cfs.truncateBlocking();
-
-        String schema = "CREATE TABLE %s.%s (key ascii, name ascii, val ascii, val1 ascii, PRIMARY KEY (key, name))";
-        String query = "INSERT INTO %s.%s (key, name, val) VALUES (?, ?, ?)";
-
-        try (CQLSSTableWriter writer = CQLSSTableWriter.builder()
-                                                       .withPartitioner(StorageService.getPartitioner())
-                                                       .inDirectory(cfs.directories.getDirectoryForNewSSTables())
-                                                       .forTable(String.format(schema, cfs.keyspace.getName(), cfs.name))
-                                                       .using(String.format(query, cfs.keyspace.getName(), cfs.name))
-                                                       .build())
-        {
-            for (int j = 0; j < numPartitions; j ++)
-                writer.addRow(String.format("key%d", j), "col1", "0");
-        }
-
-        cfs.loadNewSSTables();
-    }
-
-    private SSTableReader replaceSSTable(ColumnFamilyStore cfs, LifecycleTransaction txn, boolean fail)
-    {
-        List<SSTableReader> newsstables = null;
-        int nowInSec = FBUtilities.nowInSeconds();
-        try (CompactionController controller = new CompactionController(cfs, txn.originals(), cfs.gcBefore(FBUtilities.nowInSeconds())))
-        {
-            try (SSTableRewriter rewriter = new SSTableRewriter(cfs, txn, 1000, false);
-                 AbstractCompactionStrategy.ScannerList scanners = cfs.getCompactionStrategyManager().getScanners(txn.originals());
-                 CompactionIterator ci = new CompactionIterator(txn.opType(), scanners.scanners, controller, nowInSec, txn.opId())
-            )
-            {
-                long lastCheckObsoletion = System.nanoTime();
-                File directory = txn.originals().iterator().next().descriptor.directory;
-                Descriptor desc = Descriptor.fromFilename(cfs.getSSTablePath(directory));
-                CFMetaData metadata = Schema.instance.getCFMetaData(desc);
-                rewriter.switchWriter(SSTableWriter.create(metadata,
-                                                           desc,
-                                                           0,
-                                                           0,
-                                                           0,
-                                                           DatabaseDescriptor.getPartitioner(),
-                                                           SerializationHeader.make(cfs.metadata, txn.originals()),
-                                                           txn.logs()));
-                while (ci.hasNext())
-                {
-                    rewriter.append(ci.next());
-
-                    if (System.nanoTime() - lastCheckObsoletion > TimeUnit.MINUTES.toNanos(1L))
-                    {
-                        controller.maybeRefreshOverlaps();
-                        lastCheckObsoletion = System.nanoTime();
-                    }
-                }
-
-                if (!fail)
-                    newsstables = rewriter.finish();
-                else
-                    rewriter.abort();
-            }
-        }
-
-        assertTrue(fail || newsstables != null);
-
-        if (newsstables != null)
-        {
-            Assert.assertEquals(1, newsstables.size());
-            return newsstables.iterator().next();
-        }
-
-        return null;
-    }
-
-    private void assertFiles(String dirPath, Set<String> expectedFiles)
+    private static void assertFiles(String dirPath, Set<String> expectedFiles)
     {
         File dir = new File(dirPath);
         for (File file : dir.listFiles())

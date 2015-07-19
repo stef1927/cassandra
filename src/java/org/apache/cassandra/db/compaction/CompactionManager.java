@@ -960,7 +960,7 @@ public class CompactionManager implements CompactionManagerMBean
                                     sstable.getSSTableLevel(),
                                     cfs.partitioner,
                                     sstable.header,
-                                    txn.logs());
+                                    txn);
     }
 
     public static SSTableWriter createWriterForAntiCompaction(ColumnFamilyStore cfs,
@@ -993,7 +993,7 @@ public class CompactionManager implements CompactionManagerMBean
                                     cfs.partitioner,
                                     new MetadataCollector(sstables, cfs.metadata.comparator, minLevel),
                                     SerializationHeader.make(cfs.metadata, sstables),
-                                    txn.logs());
+                                    txn);
     }
 
 

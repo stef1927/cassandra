@@ -190,6 +190,12 @@ public class LeveledCompactionStrategyTest
         // L0 is the lowest priority, so when that's done, we know everything is done
         while (strategy.getSSTableCountPerLevel()[0] > 1)
             Thread.sleep(100);
+
+        // benedict: testCompactionProgress() passes locally but fails on jenkins only for this branch
+        // I could not find any failures for trunk
+        // in AbstractCompationStrategy.replaceSSTables() first we remove and then we add them so I added one
+        // more sleep
+        Thread.sleep(10);
     }
 
     @Test
@@ -211,7 +217,7 @@ public class LeveledCompactionStrategyTest
         }
 
         waitForLeveling(cfs);
-        LeveledCompactionStrategy strategy = (LeveledCompactionStrategy) ( cfs.getCompactionStrategyManager()).getStrategies().get(1);
+        LeveledCompactionStrategy strategy = (LeveledCompactionStrategy) (cfs.getCompactionStrategyManager()).getStrategies().get(1);
         assert strategy.getLevelSize(1) > 0;
 
         // get LeveledScanner for level 1 sstables

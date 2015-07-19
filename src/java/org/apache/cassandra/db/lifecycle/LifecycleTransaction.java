@@ -17,6 +17,7 @@
  */
 package org.apache.cassandra.db.lifecycle;
 
+import java.io.File;
 import java.util.*;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -29,6 +30,7 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.compaction.OperationType;
+import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.SSTableReader.UniqueIdentifier;
 import org.apache.cassandra.utils.concurrent.Transactional;
@@ -133,10 +135,33 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         return new LifecycleTransaction(dummy, operationType, readers);
     }
 
+    /**
+     * construct an empty Transaction with no existing readers
+     */
+    public static LifecycleTransaction empty(OperationType operationType, CFMetaData metadata)
+    {
+        Tracker dummy = new Tracker(null, false);
+        return new LifecycleTransaction(dummy, new TransactionLogs(operationType, metadata, dummy), Collections.emptyList());
+    }
+
+    /**
+     * construct an empty Transaction with no existing readers
+     */
+    public static LifecycleTransaction empty(OperationType operationType, File operationFolder)
+    {
+        Tracker dummy = new Tracker(null, false);
+        return new LifecycleTransaction(dummy, new TransactionLogs(operationType, operationFolder, dummy), Collections.emptyList());
+    }
+
     LifecycleTransaction(Tracker tracker, OperationType operationType, Iterable<SSTableReader> readers)
     {
+        this(tracker, new TransactionLogs(operationType, getMetadata(tracker, readers), tracker), readers);
+    }
+
+    LifecycleTransaction(Tracker tracker, TransactionLogs transactionLogs, Iterable<SSTableReader> readers)
+    {
         this.tracker = tracker;
-        this.transactionLogs = new TransactionLogs(operationType, getMetadata(tracker, readers), tracker);
+        this.transactionLogs = transactionLogs;
         for (SSTableReader reader : readers)
         {
             originals.add(reader);
@@ -145,7 +170,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         }
     }
 
-    private CFMetaData getMetadata(Tracker tracker, Iterable<SSTableReader> readers)
+    private static CFMetaData getMetadata(Tracker tracker, Iterable<SSTableReader> readers)
     {
         if (tracker.cfstore != null)
             return tracker.cfstore.metadata;
@@ -198,9 +223,13 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         logger.debug("Committing update:{}, obsolete:{}", staged.update, staged.obsolete);
 
         // accumulate must be null if we have been used correctly, so fail immediately if it is not
-        maybeFail(accumulate);
+        // benedict: maybeFail(accumulate) breaks AbstractTransactionalTest.testThrowableReturn, so I changed
+        // it as below, if you prefer to change the existing behavior of when we receive a != null accumulate
+        // and the test then let me know and I'll take care
+        // maybeFail(accumulate);
+
         // transaction log commit failure means we must abort; safe commit is not possible
-        maybeFail(transactionLogs.commit(null));
+        maybeFail(accumulate, transactionLogs.commit(null));
 
         // this is now the point of no return; we cannot safely rollback, so we ignore exceptions until we're done
         // we restore state by obsoleting our obsolete files, releasing our references to them, and updating our size
@@ -234,6 +263,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         accumulate = prepareForObsoletion(obsolete, transactionLogs, obsoletions = new ArrayList<>(), accumulate);
         // review: can always safely abort even if committed, as it will just report a failure to abort;
         // given changes to commit above, this would also be a legitimate error, so one we want to report
+        // benedict: does this comment make sense given that if we throw in doCommit() then the status won't be COMMIITED?
         accumulate = transactionLogs.abort(accumulate);
         accumulate = markObsolete(obsoletions, accumulate);
 
@@ -500,6 +530,31 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     {
         assert originals.size() == 1;
         return getFirst(originals, null);
+    }
+
+    public void track(SSTable table)
+    {
+        transactionLogs.track(table);
+    }
+
+    public void untrack(SSTable table)
+    {
+        transactionLogs.untrack(table);
+    }
+
+    public static void removeUnfinishedLeftovers(CFMetaData metadata)
+    {
+        TransactionLogs.removeUnfinishedLeftovers(metadata);
+    }
+
+    public static Set<File> getTemporaryFiles(CFMetaData metadata, File folder)
+    {
+        return TransactionLogs.getTemporaryFiles(metadata, folder);
+    }
+
+    public static Set<File> getLogFiles(CFMetaData metadata)
+    {
+        return TransactionLogs.getLogFiles(metadata);
     }
 
     // a class representing the current state of the reader within this transaction, encoding the actions both logged

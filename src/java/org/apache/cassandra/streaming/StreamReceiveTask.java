@@ -28,7 +28,7 @@ import org.apache.cassandra.concurrent.NamedThreadFactory;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Keyspace;
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
+import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.SSTableWriter;
@@ -48,8 +48,8 @@ public class StreamReceiveTask extends StreamTask
     // total size of files to receive
     private final long totalSize;
 
-    // TransactionLogs tracking new files received
-    public final TransactionLogs transactionLogs;
+    // Transaction tracking new files received
+    public final LifecycleTransaction txn;
 
     // true if task is done (either completed or aborted)
     private boolean done = false;
@@ -62,7 +62,7 @@ public class StreamReceiveTask extends StreamTask
         super(session, cfId);
         this.totalFiles = totalFiles;
         this.totalSize = totalSize;
-        this.transactionLogs = new TransactionLogs(OperationType.STREAM, Schema.instance.getCFMetaData(cfId));
+        this.txn = LifecycleTransaction.empty(OperationType.STREAM, Schema.instance.getCFMetaData(cfId));
         this.sstables = new ArrayList<>(totalFiles);
     }
 
@@ -114,7 +114,7 @@ public class StreamReceiveTask extends StreamTask
                 for (SSTableWriter writer : task.sstables)
                     writer.abort();
                 task.sstables.clear();
-                task.transactionLogs.abort();
+                task.txn.abort();
                 return;
             }
             ColumnFamilyStore cfs = Keyspace.open(kscf.left).getColumnFamilyStore(kscf.right);
@@ -122,7 +122,7 @@ public class StreamReceiveTask extends StreamTask
             List<SSTableReader> readers = new ArrayList<>();
             for (SSTableWriter writer : task.sstables)
                 readers.add(writer.finish(true));
-            task.transactionLogs.finish();
+            task.txn.finish();
             task.sstables.clear();
 
             try (Refs<SSTableReader> refs = Refs.ref(readers))
@@ -150,7 +150,7 @@ public class StreamReceiveTask extends StreamTask
         done = true;
         for (SSTableWriter writer : sstables)
             writer.abort();
-        transactionLogs.abort();
+        txn.abort();
         sstables.clear();
     }
 }

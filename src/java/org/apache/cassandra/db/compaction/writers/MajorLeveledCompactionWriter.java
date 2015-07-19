@@ -70,7 +70,7 @@ public class MajorLeveledCompactionWriter extends CompactionAwareWriter
                                                     cfs.partitioner,
                                                     new MetadataCollector(allSSTables, cfs.metadata.comparator, currentLevel, skipAncestors),
                                                     SerializationHeader.make(cfs.metadata, nonExpiredSSTables),
-                                                    txn.logs());
+                                                    txn);
         sstableWriter.switchWriter(writer);
     }
 
@@ -99,7 +99,7 @@ public class MajorLeveledCompactionWriter extends CompactionAwareWriter
                                                         cfs.partitioner,
                                                         new MetadataCollector(allSSTables, cfs.metadata.comparator, currentLevel, skipAncestors),
                                                         SerializationHeader.make(cfs.metadata, nonExpiredSSTables),
-                                                        txn.logs());
+                                                        txn);
             sstableWriter.switchWriter(writer);
             partitionsWritten = 0;
             sstablesWritten++;

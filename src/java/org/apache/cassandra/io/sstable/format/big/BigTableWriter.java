@@ -22,7 +22,7 @@ import java.util.Map;
 import java.util.Set;
 
 import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
+import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.io.sstable.*;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.SSTableWriter;
@@ -65,10 +65,10 @@ public class BigTableWriter extends SSTableWriter
                           IPartitioner partitioner, 
                           MetadataCollector metadataCollector, 
                           SerializationHeader header,
-                          TransactionLogs txnLogs)
+                          LifecycleTransaction txn)
     {
         super(descriptor, keyCount, repairedAt, metadata, partitioner, metadataCollector, header);
-        txnLogs.track(this); // must track before any files are created
+        txn.track(this); // must track before any files are created
 
         if (compression)
         {

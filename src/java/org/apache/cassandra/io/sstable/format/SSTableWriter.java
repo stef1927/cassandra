@@ -31,7 +31,7 @@ import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.RowIndexEntry;
 import org.apache.cassandra.db.SerializationHeader;
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
+import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.db.rows.UnfilteredRowIterator;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.io.sstable.Component;
@@ -93,21 +93,16 @@ public abstract class SSTableWriter extends SSTable implements Transactional
                                        IPartitioner partitioner,
                                        MetadataCollector metadataCollector,
                                        SerializationHeader header,
-                                       TransactionLogs txnLogs)
+                                       LifecycleTransaction txn)
     {
         Factory writerFactory = descriptor.getFormat().getWriterFactory();
-        return writerFactory.open(descriptor, keyCount, repairedAt, metadata, partitioner, metadataCollector, header, txnLogs);
+        return writerFactory.open(descriptor, keyCount, repairedAt, metadata, partitioner, metadataCollector, header, txn);
     }
 
-    public static SSTableWriter create(Descriptor descriptor, long keyCount, long repairedAt, SerializationHeader header, TransactionLogs txnLogs)
-    {
-        return create(descriptor, keyCount, repairedAt, 0, header, txnLogs);
-    }
-
-    public static SSTableWriter create(Descriptor descriptor, long keyCount, long repairedAt, int sstableLevel, SerializationHeader header, TransactionLogs txnLogs)
+    public static SSTableWriter create(Descriptor descriptor, long keyCount, long repairedAt, int sstableLevel, SerializationHeader header, LifecycleTransaction txn)
     {
         CFMetaData metadata = Schema.instance.getCFMetaData(descriptor);
-        return create(metadata, descriptor, keyCount, repairedAt, sstableLevel, DatabaseDescriptor.getPartitioner(), header, txnLogs);
+        return create(metadata, descriptor, keyCount, repairedAt, sstableLevel, DatabaseDescriptor.getPartitioner(), header, txn);
     }
 
     public static SSTableWriter create(CFMetaData metadata,
@@ -117,21 +112,21 @@ public abstract class SSTableWriter extends SSTable implements Transactional
                                        int sstableLevel,
                                        IPartitioner partitioner,
                                        SerializationHeader header,
-                                       TransactionLogs txnLogs)
+                                       LifecycleTransaction txn)
     {
         MetadataCollector collector = new MetadataCollector(metadata.comparator).sstableLevel(sstableLevel);
-        return create(descriptor, keyCount, repairedAt, metadata, partitioner, collector, header, txnLogs);
+        return create(descriptor, keyCount, repairedAt, metadata, partitioner, collector, header, txn);
     }
 
-    public static SSTableWriter create(String filename, long keyCount, long repairedAt, int sstableLevel, SerializationHeader header, TransactionLogs txnLogs)
+    public static SSTableWriter create(String filename, long keyCount, long repairedAt, int sstableLevel, SerializationHeader header,LifecycleTransaction txn)
     {
-        return create(Descriptor.fromFilename(filename), keyCount, repairedAt, sstableLevel, header, txnLogs);
+        return create(Descriptor.fromFilename(filename), keyCount, repairedAt, sstableLevel, header, txn);
     }
 
     @VisibleForTesting
-    public static SSTableWriter create(String filename, long keyCount, long repairedAt, SerializationHeader header, TransactionLogs txnLogs)
+    public static SSTableWriter create(String filename, long keyCount, long repairedAt, SerializationHeader header, LifecycleTransaction txn)
     {
-        return create(Descriptor.fromFilename(filename), keyCount, repairedAt, 0, header, txnLogs);
+        return create(Descriptor.fromFilename(filename), keyCount, repairedAt, 0, header, txn);
     }
 
     private static Set<Component> components(CFMetaData metadata)
@@ -294,7 +289,7 @@ public abstract class SSTableWriter extends SSTable implements Transactional
                                            CFMetaData metadata,
                                            IPartitioner partitioner,
                                            MetadataCollector metadataCollector,
-                                           SerializationHeader header, 
-                                           TransactionLogs txnLogs);
+                                           SerializationHeader header,
+                                           LifecycleTransaction txn);
     }
 }

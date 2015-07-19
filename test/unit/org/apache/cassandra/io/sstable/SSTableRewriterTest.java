@@ -246,8 +246,8 @@ public class SSTableRewriterTest extends SchemaLoader
         truncate(cfs);
 
         File dir = cfs.directories.getDirectoryForNewSSTables();
-        TransactionLogs txnLogs = new TransactionLogs(OperationType.WRITE, cfs.metadata);
-        try (SSTableWriter writer = getWriter(cfs, dir, txnLogs))
+        LifecycleTransaction txn = LifecycleTransaction.empty(OperationType.WRITE, cfs.metadata);
+        try (SSTableWriter writer = getWriter(cfs, dir, txn))
         {
             for (int i = 0; i < 10000; i++)
             {
@@ -270,7 +270,6 @@ public class SSTableRewriterTest extends SchemaLoader
             SSTableReader s2 = writer.setMaxDataAge(1000).openEarly();
             assertTrue(s.last.compareTo(s2.last) < 0);
             assertFileCounts(dir.list());
-            s.markObsolete(txnLogs.obsoleted(s));
             s.selfRef().release();
             s2.selfRef().release();
             // These checks don't work on Windows because the writer has the channel still
@@ -281,7 +280,7 @@ public class SSTableRewriterTest extends SchemaLoader
                 assertFileCounts(dir.list());
             }
             writer.abort();
-            txnLogs.abort();
+            txn.abort();
             TransactionLogs.waitForDeletions();
             int datafiles = assertFileCounts(dir.list());
             assertEquals(datafiles, 0);
@@ -1013,13 +1012,8 @@ public class SSTableRewriterTest extends SchemaLoader
 
     public static SSTableWriter getWriter(ColumnFamilyStore cfs, File directory, LifecycleTransaction txn)
     {
-        return getWriter(cfs, directory, txn.logs());
-    }
-
-    public static SSTableWriter getWriter(ColumnFamilyStore cfs, File directory, TransactionLogs txnLogs)
-    {
         String filename = cfs.getSSTablePath(directory);
-        return SSTableWriter.create(filename, 0, 0, new SerializationHeader(cfs.metadata, cfs.metadata.partitionColumns(), RowStats.NO_STATS), txnLogs);
+        return SSTableWriter.create(filename, 0, 0, new SerializationHeader(cfs.metadata, cfs.metadata.partitionColumns(), RowStats.NO_STATS), txn);
     }
 
     public static ByteBuffer random(int i, int size)

@@ -29,13 +29,10 @@ import org.apache.cassandra.UpdateBuilder;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.SerializationHeader;
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
 import org.apache.cassandra.db.marshal.*;
 import org.apache.cassandra.db.rows.RowStats;
-import org.apache.cassandra.io.sstable.format.SSTableWriter;
 import org.apache.cassandra.schema.KeyspaceParams;
 import org.apache.cassandra.utils.concurrent.AbstractTransactionalTest;
-import org.apache.cassandra.utils.concurrent.Transactional;
 
 public class BigTableWriterTest extends AbstractTransactionalTest
 {

@@ -21,7 +21,7 @@ package org.apache.cassandra.tools;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.Directories;
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
+import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.utils.OutputHandler;
 import org.apache.commons.cli.*;
 
@@ -67,7 +67,7 @@ public class StandaloneLister
 
             if (options.oplogs)
             {
-                for (File file : TransactionLogs.getLogFiles(metadata))
+                for (File file : LifecycleTransaction.getLogFiles(metadata))
                 {
                     handler.output(file.getCanonicalPath());
                 }

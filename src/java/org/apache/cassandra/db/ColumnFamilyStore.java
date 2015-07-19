@@ -36,7 +36,6 @@ import com.google.common.collect.*;
 import com.google.common.util.concurrent.*;
 
 import org.apache.cassandra.db.lifecycle.SSTableIntervalTree;
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
 import org.apache.cassandra.db.lifecycle.View;
 import org.apache.cassandra.db.lifecycle.Tracker;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
@@ -523,7 +522,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         clearEphemeralSnapshots(directories);
 
         logger.debug("Removing temporary or obsoleted files from unfinished operations for table", metadata.cfName);
-        TransactionLogs.removeUnfinishedLeftovers(metadata);
+        LifecycleTransaction.removeUnfinishedLeftovers(metadata);
 
         logger.debug("Further extra check for orphan sstable files for {}", metadata.cfName);
         for (Map.Entry<Descriptor,Set<Component>> sstableFiles : directories.sstableLister().list().entrySet())

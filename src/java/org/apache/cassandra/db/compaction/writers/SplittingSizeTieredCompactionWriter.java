@@ -92,7 +92,7 @@ public class SplittingSizeTieredCompactionWriter extends CompactionAwareWriter
                                                     cfs.partitioner,
                                                     new MetadataCollector(allSSTables, cfs.metadata.comparator, 0),
                                                     SerializationHeader.make(cfs.metadata, nonExpiredSSTables),
-                                                    txn.logs());
+                                                    txn);
 
         sstableWriter.switchWriter(writer);
         logger.debug("Ratios={}, expectedKeys = {}, totalSize = {}, currentPartitionsToWrite = {}, currentBytesToWrite = {}", ratios, estimatedTotalKeys, totalSize, currentPartitionsToWrite, currentBytesToWrite);
@@ -116,7 +116,7 @@ public class SplittingSizeTieredCompactionWriter extends CompactionAwareWriter
                                                         cfs.partitioner,
                                                         new MetadataCollector(allSSTables, cfs.metadata.comparator, 0),
                                                         SerializationHeader.make(cfs.metadata, nonExpiredSSTables),
-                                                        txn.logs());
+                                                        txn);
             sstableWriter.switchWriter(writer);
             logger.debug("Switching writer, currentPartitionsToWrite = {}", currentPartitionsToWrite);
         }

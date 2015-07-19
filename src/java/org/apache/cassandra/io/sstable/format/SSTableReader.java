@@ -26,7 +26,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Predicate;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Ordering;
 import com.google.common.primitives.Longs;
@@ -35,7 +34,6 @@ import com.google.common.util.concurrent.RateLimiter;
 import com.clearspring.analytics.stream.cardinality.CardinalityMergeException;
 import com.clearspring.analytics.stream.cardinality.HyperLogLogPlus;
 import com.clearspring.analytics.stream.cardinality.ICardinality;
-import com.codahale.metrics.Counter;
 import org.apache.cassandra.cache.CachingOptions;
 import org.apache.cassandra.cache.InstrumentingCache;
 import org.apache.cassandra.cache.KeyCacheKey;
@@ -2107,7 +2105,7 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
             // get a new reference to the shared descriptor-type tidy
             this.globalRef = GlobalTidy.get(reader);
             this.global = globalRef.get();
-            if (!isOffline && !Config.isClientMode())
+            if (!isOffline)
                 global.ensureReadMeter();
         }
 
@@ -2197,9 +2195,12 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
 
         void ensureReadMeter()
         {
+            if (readMeter != null)
+                return;
+
             // Don't track read rates for tables in the system keyspace and don't bother trying to load or persist
             // the read meter when in client mode.
-            if (readMeter != null || Schema.isSystemKeyspace(desc.ksname))
+            if (Schema.isSystemKeyspace(desc.ksname))
             {
                 readMeter = null;
                 readMeterSyncFuture = null;

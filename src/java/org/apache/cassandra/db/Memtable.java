@@ -28,9 +28,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Throwables;
 import org.apache.cassandra.db.compaction.OperationType;
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
+import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.io.sstable.SSTableTxnWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -423,9 +422,9 @@ public class Memtable implements Comparable<Memtable>
                                                PartitionColumns columns,
                                                RowStats stats)
         {
-            TransactionLogs transactionLogs = new TransactionLogs(OperationType.FLUSH, cfs.metadata);
+            LifecycleTransaction txn = LifecycleTransaction.empty(OperationType.FLUSH, cfs.metadata);
             MetadataCollector sstableMetadataCollector = new MetadataCollector(cfs.metadata.comparator).replayPosition(context);
-            return new SSTableTxnWriter(transactionLogs,
+            return new SSTableTxnWriter(txn,
                                         SSTableWriter.create(Descriptor.fromFilename(filename),
                                                              (long)partitions.size(),
                                                              ActiveRepairService.UNREPAIRED_SSTABLE,
@@ -433,7 +432,7 @@ public class Memtable implements Comparable<Memtable>
                                                              cfs.partitioner,
                                                              sstableMetadataCollector,
                                                              new SerializationHeader(cfs.metadata, columns, stats),
-                                                             transactionLogs));
+                                                             txn));
         }
     }
 

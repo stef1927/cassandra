@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import com.google.common.base.Function;
 import com.google.common.collect.*;
 
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
+import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.db.lifecycle.View;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.slf4j.Logger;
@@ -209,10 +209,10 @@ public class StreamSession implements IEndpointStateChangeSubscriber
     }
 
 
-    public TransactionLogs getOperationLog(UUID cfId)
+    public LifecycleTransaction getTransaction(UUID cfId)
     {
         assert receivers.containsKey(cfId);
-        return receivers.get(cfId).transactionLogs;
+        return receivers.get(cfId).txn;
     }
 
     /**

@@ -237,7 +237,7 @@ public class Tracker
             Set<SSTableReader> removed = Sets.difference(result.left.sstables, result.right.sstables);
             assert Iterables.all(removed, remove);
 
-            // review: we must ensure any method accepting/returning a Throwable never throws an exception, and does its best
+            // It is important that any method accepting/returning a Throwable never throws an exception, and does its best
             // to complete the instructions given to it
             List<TransactionLogs.Obsoletion> obsoletions = new ArrayList<>();
             accumulate = prepareForObsoletion(removed, txnLogs, obsoletions, accumulate);
