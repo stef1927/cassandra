@@ -1498,14 +1498,26 @@ public class DatabaseDescriptor
         return conf.disk_optimization_strategy;
     }
 
-    public static int getDiskOptimizationRecordSizePercentile()
+    @VisibleForTesting
+    public static void setDiskOptimizationStrategy(Config.DiskOptimizationStrategy strategy)
     {
-        return conf.disk_optimization_record_size_percentile;
+        conf.disk_optimization_strategy = strategy;
     }
 
-    public static double getDiskOptimizationCrossingChance()
+    public static double getDiskOptimizationEstimatePercentile()
     {
-        return conf.disk_optimization_crossing_chance;
+        return conf.disk_optimization_estimate_percentile;
+    }
+
+    public static double getDiskOptimizationPageCrossChance()
+    {
+        return conf.disk_optimization_page_cross_chance;
+    }
+
+    @VisibleForTesting
+    public static void setDiskOptimizationPageCrossChance(double chance)
+    {
+        conf.disk_optimization_page_cross_chance = chance;
     }
 
     public static long getTotalCommitlogSpaceInMB()

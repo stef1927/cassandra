@@ -25,7 +25,6 @@ import java.nio.MappedByteBuffer;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 
-import com.google.common.primitives.Ints;
 import com.google.common.util.concurrent.RateLimiter;
 
 import org.apache.cassandra.config.Config;
@@ -217,7 +216,7 @@ public abstract class SegmentedFile extends SharedCloseableImpl
 
         private int bufferSize(StatsMetadata stats)
         {
-            return bufferSize(stats.estimatedPartitionSize.percentile(DatabaseDescriptor.getDiskOptimizationRecordSizePercentile()));
+            return bufferSize(stats.estimatedPartitionSize.percentile(DatabaseDescriptor.getDiskOptimizationEstimatePercentile()));
         }
 
         private int bufferSize(Descriptor desc, IndexSummary indexSummary)
@@ -229,9 +228,9 @@ public abstract class SegmentedFile extends SharedCloseableImpl
         /**
             Return the buffer size for a given record size. For spinning disks always add one page.
             For solid state disks only add one page if the chance of crossing to the next page is more
-            than a predifined value, @see Config.disk_optimization_crossing_chance.
+            than a predifined value, @see Config.disk_optimization_page_cross_chance.
          */
-        private int bufferSize(long recordSize)
+        static int bufferSize(long recordSize)
         {
             Config.DiskOptimizationStrategy strategy = DatabaseDescriptor.getDiskOptimizationStrategy();
             if (strategy == Config.DiskOptimizationStrategy.ssd)
@@ -239,11 +238,12 @@ public abstract class SegmentedFile extends SharedCloseableImpl
                 // The crossing probability is calculated assuming a uniform distribution of record
                 // start position in a page, so it's the record size modulo the page size divided by
                 // the total page size.
-                double crossingProbability = (recordSize % 4096) / 4096;
-                return roundBufferSize(recordSize +
-                       crossingProbability > DatabaseDescriptor.getDiskOptimizationCrossingChance()
-                       ? 4096
-                       : 0);
+                double pageCrossProbability = (recordSize % 4096) / 4096.;
+                // if the page cross probability is equal or bigger than disk_optimization_page_cross_chance we add one page
+                if ((pageCrossProbability - DatabaseDescriptor.getDiskOptimizationPageCrossChance()) > -1e-16)
+                    recordSize += 4096;
+
+                return roundBufferSize(recordSize);
             }
             else if (strategy == Config.DiskOptimizationStrategy.spinning)
             {
