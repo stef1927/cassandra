@@ -230,9 +230,9 @@ public class Config
 
     public DiskOptimizationStrategy disk_optimization_strategy = DiskOptimizationStrategy.ssd;
 
-    public int disk_optimization_record_size_percentile = 95;
+    public double disk_optimization_estimate_percentile = 0.95;
 
-    public double disk_optimization_crossing_chance = 0.1;
+    public double disk_optimization_page_cross_chance = 0.1;
 
     public boolean inter_dc_tcp_nodelay = true;
 
