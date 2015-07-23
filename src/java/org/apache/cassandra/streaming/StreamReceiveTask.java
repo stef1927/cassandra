@@ -62,7 +62,9 @@ public class StreamReceiveTask extends StreamTask
         super(session, cfId);
         this.totalFiles = totalFiles;
         this.totalSize = totalSize;
-        this.txn = LifecycleTransaction.empty(OperationType.STREAM, Schema.instance.getCFMetaData(cfId));
+        // this is an "offline" transaction, as we currently manually expose the sstables once done;
+        // this should be revisited at a later date, so that LifecycleTransaction manages all sstable state changes
+        this.txn = LifecycleTransaction.offline(OperationType.STREAM, Schema.instance.getCFMetaData(cfId));
         this.sstables = new ArrayList<>(totalFiles);
     }
 

@@ -246,7 +246,7 @@ public class SSTableRewriterTest extends SchemaLoader
         truncate(cfs);
 
         File dir = cfs.directories.getDirectoryForNewSSTables();
-        LifecycleTransaction txn = LifecycleTransaction.empty(OperationType.WRITE, cfs.metadata);
+        LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.WRITE, cfs.metadata);
         try (SSTableWriter writer = getWriter(cfs, dir, txn))
         {
             for (int i = 0; i < 10000; i++)

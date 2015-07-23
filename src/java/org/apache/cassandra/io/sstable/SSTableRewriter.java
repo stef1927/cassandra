@@ -17,11 +17,9 @@
  */
 package org.apache.cassandra.io.sstable;
 
-import java.io.File;
 import java.util.*;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.util.concurrent.Runnables;
 
 import org.apache.cassandra.cache.InstrumentingCache;
 import org.apache.cassandra.cache.KeyCacheKey;
@@ -303,7 +301,7 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
                 // untrack() to just delete the file(s) without rewriting the log file. Should we end up reading the NEW file again, we would only delete
                 // existing files so I think this shouldn't cause issues, see TransactionFile.getTrackedFiles(String relativePath) in TransactionLogs
                 // sample failing unit test without this line: SSTableRewriterTest.testNumberOfFiles_finish_empty_new_writer()
-                transaction.untrack(writer);
+                transaction.untrackNew(writer);
                 writers.remove(writer);
             }
             writer = newWriter;

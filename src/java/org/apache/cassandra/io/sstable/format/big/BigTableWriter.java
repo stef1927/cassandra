@@ -68,7 +68,7 @@ public class BigTableWriter extends SSTableWriter
                           LifecycleTransaction txn)
     {
         super(descriptor, keyCount, repairedAt, metadata, partitioner, metadataCollector, header);
-        txn.track(this); // must track before any files are created
+        txn.trackNew(this); // must track before any files are created
 
         if (compression)
         {

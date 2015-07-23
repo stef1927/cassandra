@@ -422,7 +422,9 @@ public class Memtable implements Comparable<Memtable>
                                                PartitionColumns columns,
                                                RowStats stats)
         {
-            LifecycleTransaction txn = LifecycleTransaction.empty(OperationType.FLUSH, cfs.metadata);
+            // we operate "offline" here, as we expose the resulting reader consciously when done
+            // (although it may be we want to modify this behaviour in future, to encapsulate full flush behaviour in LifecycleTransaction)
+            LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.FLUSH, cfs.metadata);
             MetadataCollector sstableMetadataCollector = new MetadataCollector(cfs.metadata.comparator).replayPosition(context);
             return new SSTableTxnWriter(txn,
                                         SSTableWriter.create(Descriptor.fromFilename(filename),

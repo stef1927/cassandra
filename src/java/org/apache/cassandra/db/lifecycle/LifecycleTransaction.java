@@ -138,7 +138,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     /**
      * construct an empty Transaction with no existing readers
      */
-    public static LifecycleTransaction empty(OperationType operationType, CFMetaData metadata)
+    public static LifecycleTransaction offline(OperationType operationType, CFMetaData metadata)
     {
         Tracker dummy = new Tracker(null, false);
         return new LifecycleTransaction(dummy, new TransactionLogs(operationType, metadata, dummy), Collections.emptyList());
@@ -147,7 +147,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     /**
      * construct an empty Transaction with no existing readers
      */
-    public static LifecycleTransaction empty(OperationType operationType, File operationFolder)
+    public static LifecycleTransaction offline(OperationType operationType, File operationFolder)
     {
         Tracker dummy = new Tracker(null, false);
         return new LifecycleTransaction(dummy, new TransactionLogs(operationType, operationFolder, dummy), Collections.emptyList());
@@ -226,6 +226,10 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         // benedict: maybeFail(accumulate) breaks AbstractTransactionalTest.testThrowableReturn, so I changed
         // it as below, if you prefer to change the existing behavior of when we receive a != null accumulate
         // and the test then let me know and I'll take care
+        // stef: I think the better thing to do here is to modify the test, as we do have a special case here for LT
+        // it's not critical, since we *should* use the API correctly, but I think it is better to ensure we don't commit
+        // on-disk when we have already failed so badly somewhere higher up (both through API misuse and actual failure),
+        // as we have really no idea what the internal state will end up as.
         // maybeFail(accumulate);
 
         // transaction log commit failure means we must abort; safe commit is not possible
@@ -264,6 +268,9 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         // review: can always safely abort even if committed, as it will just report a failure to abort;
         // given changes to commit above, this would also be a legitimate error, so one we want to report
         // benedict: does this comment make sense given that if we throw in doCommit() then the status won't be COMMIITED?
+        // stef: that comment doesn't need to be retained, but still makes sense: the point is exactly that
+        // we should not be able to abort while it is committed, so if we do that is more useful information for debug
+        // that can (and will) be reported
         accumulate = transactionLogs.abort(accumulate);
         accumulate = markObsolete(obsoletions, accumulate);
 
@@ -418,14 +425,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     private List<SSTableReader> restoreUpdatedOriginals()
     {
         Iterable<SSTableReader> torestore = filterIn(originals, logged.update, logged.obsolete);
-        return ImmutableList.copyOf(transform(torestore,
-                                              new Function<SSTableReader, SSTableReader>()
-                                              {
-                                                  public SSTableReader apply(SSTableReader reader)
-                                                  {
-                                                      return current(reader).cloneWithNewStart(reader.first, null);
-                                                  }
-                                              }));
+        return ImmutableList.copyOf(transform(torestore, (reader) -> current(reader).cloneWithNewStart(reader.first, null)));
     }
 
     /**
@@ -532,14 +532,14 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         return getFirst(originals, null);
     }
 
-    public void track(SSTable table)
+    public void trackNew(SSTable table)
     {
-        transactionLogs.track(table);
+        transactionLogs.trackNew(table);
     }
 
-    public void untrack(SSTable table)
+    public void untrackNew(SSTable table)
     {
-        transactionLogs.untrack(table);
+        transactionLogs.untrackNew(table);
     }
 
     public static void removeUnfinishedLeftovers(CFMetaData metadata)

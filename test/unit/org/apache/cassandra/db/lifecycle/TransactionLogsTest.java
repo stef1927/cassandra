@@ -91,7 +91,7 @@ public class TransactionLogsTest extends AbstractTransactionalTest
                 assertNotNull(txnLogs.getId());
                 Assert.assertEquals(OperationType.COMPACTION, txnLogs.getType());
 
-                txnLogs.track(sstableNew);
+                txnLogs.trackNew(sstableNew);
                 tidier = txnLogs.obsoleted(sstableOld);
                 assertNotNull(tidier);
             }
@@ -207,8 +207,8 @@ public class TransactionLogsTest extends AbstractTransactionalTest
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.track(sstableNew);
-        transactionLogs.untrack(sstableNew);
+        transactionLogs.trackNew(sstableNew);
+        transactionLogs.untrackNew(sstableNew);
 
         transactionLogs.finish();
 
@@ -230,7 +230,7 @@ public class TransactionLogsTest extends AbstractTransactionalTest
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.track(sstableNew);
+        transactionLogs.trackNew(sstableNew);
 
         sstableOld1.setReplaced();
 
@@ -262,7 +262,7 @@ public class TransactionLogsTest extends AbstractTransactionalTest
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.track(sstable);
+        transactionLogs.trackNew(sstable);
         transactionLogs.finish();
 
         assertFiles(transactionLogs.getDataFolder(), new HashSet<>(sstable.getAllFilePaths()));
@@ -304,7 +304,7 @@ public class TransactionLogsTest extends AbstractTransactionalTest
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.track(sstable);
+        transactionLogs.trackNew(sstable);
         transactionLogs.abort();
 
         sstable.selfRef().release();
@@ -355,7 +355,7 @@ public class TransactionLogsTest extends AbstractTransactionalTest
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.track(sstableNew);
+        transactionLogs.trackNew(sstableNew);
         TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstableOld);
 
         File tmpNewLog = copyToTmpFile(transactionLogs.getData().newLog().file);
@@ -401,7 +401,7 @@ public class TransactionLogsTest extends AbstractTransactionalTest
         TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        transactionLogs.track(sstableNew);
+        transactionLogs.trackNew(sstableNew);
         TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstableOld);
 
         File tmpNewLog = copyToTmpFile(transactionLogs.getData().newLog().file);
@@ -456,7 +456,7 @@ public class TransactionLogsTest extends AbstractTransactionalTest
         File[] beforeSecondSSTable = dataFolder.listFiles(pathname -> !pathname.isDirectory());
 
         SSTableReader sstable2 = sstable(cfs, 1, 128);
-        transactionLogs.track(sstable2);
+        transactionLogs.trackNew(sstable2);
 
         Map<Descriptor, Set<Component>> sstables = directories.sstableLister().list();
         assertEquals(2, sstables.size());

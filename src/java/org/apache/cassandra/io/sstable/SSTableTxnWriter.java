@@ -83,7 +83,7 @@ public class SSTableTxnWriter extends Transactional.AbstractTransactional implem
 
     public static SSTableTxnWriter create(Descriptor descriptor, long keyCount, long repairedAt, int sstableLevel, SerializationHeader header)
     {
-        LifecycleTransaction txn = LifecycleTransaction.empty(OperationType.WRITE, descriptor.directory);
+        LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.WRITE, descriptor.directory);
         SSTableWriter writer = SSTableWriter.create(descriptor, keyCount, repairedAt, sstableLevel, header, txn);
         return new SSTableTxnWriter(txn, writer);
     }

@@ -401,7 +401,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     /**
      * Track a reader as new.
      **/
-    void track(SSTable table)
+    void trackNew(SSTable table)
     {
         if (!data.newLog().add(table))
             throw new IllegalStateException(table + " is already tracked as new");
@@ -412,7 +412,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
     /**
      * Stop tracking a reader as new.
      */
-    void untrack(SSTable table)
+    void untrackNew(SSTable table)
     {
         data.newLog().remove(table);
     }
@@ -648,7 +648,7 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
                 accumulate = merge(accumulate, t);
             }
 
-            selfRef.release();
+            accumulate = selfRef.ensureReleased(accumulate);
             return accumulate;
         }
         catch (Throwable t)
