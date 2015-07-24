@@ -40,7 +40,7 @@ public class LowerBoundUnfilteredRowIterator extends LazilyInitializedUnfiltered
         this.isForThrift = isForThrift;
         this.nowInSec = nowInSec;
 
-        setLowerBounds();
+        setGlobalLowerBound();
 
         assert globalLowerBound != null;
     }
@@ -79,7 +79,7 @@ public class LowerBoundUnfilteredRowIterator extends LazilyInitializedUnfiltered
     }
 
     @Override
-    public RowStats stats()
+    public EncodingStats stats()
     {
         return sstable.stats();
     }
@@ -93,11 +93,11 @@ public class LowerBoundUnfilteredRowIterator extends LazilyInitializedUnfiltered
         DeletionTime ret = super.partitionLevelDeletion();
         //in case we now have a row index, let's update the
         //lower bound to something more accurate
-        setLowerBounds();
+        setIndexLowerBound();
         return ret;
     }
 
-    private void setLowerBounds()
+    private void setIndexLowerBound()
     {
         if (rowIndexLowerBound == null)
         {
@@ -113,7 +113,10 @@ public class LowerBoundUnfilteredRowIterator extends LazilyInitializedUnfiltered
                 }
             }
         }
+    }
 
+    private void setGlobalLowerBound()
+    {
         if (globalLowerBound == null)
         {
             final StatsMetadata m = sstable.getSSTableMetadata();

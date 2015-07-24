@@ -217,20 +217,42 @@ public class SinglePartitionSliceCommand extends SinglePartitionReadCommand<Clus
 
             @SuppressWarnings("resource") //  Closed through the closing of the result of that method.
             final UnfilteredRowIterator merged = UnfilteredRowIterators.merge(iterators, nowInSec());
-            if (!merged.isEmpty())
-            {
-                DecoratedKey key = merged.partitionKey();
-                cfs.metric.samplers.get(TableMetrics.Sampler.READS).addSample(key.getKey(), key.hashCode(), 1);
-            }
-
             return new WrappingUnfilteredRowIterator(merged)
             {
+                private boolean hasData = false;
+
+                @Override
+                public boolean isEmpty()
+                {
+                    return merged.partitionLevelDeletion().isLive()
+                           && !hasData
+                           && merged.staticRow().isEmpty();
+                }
+
+                @Override
+                public boolean hasNext()
+                {
+                    if (!hasData)
+                    {
+                        hasData = super.hasNext();
+                        return hasData;
+                    }
+                    return super.hasNext();
+                }
+
                 public void close()
                 {
                     super.close();
 
                     cfs.metric.updateSSTableIterated(status.sstablesIterated);
-                    Tracing.trace("Accessed {} sstables", new Object[] {status.sstablesIterated });
+
+                    if (!isEmpty())
+                    {
+                        DecoratedKey key = merged.partitionKey();
+                        cfs.metric.samplers.get(TableMetrics.Sampler.READS).addSample(key.getKey(), key.hashCode(), 1);
+                    }
+
+                    Tracing.trace("Accessed {} sstables", new Object[]{ status.sstablesIterated });
                 }
             };
         }
