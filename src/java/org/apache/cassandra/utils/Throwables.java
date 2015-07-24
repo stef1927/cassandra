@@ -34,10 +34,4 @@ public class Throwables
         if (fail != null)
             com.google.common.base.Throwables.propagate(fail);
     }
-
-    public static void maybeFail(Throwable existingFail, Throwable newFail)
-    {
-        if (newFail != null)
-            com.google.common.base.Throwables.propagate(merge(existingFail, newFail));
-    }
 }

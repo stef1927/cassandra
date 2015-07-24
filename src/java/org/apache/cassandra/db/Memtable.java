@@ -423,7 +423,7 @@ public class Memtable implements Comparable<Memtable>
                                                RowStats stats)
         {
             // we operate "offline" here, as we expose the resulting reader consciously when done
-            // (although it may be we want to modify this behaviour in future, to encapsulate full flush behaviour in LifecycleTransaction)
+            // (although we may want to modify this behaviour in future, to encapsulate full flush behaviour in LifecycleTransaction)
             LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.FLUSH, cfs.metadata);
             MetadataCollector sstableMetadataCollector = new MetadataCollector(cfs.metadata.comparator).replayPosition(context);
             return new SSTableTxnWriter(txn,

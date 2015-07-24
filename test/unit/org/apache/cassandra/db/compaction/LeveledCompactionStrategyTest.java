@@ -191,10 +191,7 @@ public class LeveledCompactionStrategyTest
         while (strategy.getSSTableCountPerLevel()[0] > 1)
             Thread.sleep(100);
 
-        // benedict: testCompactionProgress() passes locally but fails on jenkins only for this branch
-        // I could not find any failures for trunk
-        // in AbstractCompationStrategy.replaceSSTables() first we remove and then we add them so I added one
-        // more sleep
+        // in AbstractCompationStrategy.replaceSSTables() first we remove and then we add sstables so wait a little bit longer
         Thread.sleep(10);
     }
 

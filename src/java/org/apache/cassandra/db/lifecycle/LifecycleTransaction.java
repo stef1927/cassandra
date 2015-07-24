@@ -223,17 +223,10 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         logger.debug("Committing update:{}, obsolete:{}", staged.update, staged.obsolete);
 
         // accumulate must be null if we have been used correctly, so fail immediately if it is not
-        // benedict: maybeFail(accumulate) breaks AbstractTransactionalTest.testThrowableReturn, so I changed
-        // it as below, if you prefer to change the existing behavior of when we receive a != null accumulate
-        // and the test then let me know and I'll take care
-        // stef: I think the better thing to do here is to modify the test, as we do have a special case here for LT
-        // it's not critical, since we *should* use the API correctly, but I think it is better to ensure we don't commit
-        // on-disk when we have already failed so badly somewhere higher up (both through API misuse and actual failure),
-        // as we have really no idea what the internal state will end up as.
-        // maybeFail(accumulate);
+        maybeFail(accumulate);
 
         // transaction log commit failure means we must abort; safe commit is not possible
-        maybeFail(accumulate, transactionLogs.commit(null));
+        maybeFail(transactionLogs.commit(null));
 
         // this is now the point of no return; we cannot safely rollback, so we ignore exceptions until we're done
         // we restore state by obsoleting our obsolete files, releasing our references to them, and updating our size
@@ -265,12 +258,8 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         logger.debug("Obsoleting {}", obsolete);
 
         accumulate = prepareForObsoletion(obsolete, transactionLogs, obsoletions = new ArrayList<>(), accumulate);
-        // review: can always safely abort even if committed, as it will just report a failure to abort;
-        // given changes to commit above, this would also be a legitimate error, so one we want to report
-        // benedict: does this comment make sense given that if we throw in doCommit() then the status won't be COMMIITED?
-        // stef: that comment doesn't need to be retained, but still makes sense: the point is exactly that
-        // we should not be able to abort while it is committed, so if we do that is more useful information for debug
-        // that can (and will) be reported
+        // it's safe to abort even if committed, see maybeFail in doCommit() above, in this case it will just report
+        // a failure to abort, which is useful information to have for debug
         accumulate = transactionLogs.abort(accumulate);
         accumulate = markObsolete(obsoletions, accumulate);
 

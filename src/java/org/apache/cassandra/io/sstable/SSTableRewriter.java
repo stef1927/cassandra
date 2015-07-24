@@ -287,20 +287,7 @@ public class SSTableRewriter extends Transactional.AbstractTransactional impleme
             if (writer != null)
             {
                 writer.abort();
-                // review: this untrack is probably unnecessary. during this run of Cassandra we won't ever reuse the
-                // descriptor id, and we are only going to delete the file anyway, and the file is empty,
-                // so there's no risk at all in just leaving it there until we're done.
-                // It makes me a little worried, rewriting the contents of the file, since we depend on it being complete
-                // during a restart. I'd prefer to stick to Append-only is behaviour I'd prefer to stick with since this rewrite isn't necessary
-                // for correctness.
-                // I would rather we just document well that cleanup must occur before we can flush/compact, and that
-                // descriptor id generation must not reuse previously issued ids until after this has happened
 
-                // benedict: it is necessary because when we commit there is nothing that will delete an aborted writer right now, note that abort()
-                // above will not delete data and index writers if they are under transaction management. We could change this but I opted to change
-                // untrack() to just delete the file(s) without rewriting the log file. Should we end up reading the NEW file again, we would only delete
-                // existing files so I think this shouldn't cause issues, see TransactionFile.getTrackedFiles(String relativePath) in TransactionLogs
-                // sample failing unit test without this line: SSTableRewriterTest.testNumberOfFiles_finish_empty_new_writer()
                 transaction.untrackNew(writer);
                 writers.remove(writer);
             }
