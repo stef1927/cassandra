@@ -84,7 +84,7 @@ public class CompressedRandomAccessReaderTest
                 writer.write("x".getBytes());
             writer.finish();
 
-            CompressedRandomAccessReader reader = CompressedRandomAccessReader.open(channel, new CompressionMetadata(filename + ".metadata", f.length(), ChecksumType.CRC32));
+            RandomAccessReader reader = new CompressedRandomAccessReader.Builder(channel, new CompressionMetadata(filename + ".metadata", f.length(), ChecksumType.CRC32)).build();
             String res = reader.readLine();
             assertEquals(res, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
             assertEquals(40, res.length());
@@ -129,8 +129,8 @@ public class CompressedRandomAccessReaderTest
 
             assert f.exists();
             RandomAccessReader reader = compressed
-                                      ? CompressedRandomAccessReader.open(channel, new CompressionMetadata(filename + ".metadata", f.length(), ChecksumType.CRC32))
-                                      : RandomAccessReader.open(f);
+                                      ? new CompressedRandomAccessReader.Builder(channel, new CompressionMetadata(filename + ".metadata", f.length(), ChecksumType.CRC32)).build()
+                                      : new RandomAccessReader.Builder(channel).build();
             String expected = "The quick brown fox jumps over the lazy dog";
             assertEquals(expected.length(), reader.length());
             byte[] b = new byte[expected.length()];
@@ -174,7 +174,7 @@ public class CompressedRandomAccessReaderTest
         CompressionMetadata meta = new CompressionMetadata(metadata.getPath(), file.length(), ChecksumType.CRC32);
         CompressionMetadata.Chunk chunk = meta.chunkFor(0);
 
-        RandomAccessReader reader = CompressedRandomAccessReader.open(channel, meta);
+        RandomAccessReader reader = new CompressedRandomAccessReader.Builder(channel, meta).build();
         // read and verify compressed data
         assertEquals(CONTENT, reader.readLine());
 
@@ -199,7 +199,7 @@ public class CompressedRandomAccessReaderTest
                 checksumModifier.write(random.nextInt());
                 SyncUtil.sync(checksumModifier); // making sure that change was synced with disk
 
-                final RandomAccessReader r = CompressedRandomAccessReader.open(channel, meta);
+                final RandomAccessReader r = new CompressedRandomAccessReader.Builder(channel, meta).build();
 
                 Throwable exception = null;
                 try
@@ -220,7 +220,7 @@ public class CompressedRandomAccessReaderTest
             // lets write original checksum and check if we can read data
             updateChecksum(checksumModifier, chunk.length, checksum);
 
-            reader = CompressedRandomAccessReader.open(channel, meta);
+            reader = new CompressedRandomAccessReader.Builder(channel, meta).build();
             // read and verify compressed data
             assertEquals(CONTENT, reader.readLine());
             // close reader

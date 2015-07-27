@@ -19,6 +19,11 @@ package org.apache.cassandra.io.util;
 
 import java.io.*;
 import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
+import java.util.Map;
+import java.util.TreeMap;
+
+import com.google.common.util.concurrent.RateLimiter;
 
 import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.io.compress.BufferType;
@@ -34,29 +39,45 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     // ensure that the channel stays open and that it is closed afterwards
     protected final ChannelProxy channel;
 
-    // buffer which will cache file blocks
-    protected ByteBuffer buffer;
+    // optional mmapped buffers for the channel, the key is the channel position
+    protected final TreeMap<Long, MappedByteBuffer> segments;
 
-    // `bufferOffset` is the offset of the beginning of the buffer
-    // `markedPointer` folds the offset of the last file mark
-    protected long bufferOffset, markedPointer;
+    // an optional rate limiter to limit rebuffering rate, may be null
+    protected final RateLimiter limiter;
 
     // this can be overridden at construction to a value shorter than the true length of the file;
     // if so, it acts as an imposed limit on reads, rather than a convenience property
+    // we can cache file length in read-only mode
     private final long fileLength;
 
-    protected RandomAccessReader(ChannelProxy channel, int bufferSize, long overrideLength, BufferType bufferType)
+    // buffer which will cache file blocks or mirror mmapped segments
+    protected ByteBuffer buffer;
+
+    // offset from the beginning of the file
+    protected long bufferOffset;
+
+    // offset of the last file mark
+    protected long markedPointer;
+
+    protected RandomAccessReader(Builder builder)
     {
-        this.channel = channel;
+        this.channel = builder.channel;
+        this.segments = builder.segments;
+        this.limiter = builder.limiter;
+        this.fileLength = builder.overrideLength <= 0 ? channel.size() : builder.overrideLength;
 
-        if (bufferSize <= 0)
-            throw new IllegalArgumentException("bufferSize must be positive");
+        if (segments.isEmpty())
+        {
+            if (builder.bufferSize <= 0)
+                throw new IllegalArgumentException("bufferSize must be positive");
 
-        // we can cache file length in read-only mode
-        fileLength = overrideLength <= 0 ? channel.size() : overrideLength;
-
-        buffer = allocateBuffer(getBufferSize(bufferSize), bufferType);
-        buffer.limit(0);
+            buffer = allocateBuffer(getBufferSize(builder.bufferSize), builder.bufferType);
+            buffer.limit(0);
+        }
+        else
+        {
+            buffer = segments.get(0);
+        }
     }
 
     /** The buffer size is typically already page aligned but if that is not the case
@@ -76,48 +97,6 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         return BufferPool.get(size, bufferType);
     }
 
-    // A wrapper of the RandomAccessReader that closes the channel when done.
-    // For performance reasons RAR does not increase the reference count of
-    // a channel but assumes the owner will keep it open and close it,
-    // see CASSANDRA-9379, this thin class is just for those cases where we do
-    // not have a shared channel.
-    private static class RandomAccessReaderWithChannel extends RandomAccessReader
-    {
-        @SuppressWarnings("resource")
-        RandomAccessReaderWithChannel(File file)
-        {
-            super(new ChannelProxy(file), DEFAULT_BUFFER_SIZE, -1L, BufferType.OFF_HEAP);
-        }
-
-        @Override
-        public void close()
-        {
-            try
-            {
-                super.close();
-            }
-            finally
-            {
-                channel.close();
-            }
-        }
-    }
-
-    public static RandomAccessReader open(File file)
-    {
-        return new RandomAccessReaderWithChannel(file);
-    }
-
-    public static RandomAccessReader open(ChannelProxy channel)
-    {
-        return open(channel, DEFAULT_BUFFER_SIZE, -1L);
-    }
-
-    public static RandomAccessReader open(ChannelProxy channel, int bufferSize, long overrideSize)
-    {
-        return new RandomAccessReader(channel, bufferSize, overrideSize, BufferType.OFF_HEAP);
-    }
-
     public ChannelProxy getChannel()
     {
         return channel;
@@ -127,6 +106,21 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
      * Read data from file starting from current currentOffset to populate buffer.
      */
     protected void reBuffer()
+    {
+        if (limiter != null)
+            limiter.acquire(buffer.capacity());
+
+        if (!segments.isEmpty())
+        {
+            reBufferMmap();
+        }
+        else
+        {
+            reBufferStandard();
+        }
+    }
+
+    protected void reBufferStandard()
     {
         bufferOffset += buffer.position();
         buffer.clear();
@@ -152,6 +146,24 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         if (limit > fileLength)
             buffer.position((int)(fileLength - bufferOffset));
         buffer.flip();
+    }
+
+    protected void reBufferMmap()
+    {
+        bufferOffset += buffer.position();
+        assert bufferOffset < fileLength;
+
+        Map.Entry<Long, MappedByteBuffer> entry = segments.floorEntry(bufferOffset);
+        if (entry != null)
+        {
+            bufferOffset = entry.getKey();
+            buffer = entry.getValue().duplicate();
+            buffer.flip();
+        }
+        else
+        {
+            throw new IllegalStateException("Segment not found for position " + bufferOffset);
+        }
     }
 
     @Override
@@ -229,7 +241,6 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
 	    //make idempotent
         if (buffer == null)
             return;
-
 
         bufferOffset += buffer.position();
         BufferPool.put(buffer);
@@ -374,5 +385,102 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     public long getPositionLimit()
     {
         return length();
+    }
+
+    public static class Builder
+    {
+        protected final ChannelProxy channel;
+        protected long overrideLength;
+        protected int bufferSize;
+        protected BufferType bufferType;
+        protected TreeMap<Long, MappedByteBuffer> segments;
+        protected RateLimiter limiter;
+
+        public Builder(ChannelProxy channel)
+        {
+            this.channel = channel;
+            this.overrideLength = -1L;
+            this.bufferSize = DEFAULT_BUFFER_SIZE;
+            this.bufferType = BufferType.OFF_HEAP;
+            this.segments = new TreeMap<>();
+            this.limiter = null;
+        }
+
+        public Builder overrideLength(long overrideLength)
+        {
+            this.overrideLength = overrideLength;
+            return this;
+        }
+
+        public Builder bufferSize(int bufferSize)
+        {
+            this.bufferSize = bufferSize;
+            return this;
+        }
+
+        public Builder bufferType(BufferType bufferType)
+        {
+            this.bufferType = bufferType;
+            return this;
+        }
+
+        public Builder segments(Map<Long, MappedByteBuffer> segments)
+        {
+            this.segments.putAll(segments);
+            return this;
+        }
+
+        public Builder limiter(RateLimiter limiter)
+        {
+            this.limiter = limiter;
+            return this;
+        }
+
+        public RandomAccessReader build()
+        {
+            return new RandomAccessReader(this);
+        }
+
+        public RandomAccessReader buildWithChannel()
+        {
+            return new RandomAccessReaderWithChannel(this);
+        }
+    }
+
+    // A wrapper of the RandomAccessReader that closes the channel when done.
+    // For performance reasons RAR does not increase the reference count of
+    // a channel but assumes the owner will keep it open and close it,
+    // see CASSANDRA-9379, this thin class is just for those cases where we do
+    // not have a shared channel.
+    private static class RandomAccessReaderWithChannel extends RandomAccessReader
+    {
+        RandomAccessReaderWithChannel(Builder builder)
+        {
+            super(builder);
+        }
+
+        @Override
+        public void close()
+        {
+            try
+            {
+                super.close();
+            }
+            finally
+            {
+                channel.close();
+            }
+        }
+    }
+
+    @SuppressWarnings("resource")
+    public static RandomAccessReader open(File file)
+    {
+        return new Builder(new ChannelProxy(file)).buildWithChannel();
+    }
+
+    public static RandomAccessReader open(ChannelProxy channel)
+    {
+        return new Builder(channel).build();
     }
 }
