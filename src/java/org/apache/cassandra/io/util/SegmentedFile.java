@@ -19,7 +19,6 @@ package org.apache.cassandra.io.util;
 
 import java.io.DataInput;
 import java.io.DataOutput;
-import java.io.File;
 import java.io.IOException;
 import java.nio.MappedByteBuffer;
 import java.util.Iterator;
@@ -116,13 +115,19 @@ public abstract class SegmentedFile extends SharedCloseableImpl
 
     public RandomAccessReader createReader()
     {
-        return RandomAccessReader.open(channel, bufferSize, length);
+        return new RandomAccessReader.Builder(channel)
+               .overrideLength(length)
+               .bufferSize(bufferSize)
+               .build();
     }
 
-    public RandomAccessReader createThrottledReader(RateLimiter limiter)
+    public RandomAccessReader createReader(RateLimiter limiter)
     {
-        assert limiter != null;
-        return ThrottledReader.open(channel, bufferSize, length, limiter);
+        return new RandomAccessReader.Builder(channel)
+               .overrideLength(length)
+               .bufferSize(bufferSize)
+               .limiter(limiter)
+               .build();
     }
 
     public FileDataInput getSegment(long position)

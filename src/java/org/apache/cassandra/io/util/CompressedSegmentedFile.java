@@ -27,7 +27,6 @@ import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.io.compress.CompressedRandomAccessReader;
 import org.apache.cassandra.io.compress.CompressedSequentialWriter;
-import org.apache.cassandra.io.compress.CompressedThrottledReader;
 import org.apache.cassandra.io.compress.CompressionMetadata;
 import org.apache.cassandra.utils.concurrent.Ref;
 
@@ -166,12 +165,12 @@ public class CompressedSegmentedFile extends SegmentedFile implements ICompresse
 
     public RandomAccessReader createReader()
     {
-        return CompressedRandomAccessReader.open(this);
+        return new CompressedRandomAccessReader.Builder(this).build();
     }
 
-    public RandomAccessReader createThrottledReader(RateLimiter limiter)
+    public RandomAccessReader createReader(RateLimiter limiter)
     {
-        return CompressedThrottledReader.open(this, limiter);
+        return new CompressedRandomAccessReader.Builder(this).limiter(limiter).build();
     }
 
     public CompressionMetadata getMetadata()
