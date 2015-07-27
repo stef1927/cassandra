@@ -202,7 +202,7 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
 
             reducer.onKeyChange();
             assert !heap[0].equalParent;
-            consume(0);
+            heap[0].consume(reducer);
             final int size = this.size;
             final int sortedSectionSize = Math.min(size, SORTED_SECTION_SIZE);
             int i;
@@ -211,7 +211,7 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
                 {
                     if (!heap[i].equalParent)
                         break consume;
-                    consume(i);
+                    heap[i].consume(reducer);
                 }
                 i = Math.max(i, consumeHeap(i) + 1);
             }
@@ -229,27 +229,9 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
             if (idx >= size || !heap[idx].equalParent)
                 return -1;
 
-            consume(idx);
+            heap[idx].consume(reducer);
             int nextIdx = (idx << 1) - (SORTED_SECTION_SIZE - 1);
             return Math.max(idx, Math.max(consumeHeap(nextIdx), consumeHeap(nextIdx + 1)));
-        }
-
-        private void consume(int idx)
-        {
-            In val = heap[idx].consume();
-            if (reducer.ignore(idx, val))
-            {
-                In next = heap[idx].peek();
-                if (next != null && heap[idx].compareItems(val, next) == 0)
-                {
-                    heap[idx].advance();
-                    reducer.reduce(heap[idx].idx, heap[idx].consume());
-                }
-            }
-            else
-            {
-                reducer.reduce(heap[idx].idx, val);
-            }
         }
 
         /**
@@ -371,7 +353,7 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
         private final Comparator<? super In> comp;
         private final int idx;
         private In item;
-        private In next;
+        private In lowerBound;
         boolean equalParent;
 
         public Candidate(int idx, Iterator<? extends In> iter, Comparator<? super In> comp)
@@ -379,16 +361,15 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
             this.iter = iter;
             this.comp = comp;
             this.idx = idx;
-            this.next = iter instanceof  LowerBound ? ((LowerBound<In>)iter).lowerBound() : null;
+            this.lowerBound = iter instanceof  LowerBound ? ((LowerBound<In>)iter).lowerBound() : null;
         }
 
         /** @return this if our iterator had an item, and it is now available, otherwise null */
         protected Candidate<In> advance()
         {
-            if (next != null)
+            if (lowerBound != null)
             {
-                item = next;
-                next = null;
+                item = lowerBound;
                 return this;
             }
 
@@ -401,33 +382,34 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
 
         public int compareTo(Candidate<In> that)
         {
-            return compareItems(this.item, that.item);
+            assert this.item != null && that.item != null;
+            int ret = comp.compare(this.item, that.item);
+            if (ret == 0 && (this.isLowerBound() ^ that.isLowerBound()))
+            {   // if the items are equal and one of them is a lower bound (but not the other one)
+                // then ensure the lower bound is less than the real item so we can safely
+                // skip lower bounds when consuming
+                return this.isLowerBound() ? -1 : 1;
+            }
+            return ret;
         }
 
-        public int compareItems(In item1, In item2)
+        private boolean isLowerBound()
         {
-            assert item1 != null && item2 != null;
-            return comp.compare(item1, item2);
+            return item == lowerBound;
         }
 
-        public In consume()
+        public void consume(Reducer reducer)
         {
-            In temp = item;
-            item = null;
-            assert temp != null;
-            return temp;
-        }
-
-        public In peek()
-        {
-            if (next != null)
-                return next;
-
-            if (!iter.hasNext())
-                return null;
-
-            next = iter.next();
-            return next;
+            if (isLowerBound())
+            {
+                item = null;
+                lowerBound = null;
+            }
+            else
+            {
+                reducer.reduce(idx, item);
+                item = null;
+            }
         }
 
         public boolean needsAdvance()
@@ -446,12 +428,6 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
         {
             return false;
         }
-
-        /**
-         * @return true if the current value should be ignored and a new one
-         * should be fetched from the same iterator
-         */
-        public boolean ignore(int idx, In current) { return false; }
 
         /**
          * combine this object with the previous ones.

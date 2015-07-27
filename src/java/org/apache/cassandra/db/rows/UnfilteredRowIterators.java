@@ -526,14 +526,6 @@ public abstract class UnfilteredRowIterators
                 return listener == null;
             }
 
-            @Override
-            public boolean ignore(int idx, Unfiltered current)
-            {
-                return current instanceof Row
-                       ? ((Row)current).isEmpty():
-                       false;
-            }
-
             public void reduce(int idx, Unfiltered current)
             {
                 nextKind = current.kind();
