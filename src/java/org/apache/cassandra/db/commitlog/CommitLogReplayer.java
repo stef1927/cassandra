@@ -49,10 +49,9 @@ import org.apache.cassandra.db.lifecycle.SSTableSet;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.schema.CompressionParams;
 import org.apache.cassandra.io.compress.ICompressor;
-import org.apache.cassandra.io.util.ByteBufferDataInput;
+import org.apache.cassandra.io.util.ChannelProxy;
 import org.apache.cassandra.io.util.DataInputBuffer;
 import org.apache.cassandra.io.util.FileDataInput;
-import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.io.util.NIODataInputStream;
 import org.apache.cassandra.io.util.RandomAccessReader;
 import org.apache.cassandra.utils.FBUtilities;
@@ -290,8 +289,8 @@ public class CommitLogReplayer
     public void recover(File file, boolean tolerateTruncation) throws IOException
     {
         CommitLogDescriptor desc = CommitLogDescriptor.fromFileName(file.getName());
-        RandomAccessReader reader = RandomAccessReader.open(new File(file.getAbsolutePath()));
-        try
+        try(ChannelProxy channel = new ChannelProxy(file);
+            RandomAccessReader reader = RandomAccessReader.open(channel))
         {
             if (desc.version < CommitLogDescriptor.VERSION_21)
             {
@@ -388,7 +387,7 @@ public class CommitLogReplayer
                         if (uncompressedLength > uncompressedBuffer.length)
                             uncompressedBuffer = new byte[(int) (1.2 * uncompressedLength)];
                         compressedLength = compressor.uncompress(buffer, 0, compressedLength, uncompressedBuffer, 0);
-                        sectionReader = new ByteBufferDataInput(ByteBuffer.wrap(uncompressedBuffer), reader.getPath(), replayPos, 0);
+                        sectionReader = RandomAccessReader.open(ByteBuffer.wrap(uncompressedBuffer), reader.getPath(), replayPos);
                         errorContext = "compressed section at " + start + " in " + errorContext;
                     }
                     catch (IOException | ArrayIndexOutOfBoundsException e)
@@ -403,10 +402,6 @@ public class CommitLogReplayer
                 if (!replaySyncSection(sectionReader, replayEnd, desc, errorContext, tolerateErrorsInSection))
                     break;
             }
-        }
-        finally
-        {
-            FileUtils.closeQuietly(reader);
             logger.info("Finished reading {}", file);
         }
     }

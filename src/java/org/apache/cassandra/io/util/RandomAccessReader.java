@@ -23,6 +23,8 @@ import java.nio.MappedByteBuffer;
 import java.util.Map;
 import java.util.TreeMap;
 
+import com.google.common.collect.Maps;
+import com.google.common.primitives.Ints;
 import com.google.common.util.concurrent.RateLimiter;
 
 import org.apache.cassandra.io.FSReadError;
@@ -37,21 +39,31 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     // the IO channel to the file, we do not own a reference to this due to
     // performance reasons (CASSANDRA-9379) so it's up to the owner of the RAR to
     // ensure that the channel stays open and that it is closed afterwards
-    protected final ChannelProxy channel;
+    protected final Channel channel;
 
     // optional mmapped buffers for the channel, the key is the channel position
-    protected final TreeMap<Long, MappedByteBuffer> segments;
+    protected final TreeMap<Long, ByteBuffer> segments;
 
     // an optional rate limiter to limit rebuffering rate, may be null
     protected final RateLimiter limiter;
 
-    // this can be overridden at construction to a value shorter than the true length of the file;
-    // if so, it acts as an imposed limit on reads, rather than a convenience property
-    // we can cache file length in read-only mode
+    // the file length, this can be overridden at construction to a value shorter
+    // than the true length of the file; if so, it acts as an imposed limit on reads,
+    // required when opening sstables early not to read past the mark
     private final long fileLength;
+
+    // the buffer size for buffered readers
+    private final int bufferSize;
+
+    // the buffer type for buffered readers
+    private final BufferType bufferType;
 
     // buffer which will cache file blocks or mirror mmapped segments
     protected ByteBuffer buffer;
+
+    // when this is true a call to releaseBuffer will release the buffer
+    // else we assume the buffer is a mmapped segment
+    private boolean hasAllocatedBuffer;
 
     // offset from the beginning of the file
     protected long bufferOffset;
@@ -65,19 +77,20 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         this.segments = builder.segments;
         this.limiter = builder.limiter;
         this.fileLength = builder.overrideLength <= 0 ? channel.size() : builder.overrideLength;
+        this.bufferSize = getBufferSize(builder.bufferSize);
+        this.bufferType = builder.bufferType;
+
+        if (builder.bufferSize <= 0)
+            throw new IllegalArgumentException("bufferSize must be positive");
 
         if (segments.isEmpty())
-        {
-            if (builder.bufferSize <= 0)
-                throw new IllegalArgumentException("bufferSize must be positive");
-
-            buffer = allocateBuffer(getBufferSize(builder.bufferSize), builder.bufferType);
-            buffer.limit(0);
-        }
+            buffer = allocateBuffer(getBufferSize(builder.bufferSize));
         else
-        {
-            buffer = segments.get(0);
-        }
+            buffer = segments.firstEntry().getValue().slice();
+
+        // this will ensure a rebuffer so we read at the correct position after seeking
+        // especially important if the first segment is missing
+        buffer.limit(0);
     }
 
     /** The buffer size is typically already page aligned but if that is not the case
@@ -92,14 +105,21 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         return size;
     }
 
-    protected ByteBuffer allocateBuffer(int size, BufferType bufferType)
+    protected ByteBuffer allocateBuffer(int size)
     {
+        hasAllocatedBuffer = true;
         return BufferPool.get(size, bufferType);
     }
 
-    public ChannelProxy getChannel()
+    protected void releaseBuffer()
     {
-        return channel;
+        if (hasAllocatedBuffer)
+        {
+            BufferPool.put(buffer);
+            hasAllocatedBuffer = false;
+        }
+
+        buffer = null;
     }
 
     /**
@@ -123,9 +143,9 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     protected void reBufferStandard()
     {
         bufferOffset += buffer.position();
-        buffer.clear();
         assert bufferOffset < fileLength;
 
+        buffer.clear();
         long position = bufferOffset;
         long limit = bufferOffset;
 
@@ -150,20 +170,28 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
 
     protected void reBufferMmap()
     {
-        bufferOffset += buffer.position();
-        assert bufferOffset < fileLength;
+        long position = bufferOffset + buffer.position();
+        assert position < fileLength;
 
-        Map.Entry<Long, MappedByteBuffer> entry = segments.floorEntry(bufferOffset);
-        if (entry != null)
+        releaseBuffer();
+
+        Map.Entry<Long, ByteBuffer> entry = segments.floorEntry(position);
+        if (entry == null || (position >= (entry.getKey() + entry.getValue().capacity())))
         {
-            bufferOffset = entry.getKey();
-            buffer = entry.getValue().duplicate();
-            buffer.flip();
+            Map.Entry<Long, ByteBuffer> nextEntry = segments.ceilingEntry(position);
+            if (nextEntry != null)
+                buffer = allocateBuffer(Math.min(bufferSize, Ints.checkedCast(nextEntry.getKey() - position)));
+            else
+                buffer = allocateBuffer(bufferSize);
+
+            bufferOffset = position;
+            reBufferStandard();
+            return;
         }
-        else
-        {
-            throw new IllegalStateException("Segment not found for position " + bufferOffset);
-        }
+
+        bufferOffset = entry.getKey();
+        buffer = entry.getValue().slice();
+        buffer.position(Ints.checkedCast(position - bufferOffset));
     }
 
     @Override
@@ -180,14 +208,6 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     public String getPath()
     {
         return channel.filePath();
-    }
-
-    public int getTotalBufferSize()
-    {
-        //This may NPE so we make a ref
-        //https://issues.apache.org/jira/browse/CASSANDRA-7756
-        ByteBuffer ref = buffer;
-        return ref != null ? ref.capacity() : 0;
     }
 
     public void reset()
@@ -243,8 +263,7 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
             return;
 
         bufferOffset += buffer.position();
-        BufferPool.put(buffer);
-        buffer = null;
+        releaseBuffer();
     }
 
     @Override
@@ -387,16 +406,71 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         return length();
     }
 
+    public interface Channel
+    {
+        String filePath();
+
+        int read(ByteBuffer buffer, long position);
+
+        long size();
+
+        void close();
+    }
+
+    public static class EmptyChannel implements Channel
+    {
+        private final String filePath;
+        private final int size;
+
+        public EmptyChannel(String filePath, int size)
+        {
+            this.filePath = filePath;
+            this.size = size;
+        }
+
+        public String filePath()
+        {
+            return filePath;
+        }
+
+        public int read(ByteBuffer buffer, long position)
+        {
+            throw new IllegalStateException("Unsupported operation at position " + position);
+        }
+
+        public long size()
+        {
+            return size;
+        }
+
+        public void close()
+        {
+
+        }
+    }
+
     public static class Builder
     {
-        protected final ChannelProxy channel;
+        // The NIO file channel or an empty channel
+        protected final Channel channel;
+
+        // We override the file length when we open sstables early, so that we do not
+        // read past the early mark
         protected long overrideLength;
+
+        // The size of the buffer for buffered readers
         protected int bufferSize;
+
+        // The type of the buffer for buffered readers
         protected BufferType bufferType;
-        protected TreeMap<Long, MappedByteBuffer> segments;
+
+        // The mmap segments for mmap readers
+        protected TreeMap<Long, ByteBuffer> segments;
+
+        // An optional limiter to limit the rebuffering rate, may be null
         protected RateLimiter limiter;
 
-        public Builder(ChannelProxy channel)
+        public Builder(Channel channel)
         {
             this.channel = channel;
             this.overrideLength = -1L;
@@ -424,7 +498,7 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
             return this;
         }
 
-        public Builder segments(Map<Long, MappedByteBuffer> segments)
+        public Builder segments(Map<Long, ByteBuffer> segments)
         {
             this.segments.putAll(segments);
             return this;
@@ -482,5 +556,23 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     public static RandomAccessReader open(ChannelProxy channel)
     {
         return new Builder(channel).build();
+    }
+
+    /**
+     * Open a RandomAccessReader for a single buffer at a specific offset.
+     * Fake a file via an empty channel and map the only buffer to a
+     * segment at the specified offset. Then seek to this offset.
+     * Any reads before the offset or after offset + buffer.capacity() will
+     * result in an exception throw by the EmptyChannel read() method.
+     */
+    public static RandomAccessReader open(ByteBuffer buffer, String filePath, long offset)
+    {
+        TreeMap<Long, ByteBuffer> segments = new TreeMap<>();
+        segments.put(offset, buffer);
+        RandomAccessReader ret = new Builder(new EmptyChannel(filePath, Ints.checkedCast(offset + buffer.capacity())))
+                                 .segments(segments)
+                                 .build();
+        ret.seek(offset);
+        return ret;
     }
 }

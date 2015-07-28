@@ -49,39 +49,6 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     // raw checksum bytes
     private ByteBuffer checksumBytes;
 
-    public final static class Builder extends RandomAccessReader.Builder
-    {
-        private final CompressionMetadata metadata;
-
-        public Builder(ICompressedFile file)
-        {
-            super(file.channel());
-            this.metadata = applyMetadata(file.getMetadata());
-            this.segments.putAll(file.chunkSegments());
-        }
-
-        public Builder(ChannelProxy channel, CompressionMetadata metadata)
-        {
-            super(channel);
-            this.metadata = applyMetadata(metadata);
-        }
-
-        private CompressionMetadata applyMetadata(CompressionMetadata metadata)
-        {
-            this.overrideLength = metadata.compressedFileLength;
-            this.bufferSize = metadata.chunkLength();
-            this.bufferType = metadata.compressor().preferredBufferType();
-
-            return metadata;
-        }
-
-        @Override
-        public RandomAccessReader build()
-        {
-            return new CompressedRandomAccessReader(this);
-        }
-    }
-
     protected CompressedRandomAccessReader(Builder builder)
     {
         super(builder);
@@ -90,8 +57,13 @@ public class CompressedRandomAccessReader extends RandomAccessReader
 
         if (segments.isEmpty())
         {
-            compressed = allocateBuffer(metadata.compressor().initialCompressedBufferLength(metadata.chunkLength()), metadata.compressor().preferredBufferType());
+            compressed = allocateBuffer(metadata.compressor().initialCompressedBufferLength(metadata.chunkLength()));
             checksumBytes = ByteBuffer.wrap(new byte[4]);
+        }
+        else
+        {
+            buffer = allocateBuffer(getBufferSize(metadata.chunkLength()));
+            buffer.limit(0);
         }
     }
 
@@ -124,7 +96,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
             CompressionMetadata.Chunk chunk = metadata.chunkFor(position);
 
             if (compressed.capacity() < chunk.length)
-                compressed = allocateBuffer(chunk.length, metadata.compressor().preferredBufferType());
+                compressed = allocateBuffer(chunk.length);
             else
                 compressed.clear();
             compressed.limit(chunk.length);
@@ -187,7 +159,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
 
             CompressionMetadata.Chunk chunk = metadata.chunkFor(position);
 
-            Map.Entry<Long, MappedByteBuffer> entry = segments.floorEntry(chunk.offset);
+            Map.Entry<Long, ByteBuffer> entry = segments.floorEntry(chunk.offset);
             long segmentOffset = entry.getKey();
             int chunkOffset = Ints.checkedCast(chunk.offset - segmentOffset);
             ByteBuffer compressedChunk = entry.getValue().duplicate(); // TODO: change to slice(chunkOffset) when we upgrade LZ4-java
@@ -247,11 +219,6 @@ public class CompressedRandomAccessReader extends RandomAccessReader
         return checksumBytes.getInt(0);
     }
 
-    public int getTotalBufferSize()
-    {
-        return super.getTotalBufferSize() + (segments != null ? 0 : compressed.capacity());
-    }
-
     @Override
     public long length()
     {
@@ -262,5 +229,38 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     public String toString()
     {
         return String.format("%s - chunk length %d, data length %d.", getPath(), metadata.chunkLength(), metadata.dataLength);
+    }
+
+    public final static class Builder extends RandomAccessReader.Builder
+    {
+        private final CompressionMetadata metadata;
+
+        public Builder(ICompressedFile file)
+        {
+            super(file.channel());
+            this.metadata = applyMetadata(file.getMetadata());
+            this.segments.putAll(file.chunkSegments());
+        }
+
+        public Builder(ChannelProxy channel, CompressionMetadata metadata)
+        {
+            super(channel);
+            this.metadata = applyMetadata(metadata);
+        }
+
+        private CompressionMetadata applyMetadata(CompressionMetadata metadata)
+        {
+            this.overrideLength = metadata.compressedFileLength;
+            this.bufferSize = metadata.chunkLength();
+            this.bufferType = metadata.compressor().preferredBufferType();
+
+            return metadata;
+        }
+
+        @Override
+        public RandomAccessReader build()
+        {
+            return new CompressedRandomAccessReader(this);
+        }
     }
 }

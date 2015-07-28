@@ -61,6 +61,7 @@ import org.apache.cassandra.db.commitlog.CommitLogReplayer.CommitLogReplayExcept
 import org.apache.cassandra.db.compaction.CompactionManager;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.io.util.ByteBufferDataInput;
+import org.apache.cassandra.io.util.DataInputBuffer;
 import org.apache.cassandra.io.util.FileDataInput;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.schema.KeyspaceParams;
@@ -535,13 +536,12 @@ public class CommitLogTest
     {
         ByteBuffer buf = ByteBuffer.allocate(1024);
         CommitLogDescriptor.writeHeader(buf, desc);
-        long length = buf.position();
         // Put some extra data in the stream.
         buf.putDouble(0.1);
         buf.flip();
-        FileDataInput input = new ByteBufferDataInput(buf, "input", 0, 0);
+
+        DataInputBuffer input = new DataInputBuffer(buf, false);
         CommitLogDescriptor read = CommitLogDescriptor.readHeader(input);
-        Assert.assertEquals("Descriptor length", length, input.getFilePointer());
         Assert.assertEquals("Descriptors", desc, read);
     }
 

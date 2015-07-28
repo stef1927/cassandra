@@ -62,12 +62,12 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
         }
 
         @Override
-        public void close() throws IOException
+        public void close()
         {
         }
 
         @Override
-        public int read(ByteBuffer dst) throws IOException
+        public int read(ByteBuffer dst)
         {
             throw new AssertionError();
         }
