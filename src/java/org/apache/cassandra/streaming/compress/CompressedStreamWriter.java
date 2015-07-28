@@ -55,7 +55,7 @@ public class CompressedStreamWriter extends StreamWriter
     public void write(DataOutputStreamPlus out) throws IOException
     {
         long totalSize = totalSize();
-        try (RandomAccessReader file = sstable.openDataReader(); final ChannelProxy fc = file.getChannel().sharedCopy())
+        try (final ChannelProxy fc = sstable.getDataChannel().sharedCopy())
         {
             long progress = 0L;
             // calculate chunks to transfer. we want to send continuous chunks altogether.

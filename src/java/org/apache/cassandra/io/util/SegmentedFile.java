@@ -19,6 +19,7 @@ package org.apache.cassandra.io.util;
 
 import java.io.DataInput;
 import java.io.DataOutput;
+import java.io.File;
 import java.io.IOException;
 import java.nio.MappedByteBuffer;
 import java.util.Iterator;
@@ -130,7 +131,7 @@ public abstract class SegmentedFile extends SharedCloseableImpl
                .build();
     }
 
-    public FileDataInput getSegment(long position)
+    public FileDataInput createReader(long position)
     {
         RandomAccessReader reader = createReader();
         reader.seek(position);
@@ -155,14 +156,6 @@ public abstract class SegmentedFile extends SharedCloseableImpl
     public static Builder getCompressedBuilder(CompressedSequentialWriter writer)
     {
         return new CompressedSegmentedFile.Builder(writer);
-    }
-
-    /**
-     * @return An Iterator over segments, beginning with the segment containing the given position: each segment must be closed after use.
-     */
-    public Iterator<FileDataInput> iterator(long position)
-    {
-        return new SegmentIterator(position);
     }
 
     /**
@@ -308,57 +301,6 @@ public abstract class SegmentedFile extends SharedCloseableImpl
             channel = new ChannelProxy(path);
             return channel.sharedCopy();
         }
-    }
-
-    static final class Segment extends Pair<Long, MappedByteBuffer> implements Comparable<Segment>
-    {
-        public Segment(long offset, MappedByteBuffer segment)
-        {
-            super(offset, segment);
-        }
-
-        public final int compareTo(Segment that)
-        {
-            return (int)Math.signum(this.left - that.left);
-        }
-    }
-
-    /**
-     * A lazy Iterator over segments in forward order from the given position.  It is caller's responsibility
-     * to close the FileDataIntputs when finished.
-     */
-    final class SegmentIterator implements Iterator<FileDataInput>
-    {
-        private long nextpos;
-        public SegmentIterator(long position)
-        {
-            this.nextpos = position;
-        }
-
-        public boolean hasNext()
-        {
-            return nextpos < length;
-        }
-
-        public FileDataInput next()
-        {
-            long position = nextpos;
-            if (position >= length)
-                throw new NoSuchElementException();
-
-            FileDataInput segment = getSegment(nextpos);
-            try
-            {
-                nextpos = nextpos + segment.bytesRemaining();
-            }
-            catch (IOException e)
-            {
-                throw new FSReadError(e, path());
-            }
-            return segment;
-        }
-
-        public void remove() { throw new UnsupportedOperationException(); }
     }
 
     @Override

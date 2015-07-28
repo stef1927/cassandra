@@ -18,12 +18,16 @@
 package org.apache.cassandra.io.util;
 
 import java.io.*;
+import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
+import com.google.common.util.concurrent.RateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,13 +41,13 @@ public class MmappedSegmentedFile extends SegmentedFile
     public static long MAX_SEGMENT_SIZE = Integer.MAX_VALUE;
 
     /**
-     * Sorted array of segment offsets and MappedByteBuffers for segments. If mmap is completely disabled, or if the
+     * Sorted map of segment offsets and MappedByteBuffers for segments. If mmap is completely disabled, or if the
      * segment would be too long to mmap, the value for an offset will be null, indicating that we need to fall back
      * to a RandomAccessFile.
      */
-    private final Segment[] segments;
+    private final Map<Long, ByteBuffer> segments;
 
-    public MmappedSegmentedFile(ChannelProxy channel, int bufferSize, long length, Segment[] segments)
+    public MmappedSegmentedFile(ChannelProxy channel, int bufferSize, long length, Map<Long, ByteBuffer> segments)
     {
         super(new Cleanup(channel, segments), channel, bufferSize, length);
         this.segments = segments;
@@ -60,45 +64,28 @@ public class MmappedSegmentedFile extends SegmentedFile
         return new MmappedSegmentedFile(this);
     }
 
-    /**
-     * @return The segment entry for the given position.
-     */
-    private Segment floor(long position)
+    public RandomAccessReader createReader()
     {
-        assert 0 <= position && position < length: String.format("%d >= %d in %s", position, length, path());
-        Segment seg = new Segment(position, null);
-        int idx = Arrays.binarySearch(segments, seg);
-        assert idx != -1 : String.format("Bad position %d for segments %s in %s", position, Arrays.toString(segments), path());
-        if (idx < 0)
-            // round down to entry at insertion point
-            idx = -(idx + 2);
-        return segments[idx];
+        return new RandomAccessReader.Builder(channel)
+               .overrideLength(length)
+               .segments(segments)
+               .build();
     }
 
-    /**
-     * @return The segment containing the given position: must be closed after use.
-     */
-    public FileDataInput getSegment(long position)
+    public RandomAccessReader createReader(RateLimiter limiter)
     {
-        Segment segment = floor(position);
-        if (segment.right != null)
-        {
-            // segment is mmap'd
-            return new ByteBufferDataInput(segment.right, path(), segment.left, (int) (position - segment.left));
-        }
-
-        // we can have single cells or partitions larger than 2Gb, which is our maximum addressable range in a single segment;
-        // in this case we open as a normal random access reader
-        // FIXME: brafs are unbounded, so this segment will cover the rest of the file, rather than just the row
-        RandomAccessReader file = RandomAccessReader.open(channel, bufferSize, -1L);
-        file.seek(position);
-        return file;
+        return new RandomAccessReader.Builder(channel)
+               .overrideLength(length)
+               .bufferSize(bufferSize)
+               .segments(segments)
+               .limiter(limiter)
+               .build();
     }
 
     private static final class Cleanup extends SegmentedFile.Cleanup
     {
-        final Segment[] segments;
-        protected Cleanup(ChannelProxy channel, Segment[] segments)
+        private final Map<Long, ByteBuffer> segments;
+        protected Cleanup(ChannelProxy channel, Map<Long, ByteBuffer> segments)
         {
             super(channel);
             this.segments = segments;
@@ -118,11 +105,11 @@ public class MmappedSegmentedFile extends SegmentedFile
          */
             try
             {
-                for (Segment segment : segments)
+                for (ByteBuffer segment : segments.values())
                 {
-                    if (segment.right == null)
+                    if (segment == null)
                         continue;
-                    FileUtils.clean(segment.right);
+                    FileUtils.clean(segment);
                 }
                 logger.debug("All segments have been unmapped successfully");
             }
@@ -190,7 +177,7 @@ public class MmappedSegmentedFile extends SegmentedFile
             return new MmappedSegmentedFile(channel, bufferSize, length, createSegments(channel, length));
         }
 
-        private Segment[] createSegments(ChannelProxy channel, long length)
+        private Map<Long, ByteBuffer> createSegments(ChannelProxy channel, long length)
         {
             // if we're early finishing a range that doesn't span multiple segments, but the finished file now does,
             // we remove these from the end (we loop incase somehow this spans multiple segments, but that would
@@ -204,15 +191,13 @@ public class MmappedSegmentedFile extends SegmentedFile
                 boundaries.add(length);
 
             int segcount = boundaries.size() - 1;
-            Segment[] segments = new Segment[segcount];
+            Map<Long, ByteBuffer> segments = new TreeMap<>();
             for (int i = 0; i < segcount; i++)
             {
                 long start = boundaries.get(i);
                 long size = boundaries.get(i + 1) - start;
-                MappedByteBuffer segment = size <= MAX_SEGMENT_SIZE
-                                           ? channel.map(FileChannel.MapMode.READ_ONLY, start, size)
-                                           : null;
-                segments[i] = new Segment(start, segment);
+                if (size <= MAX_SEGMENT_SIZE)
+                    segments.put(start, channel.map(FileChannel.MapMode.READ_ONLY, start, size));
             }
             return segments;
         }
