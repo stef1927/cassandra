@@ -19,50 +19,31 @@ package org.apache.cassandra.io.util;
 
 import java.io.DataInput;
 import java.io.IOException;
+import java.nio.ByteOrder;
 
-public class MemoryInputStream extends AbstractDataInput implements DataInput
+import com.google.common.primitives.Ints;
+
+import org.apache.cassandra.utils.memory.MemoryUtil;
+
+public class MemoryInputStream extends NIODataInputStream implements DataInput
 {
-    private final Memory mem;
-    private int position = 0;
-
     public MemoryInputStream(Memory mem)
     {
-        this.mem = mem;
+        // benedict : do we need to worry about cached partitions that do not fit into an integer size?
+        // if so we should implement a ReadableByteChannel or override readNext() to refill the buffer
+        super(MemoryUtil.getByteBuffer(mem.peer, Ints.checkedCast(mem.size)).order(ByteOrder.BIG_ENDIAN), false);
     }
 
+
+    @Override
     public int read() throws IOException
     {
-        return mem.getByte(position++) & 0xFF;
+        return buf.get() & 0xFF;
     }
 
+    @Override
     public void readFully(byte[] buffer, int offset, int count) throws IOException
     {
-        mem.getBytes(position, buffer, offset, count);
-        position += count;
-    }
-
-    public void seek(long pos)
-    {
-        position = (int) pos;
-    }
-
-    public long getPosition()
-    {
-        return position;
-    }
-
-    public long getPositionLimit()
-    {
-        return mem.size();
-    }
-
-    protected long length()
-    {
-        return mem.size();
-    }
-
-    public void close()
-    {
-        // do nothing.
+        buf.get(buffer, offset, count);
     }
 }

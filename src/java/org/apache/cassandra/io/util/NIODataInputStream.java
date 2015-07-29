@@ -45,8 +45,8 @@ import com.google.common.base.Preconditions;
  */
 public class NIODataInputStream extends InputStream implements DataInputPlus, Closeable
 {
-    private final ReadableByteChannel rbc;
-    private final ByteBuffer buf;
+    protected final ReadableByteChannel rbc;
+    protected final ByteBuffer buf;
 
     /*
      *  Used when wrapping a fixed buffer of data instead of a channel. Should never attempt
@@ -79,9 +79,9 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
         Preconditions.checkNotNull(rbc);
         Preconditions.checkArgument(bufferSize >= 9, "Buffer size must be large enough to accomadate a varint");
         this.rbc = rbc;
-        buf = ByteBuffer.allocateDirect(bufferSize);
-        buf.position(0);
-        buf.limit(0);
+        this.buf = ByteBuffer.allocateDirect(bufferSize);
+        this.buf.position(0);
+        this.buf.limit(0);
     }
 
     protected NIODataInputStream(ByteBuffer buf, boolean duplicate)
@@ -193,7 +193,7 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
 
         buf.limit(buf.capacity());
 
-        int read = 0;
+        int read;
         while ((read = rbc.read(buf)) == 0) {}
 
         buf.flip();
@@ -364,7 +364,7 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
     @Override
     public void close() throws IOException
     {
-            rbc.close();
+        rbc.close();
     }
 
     @Override
