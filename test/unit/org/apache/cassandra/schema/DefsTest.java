@@ -40,7 +40,7 @@ import org.apache.cassandra.cql3.QueryProcessor;
 import org.apache.cassandra.cql3.UntypedResultSet;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Keyspace;
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
+import org.apache.cassandra.db.lifecycle.TransactionLog;
 import org.apache.cassandra.db.marshal.BytesType;
 import org.apache.cassandra.db.marshal.UTF8Type;
 import org.apache.cassandra.exceptions.ConfigurationException;
@@ -521,7 +521,7 @@ public class DefsTest
 
         // check
         assertTrue(cfs.indexManager.getIndexes().isEmpty());
-        TransactionLogs.waitForDeletions();
+        TransactionLog.waitForDeletions();
         assertFalse(new File(desc.filenameFor(Component.DATA)).exists());
     }
 

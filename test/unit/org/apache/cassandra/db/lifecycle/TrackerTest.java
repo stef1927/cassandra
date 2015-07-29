@@ -187,9 +187,9 @@ public class TrackerTest
     public void testDropSSTables()
     {
         testDropSSTables(false);
-        TransactionLogs.waitForDeletions();
+        TransactionLog.waitForDeletions();
         testDropSSTables(true);
-        TransactionLogs.waitForDeletions();
+        TransactionLog.waitForDeletions();
     }
 
     private void testDropSSTables(boolean invalidate)
@@ -205,7 +205,7 @@ public class TrackerTest
 
         try
         {
-           // TransactionLogs.pauseDeletions(true);
+           // TransactionLog.pauseDeletions(true);
             try (LifecycleTransaction txn = tracker.tryModify(readers.get(0), OperationType.COMPACTION))
             {
                 if (invalidate)
@@ -258,7 +258,7 @@ public class TrackerTest
         }
         finally
         {
-           // TransactionLogs.pauseDeletions(false);
+           // TransactionLog.pauseDeletions(false);
         }
     }
 

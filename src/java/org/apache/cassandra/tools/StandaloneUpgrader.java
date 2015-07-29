@@ -20,7 +20,7 @@ package org.apache.cassandra.tools;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.cassandra.db.lifecycle.TransactionLogs;
+import org.apache.cassandra.db.lifecycle.TransactionLog;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.commons.cli.*;
 
@@ -120,7 +120,7 @@ public class StandaloneUpgrader
                 }
             }
             CompactionManager.instance.finishCompactionsAndShutdown(5, TimeUnit.MINUTES);
-            TransactionLogs.waitForDeletions();
+            TransactionLog.waitForDeletions();
             System.exit(0);
         }
         catch (Exception e)

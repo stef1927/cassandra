@@ -21,7 +21,6 @@ import java.io.File;
 import java.util.*;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Function;
 import com.google.common.base.Predicate;
 import com.google.common.collect.*;
 
@@ -96,7 +95,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
 
     public final Tracker tracker;
     // The transaction logs keep track of new and old sstable files
-    private final TransactionLogs transactionLogs;
+    private final TransactionLog transactionLog;
     // the original readers this transaction was opened over, and that it guards
     // (no other transactions may operate over these readers concurrently)
     private final Set<SSTableReader> originals = new HashSet<>();
@@ -113,7 +112,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     private final State staged = new State();
 
     // the tidier and their readers, to be used for marking readers obsoleted during a commit
-    private List<TransactionLogs.Obsoletion> obsoletions;
+    private List<TransactionLog.Obsoletion> obsoletions;
 
     /**
      * construct a Transaction for use in an offline operation
@@ -141,7 +140,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     public static LifecycleTransaction offline(OperationType operationType, CFMetaData metadata)
     {
         Tracker dummy = new Tracker(null, false);
-        return new LifecycleTransaction(dummy, new TransactionLogs(operationType, metadata, dummy), Collections.emptyList());
+        return new LifecycleTransaction(dummy, new TransactionLog(operationType, metadata, dummy), Collections.emptyList());
     }
 
     /**
@@ -150,18 +149,18 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     public static LifecycleTransaction offline(OperationType operationType, File operationFolder)
     {
         Tracker dummy = new Tracker(null, false);
-        return new LifecycleTransaction(dummy, new TransactionLogs(operationType, operationFolder, dummy), Collections.emptyList());
+        return new LifecycleTransaction(dummy, new TransactionLog(operationType, operationFolder, dummy), Collections.emptyList());
     }
 
     LifecycleTransaction(Tracker tracker, OperationType operationType, Iterable<SSTableReader> readers)
     {
-        this(tracker, new TransactionLogs(operationType, getMetadata(tracker, readers), tracker), readers);
+        this(tracker, new TransactionLog(operationType, getMetadata(tracker, readers), tracker), readers);
     }
 
-    LifecycleTransaction(Tracker tracker, TransactionLogs transactionLogs, Iterable<SSTableReader> readers)
+    LifecycleTransaction(Tracker tracker, TransactionLog transactionLog, Iterable<SSTableReader> readers)
     {
         this.tracker = tracker;
-        this.transactionLogs = transactionLogs;
+        this.transactionLog = transactionLog;
         for (SSTableReader reader : readers)
         {
             originals.add(reader);
@@ -185,19 +184,19 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         return null;
     }
 
-    public TransactionLogs logs()
+    public TransactionLog log()
     {
-        return transactionLogs;
+        return transactionLog;
     }
 
     public OperationType opType()
     {
-        return transactionLogs.getType();
+        return transactionLog.getType();
     }
 
     public UUID opId()
     {
-        return transactionLogs.getId();
+        return transactionLog.getId();
     }
 
     public void doPrepare()
@@ -210,8 +209,8 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
 
         // prepare for compaction obsolete readers as long as they were part of the original set
         // since those that are not original are early readers that share the same desc with the finals
-        maybeFail(prepareForObsoletion(filterIn(logged.obsolete, originals), transactionLogs, obsoletions = new ArrayList<>(), null));
-        transactionLogs.prepareToCommit();
+        maybeFail(prepareForObsoletion(filterIn(logged.obsolete, originals), transactionLog, obsoletions = new ArrayList<>(), null));
+        transactionLog.prepareToCommit();
     }
 
     /**
@@ -226,7 +225,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         maybeFail(accumulate);
 
         // transaction log commit failure means we must abort; safe commit is not possible
-        maybeFail(transactionLogs.commit(null));
+        maybeFail(transactionLog.commit(null));
 
         // this is now the point of no return; we cannot safely rollback, so we ignore exceptions until we're done
         // we restore state by obsoleting our obsolete files, releasing our references to them, and updating our size
@@ -235,7 +234,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         accumulate = markObsolete(obsoletions, accumulate);
         accumulate = tracker.updateSizeTracking(logged.obsolete, logged.update, accumulate);
         accumulate = release(selfRefs(logged.obsolete), accumulate);
-        accumulate = tracker.notifySSTablesChanged(originals, logged.update, transactionLogs.getType(), accumulate);
+        accumulate = tracker.notifySSTablesChanged(originals, logged.update, transactionLog.getType(), accumulate);
 
         return accumulate;
     }
@@ -251,16 +250,16 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         accumulate = abortObsoletion(obsoletions, accumulate);
 
         if (logged.isEmpty() && staged.isEmpty())
-            return transactionLogs.abort(accumulate);
+            return transactionLog.abort(accumulate);
 
         // mark obsolete all readers that are not versions of those present in the original set
         Iterable<SSTableReader> obsolete = filterOut(concatUniq(staged.update, logged.update), originals);
         logger.debug("Obsoleting {}", obsolete);
 
-        accumulate = prepareForObsoletion(obsolete, transactionLogs, obsoletions = new ArrayList<>(), accumulate);
+        accumulate = prepareForObsoletion(obsolete, transactionLog, obsoletions = new ArrayList<>(), accumulate);
         // it's safe to abort even if committed, see maybeFail in doCommit() above, in this case it will just report
         // a failure to abort, which is useful information to have for debug
-        accumulate = transactionLogs.abort(accumulate);
+        accumulate = transactionLog.abort(accumulate);
         accumulate = markObsolete(obsoletions, accumulate);
 
         // replace all updated readers with a version restored to its original state
@@ -491,7 +490,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
             originals.remove(reader);
             marked.remove(reader);
         }
-        return new LifecycleTransaction(tracker, transactionLogs.getType(), readers);
+        return new LifecycleTransaction(tracker, transactionLog.getType(), readers);
     }
 
     /**
@@ -524,27 +523,27 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
 
     public void trackNew(SSTable table)
     {
-        transactionLogs.trackNew(table);
+        transactionLog.trackNew(table);
     }
 
     public void untrackNew(SSTable table)
     {
-        transactionLogs.untrackNew(table);
+        transactionLog.untrackNew(table);
     }
 
     public static void removeUnfinishedLeftovers(CFMetaData metadata)
     {
-        TransactionLogs.removeUnfinishedLeftovers(metadata);
+        TransactionLog.removeUnfinishedLeftovers(metadata);
     }
 
     public static Set<File> getTemporaryFiles(CFMetaData metadata, File folder)
     {
-        return TransactionLogs.getTemporaryFiles(metadata, folder);
+        return TransactionLog.getTemporaryFiles(metadata, folder);
     }
 
     public static Set<File> getLogFiles(CFMetaData metadata)
     {
-        return TransactionLogs.getLogFiles(metadata);
+        return TransactionLog.getLogFiles(metadata);
     }
 
     // a class representing the current state of the reader within this transaction, encoding the actions both logged

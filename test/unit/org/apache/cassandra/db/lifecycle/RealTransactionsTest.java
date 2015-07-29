@@ -89,10 +89,10 @@ public class RealTransactionsTest extends SchemaLoader
         SSTableReader oldSSTable = getSSTable(cfs, 1);
         LifecycleTransaction txn = cfs.getTracker().tryModify(oldSSTable, OperationType.COMPACTION);
         SSTableReader newSSTable = replaceSSTable(cfs, txn, false);
-        TransactionLogs.waitForDeletions();
+        TransactionLog.waitForDeletions();
 
-        assertFiles(txn.logs().getDataFolder(), new HashSet<>(newSSTable.getAllFilePaths()));
-        assertFiles(txn.logs().getLogsFolder(), Collections.<String>emptySet());
+        assertFiles(txn.log().getDataFolder(), new HashSet<>(newSSTable.getAllFilePaths()));
+        assertFiles(txn.log().getLogsFolder(), Collections.<String>emptySet());
     }
 
     @Test
@@ -105,10 +105,10 @@ public class RealTransactionsTest extends SchemaLoader
         LifecycleTransaction txn = cfs.getTracker().tryModify(oldSSTable, OperationType.COMPACTION);
 
         replaceSSTable(cfs, txn, true);
-        TransactionLogs.waitForDeletions();
+        TransactionLog.waitForDeletions();
 
-        assertFiles(txn.logs().getDataFolder(), new HashSet<>(oldSSTable.getAllFilePaths()));
-        assertFiles(txn.logs().getLogsFolder(), Collections.<String>emptySet());
+        assertFiles(txn.log().getDataFolder(), new HashSet<>(oldSSTable.getAllFilePaths()));
+        assertFiles(txn.log().getLogsFolder(), Collections.<String>emptySet());
     }
 
     @Test

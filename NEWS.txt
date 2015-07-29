@@ -38,6 +38,19 @@ Upgrading
    - The default JVM flag -XX:+PerfDisableSharedMem will cause the following tools JVM
      to stop working: jps, jstack, jinfo, jmc, jcmd as well as 3rd party tools like Jolokia.
      If you wish to use these tools you can comment this flag out in cassandra-env.{sh,ps1}
+   - New transaction log files have been introduced to replace the compactions_in_progress
+     system table. They control the sstable files involved in compactions and other operations
+     such as flushing and streaming. Use the sstablelister tool to list any sstable files
+     currently involved in operations not yet completed, which we define as temporary files.
+     A transaction log file contains one sstable per line, with the prefix "add:" or "remove:".
+     They also contain a final special line "commit", only inserted when the transaction is committed.
+     On startup we use these files to cleanup any partial transactions that were in progress
+     when the process exited. If the commit line is found, we keep new "add" prefix sstables and
+     delete the old "remove" prefix sstables, vice-versa if the commit line is missing.
+     Should you loose or delete these log files, both old and new sstable files will be kept
+     as live files, which will result in duplicated sstables. Should you manually edit these
+     files and remove or add the commit line for example, then this would change which sstable
+     files are retained on startup. See CASSANDRA-7066 for full details.
    - New write stages have been added for batchlog and materialized view mutations
      you can set their size in cassandra.yaml
    - User defined functions are now executed in a sandbox.
