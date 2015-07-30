@@ -130,7 +130,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
             {
                 assertFiles(txnLogs.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(),
                                                                                       sstableOld.getAllFilePaths())));
-                assertFiles(txnLogs.getLogsFolder(), Sets.newHashSet(txnLogs.getData().getLogFile().getPath()));
+                assertFiles(txnLogs.getLogsFolder(), Sets.newHashSet(txnLogs.getData().getLogFile().file.getPath()));
                 assertEquals(1, TransactionLog.getLogFiles(cfs.metadata).size());
             }
 
@@ -359,7 +359,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         TransactionLog.SSTableTidier tidier = transactionLog.obsoleted(sstableOld);
 
         // save a copy for later else we won't be able to close the transaction and will end up with LEAK errors
-        File tmpLog = copyToTmpFile(transactionLog.getData().getLogFile());
+        File tmpLog = copyToTmpFile(transactionLog.getData().getLogFile().file);
 
         Set<File> tmpFiles = new HashSet<>(TransactionLog.getLogFiles(cfs.metadata));
         for (String p : sstableNew.getAllFilePaths())
@@ -384,7 +384,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         tidier.run();
 
         // copy old transaction file contents back or transactionlogs will throw assertions
-        Files.move(tmpLog.toPath(), transactionLog.getData().getLogFile().toPath());
+        Files.move(tmpLog.toPath(), transactionLog.getData().getLogFile().file.toPath());
 
         transactionLog.close();
     }
@@ -404,10 +404,10 @@ public class TransactionLogTest extends AbstractTransactionalTest
         TransactionLog.SSTableTidier tidier = transactionLog.obsoleted(sstableOld);
 
         // save a copy for later else we won't be able to close the transaction and will end up with LEAK errors
-        File tmpNewLog = copyToTmpFile(transactionLog.getData().getLogFile());
+        File tmpNewLog = copyToTmpFile(transactionLog.getData().getLogFile().file);
 
         //Fake a commit
-        FileUtils.append(transactionLog.getData().getLogFile(), TransactionLog.TransactionFile.COMMIT);
+        transactionLog.getData().getLogFile().writeLine(TransactionLog.TransactionFile.COMMIT);
 
         Set<File> tmpFiles = new HashSet<>(TransactionLog.getLogFiles(cfs.metadata));
         for (String p : sstableOld.getAllFilePaths())
@@ -432,7 +432,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         tidier.run();
 
         // copy old transaction files contents back or transactionlogs will throw assertions
-        Files.move(tmpNewLog.toPath(), transactionLog.getData().getLogFile().toPath());
+        Files.move(tmpNewLog.toPath(), transactionLog.getData().getLogFile().file.toPath());
 
         transactionLog.close();
     }
@@ -499,6 +499,70 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
         sstable1.selfRef().release();
         sstable2.selfRef().release();
+    }
+
+    @Test
+    public void testWrongChecksum() throws IOException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+        SSTableReader sstableOld = sstable(cfs, 0, 128);
+        SSTableReader sstableNew = sstable(cfs, 1, 128);
+
+        File dataFolder = sstableOld.descriptor.directory;
+
+        // simulate tracking sstables with a committed transaction except the checksum will be wrong
+        TransactionLog transactionLog = new TransactionLog(OperationType.COMPACTION, cfs.metadata);
+        assertNotNull(transactionLog);
+
+        transactionLog.trackNew(sstableNew);
+        transactionLog.obsoleted(sstableOld);
+
+        //Fake a commit and corrupt the crc
+        FileUtils.append(transactionLog.getData().getLogFile().file, String.format("%s[%d]", TransactionLog.TransactionFile.COMMIT, 12345678L));
+
+        //This should not remove any files
+        TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
+
+        //This should not return any files
+        assertEquals(Collections.emptySet(), TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder));
+
+        assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(), sstableOld.getAllFilePaths())));
+        assertFiles(transactionLog.getLogsFolder(), Sets.newHashSet(transactionLog.getData().getLogFile().file.getPath()));
+        assertEquals(1, TransactionLog.getLogFiles(cfs.metadata).size());
+
+        transactionLog.close();
+    }
+
+    @Test
+    public void testMissingChecksum() throws IOException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+        SSTableReader sstableOld = sstable(cfs, 0, 128);
+        SSTableReader sstableNew = sstable(cfs, 1, 128);
+
+        File dataFolder = sstableOld.descriptor.directory;
+
+        // simulate tracking sstables with a committed transaction except the checksum will be wrong
+        TransactionLog transactionLog = new TransactionLog(OperationType.COMPACTION, cfs.metadata);
+        assertNotNull(transactionLog);
+
+        transactionLog.trackNew(sstableNew);
+        transactionLog.obsoleted(sstableOld);
+
+        //Fake a commit without a crc
+        FileUtils.append(transactionLog.getData().getLogFile().file, TransactionLog.TransactionFile.COMMIT);
+
+        //This should not remove any files
+        TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
+
+        //This should not return any files
+        assertEquals(Collections.emptySet(), TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder));
+
+        assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(), sstableOld.getAllFilePaths())));
+        assertFiles(transactionLog.getLogsFolder(), Sets.newHashSet(transactionLog.getData().getLogFile().file.getPath()));
+        assertEquals(1, TransactionLog.getLogFiles(cfs.metadata).size());
+
+        transactionLog.close();
     }
 
     @Test

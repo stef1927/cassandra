@@ -27,6 +27,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.zip.CRC32;
+import java.util.zip.Checksum;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.commons.lang3.StringUtils;
@@ -91,14 +93,29 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
      */
     public enum FileType
     {
-        NEW ("add: "),
-        OLD ("remove: ");
+        NEW ("add:"),
+        OLD ("remove:");
 
         public final String prefix;
 
         FileType(String prefix)
         {
             this.prefix = prefix;
+        }
+    }
+
+    /**
+     * If the format of the lines in the transaction log is wrong or the CRC
+     * checks fail, then we throw this exception.
+     */
+    public static final class CorruptTransactionLogException extends RuntimeException
+    {
+        public final TransactionFile file;
+
+        public CorruptTransactionLogException(String message, TransactionFile file)
+        {
+            super(message);
+            this.file = file;
         }
     }
 
@@ -110,30 +127,67 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         static String EXT = ".log";
         static String COMMIT = "commit";
         static char SEP = '_';
-        static String REGEX_STR = String.format("^(.*)_(.*)%s$", EXT);
-        static Pattern REGEX = Pattern.compile(REGEX_STR); //(opname)_(id).log
+        static String FILE_REGEX_STR = String.format("^(.*)_(.*)%s$", EXT);
+        static Pattern FILE_REGEX = Pattern.compile(FILE_REGEX_STR); //(opname)_(id).log
+        static String LINE_REGEX_STR = "^((add:|remove:)(.*)|commit)\\[(\\d*)\\]$";
+        static Pattern LINE_REGEX = Pattern.compile(LINE_REGEX_STR); //((add|remove):desc|commit)[checksum]
 
         public final File file;
         public final TransactionData parent;
         public final Set<String> lines = new HashSet<>();
+        public final Checksum checksum = new CRC32();
 
         public TransactionFile(TransactionData parent)
         {
             this.file = new File(parent.getFileName());
             this.parent = parent;
+        }
 
-            if (exists())
-                lines.addAll(FileUtils.readLines(file));
+        public void readLines()
+        {
+            lines.clear();
+            checksum.reset();
+
+            FileUtils.readLines(file).forEach(line -> lines.add(readLine(line)));
+        }
+
+        private String readLine(String line)
+        {
+            Matcher matcher = LINE_REGEX.matcher(line);
+            if (!matcher.matches() || matcher.groupCount() != 4)
+                throw new CorruptTransactionLogException(String.format("Failed to parse transaction line \"%s\"", line), this);
+
+            String ret = matcher.group(1);
+            byte[] bytes = ret.getBytes();
+            checksum.update(bytes, 0, bytes.length);
+
+            // benedict: if we log the excepted checksum we are kind of telling users how to 'reconstruct' a log file, is this OK?
+            if (checksum.getValue() != Long.valueOf(matcher.group(4)))
+                throw new CorruptTransactionLogException(String.format("Invalid checksum for line \"%s\", got %s but expected %d",
+                                                                       ret,
+                                                                       matcher.group(4),
+                                                                       checksum.getValue()),
+                                                         this);
+
+            return ret;
+        }
+
+        @VisibleForTesting
+        public void writeLine(String line)
+        {
+            byte[] bytes = line.getBytes();
+            checksum.update(bytes, 0, bytes.length);
+
+            lines.add(line);
+            FileUtils.append(file, String.format("%s[%d]", line, checksum.getValue()));
+
+            parent.sync();
         }
 
         public void commit()
         {
             assert !committed() : "Already committed!";
-
-            lines.add(COMMIT);
-            FileUtils.append(file, COMMIT);
-
-            parent.sync();
+            writeLine(COMMIT);
         }
 
         public boolean committed()
@@ -152,10 +206,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             if (lines.contains(line))
                 return false;
 
-            lines.add(line);
-            FileUtils.append(file, line);
-
-            parent.sync();
+            writeLine(line);
             return true;
         }
 
@@ -200,7 +251,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         public Set<File> getTrackedFiles(FileType type)
         {
             Set<File> ret = new HashSet<>();
-            FileUtils.readLines(file).forEach(line -> ret.addAll(getTrackedFiles(type, line)));
+            lines.forEach(line -> ret.addAll(getTrackedFiles(type, line)));
             ret.add(file);
             return ret;
         }
@@ -238,7 +289,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         static TransactionData make(File logFile)
         {
-            Matcher matcher = TransactionFile.REGEX.matcher(logFile.getName());
+            Matcher matcher = TransactionFile.FILE_REGEX.matcher(logFile.getName());
             assert matcher.matches();
 
             OperationType operationType = OperationType.fromFileName(matcher.group(1));
@@ -254,6 +305,11 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             this.folder = folder;
             this.file = new TransactionFile(this);
             this.folderDescriptor = CLibrary.tryOpenDirectory(folder.getPath());
+        }
+
+        public void readLogFile()
+        {
+            file.readLines();
         }
 
         public void close()
@@ -333,13 +389,13 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         static boolean isLogFile(String name)
         {
-            return TransactionFile.REGEX.matcher(name).matches();
+            return TransactionFile.FILE_REGEX.matcher(name).matches();
         }
 
         @VisibleForTesting
-        File getLogFile()
+        TransactionFile getLogFile()
         {
-            return file.file;
+            return file;
         }
     }
 
@@ -650,7 +706,6 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     static void removeUnfinishedLeftovers(CFMetaData metadata)
     {
         Throwable accumulate = null;
-        Set<UUID> ids = new HashSet<>();
 
         for (File dir : getFolders(metadata, null))
         {
@@ -662,12 +717,12 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             {
                 try (TransactionData data = TransactionData.make(log))
                 {
-                    // we need to check this because there are potentially 2 log files per operation
-                    if (ids.contains(data.id))
-                        continue;
-
-                    ids.add(data.id);
+                    data.readLogFile();
                     accumulate = data.removeUnfinishedLeftovers(accumulate);
+                }
+                catch (CorruptTransactionLogException ex)
+                {
+                    handleCorruptFile(ex);
                 }
             }
         }
@@ -686,7 +741,6 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     static Set<File> getTemporaryFiles(CFMetaData metadata, File folder)
     {
         Set<File> ret = new HashSet<>();
-        Set<UUID> ids = new HashSet<>();
 
         for (File dir : getFolders(metadata, folder))
         {
@@ -698,20 +752,25 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             {
                 try(TransactionData data = TransactionData.make(log))
                 {
-                    // we need to check this because there are potentially 2 log files per transaction
-                    if (ids.contains(data.id))
-                        continue;
-
-                    ids.add(data.id);
+                    data.readLogFile();
                     ret.addAll(data.getTemporaryFiles()
                                    .stream()
                                    .filter(file -> FileUtils.isContained(folder, file))
                                    .collect(Collectors.toSet()));
                 }
+                catch(CorruptTransactionLogException ex)
+                {
+                    handleCorruptFile(ex);
+                }
             }
         }
 
         return ret;
+    }
+
+    private static void handleCorruptFile(CorruptTransactionLogException ex)
+    {
+        logger.error("PANIC!!! - Failed to read corrupt transaction log {}, lines parsed so far {}", ex.file.file, ex.file.lines, ex);
     }
 
     /**
