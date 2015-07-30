@@ -436,7 +436,10 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         latencyCalculator.cancel(false);
         compactionStrategyManager.shutdown();
         SystemKeyspace.removeTruncationRecord(metadata.cfId);
+
         data.dropSSTables();
+        TransactionLogs.waitForDeletions();
+
         indexManager.invalidate();
         materializedViewManager.invalidate();
 

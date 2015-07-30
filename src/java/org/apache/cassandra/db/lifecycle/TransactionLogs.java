@@ -334,10 +334,8 @@ public class TransactionLogs extends Transactional.AbstractTransactional impleme
 
             if (newLog().exists())
                 return newLog().getTrackedFiles();
-            else if (oldLog().exists())
+            else
                 return oldLog().getTrackedFiles();
-
-            return Collections.emptySet();
         }
 
         String getFileName(TransactionFile.Type type)
