@@ -19,9 +19,11 @@ package org.apache.cassandra.db.lifecycle;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.util.*;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -31,6 +33,7 @@ import java.util.zip.CRC32;
 import java.util.zip.Checksum;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.*;
 import org.apache.commons.lang3.StringUtils;
 
 import org.slf4j.Logger;
@@ -89,22 +92,6 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     private static final Logger logger = LoggerFactory.getLogger(TransactionLog.class);
 
     /**
-     * The type of file to be tracked, either NEW or OLD.
-     */
-    public enum FileType
-    {
-        NEW ("add:"),
-        OLD ("remove:");
-
-        public final String prefix;
-
-        FileType(String prefix)
-        {
-            this.prefix = prefix;
-        }
-    }
-
-    /**
      * If the format of the lines in the transaction log is wrong or the CRC
      * checks fail, then we throw this exception.
      */
@@ -120,21 +107,189 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     }
 
     /**
+     * The type of record to be logged, new files, old files or the commit flag.
+     */
+    public enum RecordType
+    {
+        NEW ("add"),
+        OLD ("remove"),
+        COMMIT("commit");
+
+        public final String prefix;
+
+        RecordType(String prefix)
+        {
+            this.prefix = prefix;
+        }
+
+        public static RecordType fromPrefix(String prefix)
+        {
+            for (RecordType t : RecordType.values())
+            {
+                if (t.prefix.equals(prefix))
+                    return t;
+            }
+
+            throw new IllegalStateException("Invalid prefix : " + prefix);
+        }
+    }
+
+    final static class Record
+    {
+        public final RecordType type;
+        public final String filePath;
+        public final long updateTime;
+        public final long checksum;
+        public final String record;
+
+        static String REGEX_STR = "^(add|remove|commit):\\[([^,]*),?([^,]*),?([^,]*)?\\]$";
+        static Pattern REGEX = Pattern.compile(REGEX_STR); // (add|remove|commit):[*,*,*]
+
+        public static Record make(String record)
+        {
+            Matcher matcher = REGEX.matcher(record);
+            if (!matcher.matches() || matcher.groupCount() != 4)
+                throw new IllegalStateException(String.format("Invalid record \"%s\"", record));
+
+            RecordType type = RecordType.fromPrefix(matcher.group(1));
+            switch (type)
+            {
+                case COMMIT:
+                    return makeCommit(Long.valueOf(matcher.group(2)), record);
+                case NEW:
+                    return makeNew(matcher.group(2), record);
+                case OLD:
+                    return makeOld(matcher.group(2), Long.valueOf(matcher.group(3)), Long.valueOf(matcher.group(4)), record);
+                default:
+                    throw new AssertionError("Invalid record type : " + type);
+            }
+        }
+
+        public static Record makeCommit(long updateTime)
+        {
+            return makeCommit(updateTime, "");
+        }
+
+        private static Record makeCommit(long updateTime, String record)
+        {
+            return new Record(RecordType.COMMIT, "", updateTime, 0, record);
+        }
+
+        public static Record makeNew(String filePath)
+        {
+            return makeNew(filePath, "");
+        }
+
+        private static Record makeNew(String filePath, String record)
+        {
+            return new Record(RecordType.NEW, filePath, 0, 0, record);
+        }
+
+        public static Record makeOld(String filePath, List<File> files)
+        {
+            long lastModified = 0;
+            ByteBuffer buffer = ByteBuffer.allocate(Long.BYTES * 2);
+            CRC32 checksum = new CRC32();
+            for (File file : files)
+            {
+                if (file.lastModified() > lastModified)
+                    lastModified = file.lastModified();
+
+                buffer.clear();
+                buffer.putLong(file.lastModified());
+                buffer.putLong(file.length());
+
+                buffer.flip();
+                checksum.update(buffer);
+            }
+            return Record.makeOld(filePath, lastModified, checksum.getValue(), "");
+        }
+
+        private static Record makeOld(String filePath, long updateTime, long checksum, String record)
+        {
+            return new Record(RecordType.OLD, filePath, updateTime, checksum, record);
+        }
+
+        private Record(RecordType type,
+                       String filePath,
+                       long updateTime,
+                       long checksum,
+                       String record)
+        {
+            this.type = type;
+            this.filePath = filePath;
+            this.updateTime = updateTime;
+            this.checksum = checksum;
+            this.record = record.isEmpty() ? format() : record;
+        }
+
+        private String format()
+        {
+            switch(type)
+            {
+                case COMMIT:
+                    return String.format("%s:[%d]", type.prefix, updateTime);
+                case NEW:
+                    return String.format("%s:[%s]", type.prefix, filePath);
+                case OLD:
+                    return String.format("%s:[%s,%d,%d]", type.prefix, filePath, updateTime, checksum);
+                default:
+                    throw new AssertionError("Invalid record type : " + type);
+            }
+        }
+
+        public byte[] getBytes()
+        {
+            return record.getBytes();
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Objects.hash(type, filePath);
+        }
+
+        @Override
+        public boolean equals(Object obj)
+        {
+            if (obj == null)
+                return false;
+
+            if (getClass() != obj.getClass())
+                return false;
+
+            final Record other = (Record)obj;
+
+            // we exclude on purpose checksum and update time as
+            // we don't want duplicated records that differ only by
+            // checsum or update time
+            return type.equals(other.type) &&
+                   filePath.equals(other.filePath);
+        }
+
+        @Override
+        public String toString()
+        {
+            return record;
+        }
+    }
+
+    /**
      * The transaction log file.
      */
     final static class TransactionFile
     {
         static String EXT = ".log";
-        static String COMMIT = "commit";
+        static String COMMIT = "commit:";
         static char SEP = '_';
         static String FILE_REGEX_STR = String.format("^(.*)_(.*)%s$", EXT);
         static Pattern FILE_REGEX = Pattern.compile(FILE_REGEX_STR); //(opname)_(id).log
-        static String LINE_REGEX_STR = "^((add:|remove:)(.*)|commit)\\[(\\d*)\\]$";
-        static Pattern LINE_REGEX = Pattern.compile(LINE_REGEX_STR); //((add|remove):desc|commit)[checksum]
+        static String LINE_REGEX_STR = "^(.*)\\[(\\d*)\\]$";
+        static Pattern LINE_REGEX = Pattern.compile(LINE_REGEX_STR); //*[checksum]
 
         public final File file;
         public final TransactionData parent;
-        public final Set<String> lines = new HashSet<>();
+        public final Set<Record> records = new HashSet<>();
         public final Checksum checksum = new CRC32();
 
         public TransactionFile(TransactionData parent)
@@ -143,99 +298,123 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             this.parent = parent;
         }
 
-        public void readLines()
+        public void readRecords()
         {
-            lines.clear();
+            records.clear();
             checksum.reset();
 
-            FileUtils.readLines(file).forEach(line -> lines.add(readLine(line)));
+            FileUtils.readLines(file).forEach(line -> records.add(readRecord(line)));
         }
 
-        private String readLine(String line)
+        private Record readRecord(String line)
         {
             Matcher matcher = LINE_REGEX.matcher(line);
-            if (!matcher.matches() || matcher.groupCount() != 4)
+            if (!matcher.matches() || matcher.groupCount() != 2)
                 throw new CorruptTransactionLogException(String.format("Failed to parse transaction line \"%s\"", line), this);
 
-            String ret = matcher.group(1);
-            byte[] bytes = ret.getBytes();
+            byte[] bytes = matcher.group(1).getBytes();
             checksum.update(bytes, 0, bytes.length);
 
-            // benedict: if we log the excepted checksum we are kind of telling users how to 'reconstruct' a log file, is this OK?
-            if (checksum.getValue() != Long.valueOf(matcher.group(4)))
-                throw new CorruptTransactionLogException(String.format("Invalid checksum for line \"%s\", got %s but expected %d",
-                                                                       ret,
-                                                                       matcher.group(4),
+            if (checksum.getValue() != Long.valueOf(matcher.group(2)))
+                throw new CorruptTransactionLogException(String.format("Invalid checksum %s for line \"%s\", expected %d",
+                                                                       matcher.group(2),
+                                                                       line,
                                                                        checksum.getValue()),
                                                          this);
 
-            return ret;
-        }
-
-        @VisibleForTesting
-        public void writeLine(String line)
-        {
-            byte[] bytes = line.getBytes();
-            checksum.update(bytes, 0, bytes.length);
-
-            lines.add(line);
-            FileUtils.append(file, String.format("%s[%d]", line, checksum.getValue()));
-
-            parent.sync();
+            try
+            {
+                return Record.make(matcher.group(1));
+            }
+            catch (Throwable t)
+            {
+                throw new CorruptTransactionLogException(String.format("Failed to parse record for line \"%s\": %s", line, t.getMessage()), this);
+            }
         }
 
         public void commit()
         {
-            assert !committed() : "Already committed!";
-            writeLine(COMMIT);
+            Record record = Record.makeCommit(System.currentTimeMillis());
+            assert !records.contains(record) : "Already committed!";
+
+            addRecord(record);
         }
 
         public boolean committed()
         {
-            return lines.contains(COMMIT);
+            return records.contains(Record.makeCommit(System.currentTimeMillis()));
         }
 
-        public boolean add(FileType type, SSTable table)
+        public boolean add(RecordType type, SSTable table)
         {
-            return add(type.prefix, table.descriptor.baseFilename());
-        }
-
-        private boolean add(String prefix, String path)
-        {
-            String line = prefix + FileUtils.getRelativePath(parent.getParentFolder(), path);
-            if (lines.contains(line))
+            Record record = makeRecord(type, table);
+            if (records.contains(record))
                 return false;
 
-            writeLine(line);
+            addRecord(record);
             return true;
         }
 
-        public void remove(FileType type, SSTable table)
+        private Record makeRecord(RecordType type, SSTable table)
         {
-            String line = type.prefix + FileUtils.getRelativePath(parent.getParentFolder(), table.descriptor.baseFilename());
-            assert lines.contains(line) : String.format("[%s] is not tracked by %s", line, file);
-
-            lines.remove(line);
-            delete(type, line);
+            String relativePath = FileUtils.getRelativePath(parent.getParentFolder(), table.descriptor.baseFilename());
+            if (type == RecordType.NEW)
+            {
+                return Record.makeNew(relativePath);
+            }
+            else if (type == RecordType.OLD)
+            {
+                return Record.makeOld(relativePath, getTableFiles(relativePath));
+            }
+            else
+            {
+                throw new AssertionError("Invalid record type " + type);
+            }
         }
 
-        public boolean contains(FileType type, SSTable table)
+        private List<File> getTableFiles(final String relativePath)
         {
-            String line = type.prefix + FileUtils.getRelativePath(parent.getParentFolder(), table.descriptor.baseFilename());
-            return lines.contains(line);
+            return Arrays.asList(new File(parent.getParentFolder()).listFiles((dir, name) -> {
+                return name.startsWith(relativePath);
+            }));
         }
 
-        public void deleteContents(FileType type)
+        private void addRecord(Record record)
+        {
+            byte[] bytes = record.getBytes();
+            checksum.update(bytes, 0, bytes.length);
+
+            records.add(record);
+            FileUtils.append(file, String.format("%s[%d]", record, checksum.getValue()));
+
+            parent.sync();
+        }
+
+        public void remove(RecordType type, SSTable table)
+        {
+            Record record = makeRecord(type, table);
+
+            assert records.contains(record) : String.format("[%s] is not tracked by %s", record, file);
+
+            records.remove(record);
+            delete(record);
+        }
+
+        public boolean contains(RecordType type, SSTable table)
+        {
+            return records.contains(makeRecord(type, table));
+        }
+
+        public void deleteContents(RecordType type)
         {
             assert file.exists() : String.format("Expected %s to exists", file);
-
-            lines.forEach(line ->
-                          {
-                              if (line.startsWith(type.prefix))
-                                  delete(type, line);
-                          }
+            records.forEach(record ->
+                            {
+                                if (record.type == type)
+                                    delete(record);
+                            }
             );
-            lines.clear();
+            records.clear();
         }
 
         public void delete()
@@ -243,27 +422,65 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             TransactionLog.delete(file);
         }
 
-        private void delete(FileType type, String line)
+        private void delete(Record record)
         {
-            getTrackedFiles(type, line).forEach(file -> TransactionLog.delete(file));
+            List<File> files = getTrackedFiles(record);
+            if (files.isEmpty())
+                return; // Files no longer exist, nothing to do
+
+            if (record.type == RecordType.OLD)
+            {
+                // Paranoid sanity checks: we create another record by looking at files as they are
+                // on disk right now, if either the last update time or the checksum do not match
+                // what we save when the table was obsoleted, it means something went horribly wrong:
+                // either the file system is corrupt or the user has overwrittent the files, so we
+                // log a panic and skip deleting this record files
+                Record currentRecord = Record.makeOld(record.filePath, files);
+                if (record.updateTime != currentRecord.updateTime)
+                {
+                    logger.error("PANIC!!! - Did not delete obsoleted files for sstable {}, last update time mismatch: {} should have been {}",
+                                 record.filePath,
+                                 currentRecord.updateTime,
+                                 record.updateTime);
+                    return;
+                }
+
+                if (record.checksum != currentRecord.checksum)
+                {
+                    logger.error("PANIC!!! - Did not delete obsoleted files for sstable {}, checksum mismatch: {} should have been {}",
+                                 record.filePath,
+                                 currentRecord.checksum,
+                                 record.checksum);
+                    return;
+                }
+
+                // sort them in ascending order of last modified so that they are deleted from olest to newest
+                // benedit: why is this necessary?
+                files.sort((f1, f2) -> Long.compare(f1.lastModified(), f2.lastModified()));
+            }
+
+            files.forEach(file -> TransactionLog.delete(file));
         }
 
-        public Set<File> getTrackedFiles(FileType type)
+        public Set<File> getTrackedFiles(RecordType type)
         {
             Set<File> ret = new HashSet<>();
-            lines.forEach(line -> ret.addAll(getTrackedFiles(type, line)));
+            records.forEach(record ->
+                            {
+                                if (record.type == type)
+                                    ret.addAll(getTrackedFiles(record));
+                            });
             ret.add(file);
             return ret;
         }
 
-        private List<File> getTrackedFiles(FileType type, String line)
+        private List<File> getTrackedFiles(Record record)
         {
-            if (line.equals(COMMIT))
+            if (record.type.equals(COMMIT))
                 return Collections.emptyList();
 
-            String relativePath = line.substring(type.prefix.length());
             return Arrays.asList(new File(parent.getParentFolder()).listFiles((dir, name) -> {
-                return name.startsWith(relativePath);
+                return name.startsWith(record.filePath);
             }));
         }
 
@@ -309,7 +526,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         public void readLogFile()
         {
-            file.readLines();
+            file.readRecords();
         }
 
         public void close()
@@ -342,9 +559,9 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             try
             {
                 if (file.committed())
-                    file.deleteContents(FileType.OLD);
+                    file.deleteContents(RecordType.OLD);
                 else
-                    file.deleteContents(FileType.NEW);
+                    file.deleteContents(RecordType.NEW);
 
                 // we sync the parent file descriptor between contents and log deletion
                 // to ensure there is a happens before edge between them
@@ -368,9 +585,9 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
                 return Collections.emptySet();
 
             if (file.committed())
-                return file.getTrackedFiles(FileType.OLD);
+                return file.getTrackedFiles(RecordType.OLD);
             else
-                return file.getTrackedFiles(FileType.NEW);
+                return file.getTrackedFiles(RecordType.NEW);
         }
 
         String getFileName()
@@ -441,7 +658,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
      **/
     void trackNew(SSTable table)
     {
-        if (!data.file.add(FileType.NEW, table))
+        if (!data.file.add(RecordType.NEW, table))
             throw new IllegalStateException(table + " is already tracked as new");
     }
 
@@ -450,7 +667,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
      */
     void untrackNew(SSTable table)
     {
-        data.file.remove(FileType.NEW, table);
+        data.file.remove(RecordType.NEW, table);
     }
 
     /**
@@ -459,15 +676,15 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
      */
     SSTableTidier obsoleted(SSTableReader reader)
     {
-        if (data.file.contains(FileType.NEW, reader))
+        if (data.file.contains(RecordType.NEW, reader))
         {
-            if (data.file.contains(FileType.OLD, reader))
+            if (data.file.contains(RecordType.OLD, reader))
                 throw new IllegalArgumentException();
 
             return new SSTableTidier(reader, true, this);
         }
 
-        if (!data.file.add(FileType.OLD, reader))
+        if (!data.file.add(RecordType.OLD, reader))
             throw new IllegalStateException();
 
         if (tracker != null)
@@ -770,7 +987,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
     private static void handleCorruptFile(CorruptTransactionLogException ex)
     {
-        logger.error("PANIC!!! - Failed to read corrupt transaction log {}, lines parsed so far {}", ex.file.file, ex.file.lines, ex);
+        logger.error("PANIC!!! - Failed to read corrupt transaction log {}, lines parsed so far {}", ex.file.file, ex.file.records, ex);
     }
 
     /**

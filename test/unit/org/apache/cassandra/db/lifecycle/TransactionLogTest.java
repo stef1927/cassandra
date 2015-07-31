@@ -23,6 +23,7 @@ import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
+import java.util.function.Consumer;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
@@ -407,7 +408,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         File tmpNewLog = copyToTmpFile(transactionLog.getData().getLogFile().file);
 
         //Fake a commit
-        transactionLog.getData().getLogFile().writeLine(TransactionLog.TransactionFile.COMMIT);
+        transactionLog.getData().getLogFile().commit();
 
         Set<File> tmpFiles = new HashSet<>(TransactionLog.getLogFiles(cfs.metadata));
         for (String p : sstableOld.getAllFilePaths())
@@ -518,7 +519,11 @@ public class TransactionLogTest extends AbstractTransactionalTest
         transactionLog.obsoleted(sstableOld);
 
         //Fake a commit and corrupt the crc
-        FileUtils.append(transactionLog.getData().getLogFile().file, String.format("%s[%d]", TransactionLog.TransactionFile.COMMIT, 12345678L));
+        FileUtils.append(transactionLog.getData().getLogFile().file,
+                         String.format("%s:[%d][%d]",
+                                       TransactionLog.TransactionFile.COMMIT,
+                                       System.currentTimeMillis(),
+                                       12345678L));
 
         //This should not remove any files
         TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
@@ -550,7 +555,10 @@ public class TransactionLogTest extends AbstractTransactionalTest
         transactionLog.obsoleted(sstableOld);
 
         //Fake a commit without a crc
-        FileUtils.append(transactionLog.getData().getLogFile().file, TransactionLog.TransactionFile.COMMIT);
+        FileUtils.append(transactionLog.getData().getLogFile().file,
+                         String.format("%s:[%d]",
+                                       TransactionLog.TransactionFile.COMMIT,
+                                       System.currentTimeMillis()));
 
         //This should not remove any files
         TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
@@ -563,6 +571,69 @@ public class TransactionLogTest extends AbstractTransactionalTest
         assertEquals(1, TransactionLog.getLogFiles(cfs.metadata).size());
 
         transactionLog.close();
+    }
+
+    @Test
+    public void testObsoletedDataFileUpdateTimeChanged() throws IOException
+    {
+        testObsoletedFilesChanged(sstable ->
+                                 {
+                                     // increase the modification time of the Data file
+                                     for (String filePath : sstable.getAllFilePaths())
+                                     {
+                                         if (filePath.endsWith("Data.db"))
+                                             assertTrue(new File(filePath).setLastModified(System.currentTimeMillis() + 60000)); //one minute later
+                                     }
+                                 });
+    }
+
+    @Test
+    public void testObsoletedDataFileContentChanged() throws IOException
+    {
+        testObsoletedFilesChanged(sstable ->
+                                  {
+                                      // increase the modification time of the Data file
+                                      for (String filePath : sstable.getAllFilePaths())
+                                      {
+                                          if (filePath.endsWith("Data.db"))
+                                              FileUtils.append(new File(filePath), "Blah blah blah....");
+                                      }
+                                  });
+    }
+
+    private void testObsoletedFilesChanged(Consumer<SSTableReader> modifier) throws IOException
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+        SSTableReader sstableOld = sstable(cfs, 0, 128);
+        SSTableReader sstableNew = sstable(cfs, 1, 128);
+
+        // simulate tracking sstables with a committed transaction except the checksum will be wrong
+        TransactionLog transactionLog = new TransactionLog(OperationType.COMPACTION, cfs.metadata);
+        assertNotNull(transactionLog);
+
+        transactionLog.trackNew(sstableNew);
+        TransactionLog.SSTableTidier tidier = transactionLog.obsoleted(sstableOld);
+
+        //modify the old sstable files
+        modifier.accept(sstableOld);
+
+        //Fake a commit
+        transactionLog.getData().getLogFile().commit();
+
+        //This should not remove the old files
+        TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
+
+        assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(), sstableOld.getAllFilePaths())));
+        assertFiles(transactionLog.getLogsFolder(), Collections.emptySet());
+
+        sstableOld.selfRef().release();
+        sstableNew.selfRef().release();
+
+        // cannot commit again, so let's abort
+        transactionLog.close();
+
+        assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(), sstableOld.getAllFilePaths())));
+        assertFiles(transactionLog.getLogsFolder(), Collections.emptySet());
     }
 
     @Test
