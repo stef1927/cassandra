@@ -58,7 +58,7 @@ public class CompactionMetadata extends MetadataComponent
         if (o == null || getClass() != o.getClass()) return false;
 
         //CompactionMetadata that = (CompactionMetadata) o;
-        return true; // what about the cardinality estimator ?
+        return true; // benedict, what about the cardinality estimator ?
     }
 
     @Override

@@ -505,41 +505,30 @@ public class TransactionLogTest extends AbstractTransactionalTest
     @Test
     public void testWrongChecksum() throws IOException
     {
-        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
-        SSTableReader sstableOld = sstable(cfs, 0, 128);
-        SSTableReader sstableNew = sstable(cfs, 1, 128);
-
-        File dataFolder = sstableOld.descriptor.directory;
-
-        // simulate tracking sstables with a committed transaction except the checksum will be wrong
-        TransactionLog transactionLog = new TransactionLog(OperationType.COMPACTION, cfs.metadata);
-        assertNotNull(transactionLog);
-
-        transactionLog.trackNew(sstableNew);
-        transactionLog.obsoleted(sstableOld);
-
-        //Fake a commit and corrupt the crc
-        FileUtils.append(transactionLog.getData().getLogFile().file,
-                         String.format("%s:[%d][%d]",
-                                       TransactionLog.TransactionFile.COMMIT,
-                                       System.currentTimeMillis(),
-                                       12345678L));
-
-        //This should not remove any files
-        TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
-
-        //This should not return any files
-        assertEquals(Collections.emptySet(), TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder));
-
-        assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(), sstableOld.getAllFilePaths())));
-        assertFiles(transactionLog.getLogsFolder(), Sets.newHashSet(transactionLog.getData().getLogFile().file.getPath()));
-        assertEquals(1, TransactionLog.getLogFiles(cfs.metadata).size());
-
-        transactionLog.close();
+        testChecksumProblem(t ->
+                            { // Fake a commit with invalid CRC
+                                FileUtils.append(t.getData().getLogFile().file,
+                                                 String.format("%s:[%d][%d]",
+                                                               TransactionLog.TransactionFile.COMMIT,
+                                                               System.currentTimeMillis(),
+                                                               12345678L));
+                            });
     }
 
     @Test
     public void testMissingChecksum() throws IOException
+    {
+        testChecksumProblem(t ->
+                            {
+                                // Fake a commit without a crc
+                                FileUtils.append(t.getData().getLogFile().file,
+                                                 String.format("%s:[%d]",
+                                                               TransactionLog.TransactionFile.COMMIT,
+                                                               System.currentTimeMillis()));
+                            });
+    }
+
+    private void testChecksumProblem(Consumer<TransactionLog> fakeCommit) throws IOException
     {
         ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
         SSTableReader sstableOld = sstable(cfs, 0, 128);
@@ -554,11 +543,8 @@ public class TransactionLogTest extends AbstractTransactionalTest
         transactionLog.trackNew(sstableNew);
         transactionLog.obsoleted(sstableOld);
 
-        //Fake a commit without a crc
-        FileUtils.append(transactionLog.getData().getLogFile().file,
-                         String.format("%s:[%d]",
-                                       TransactionLog.TransactionFile.COMMIT,
-                                       System.currentTimeMillis()));
+        //Fake a commit that will invalidate the crc
+        fakeCommit.accept(transactionLog);
 
         //This should not remove any files
         TransactionLog.removeUnfinishedLeftovers(cfs.metadata);

@@ -33,7 +33,6 @@ import java.util.zip.CRC32;
 import java.util.zip.Checksum;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.*;
 import org.apache.commons.lang3.StringUtils;
 
 import org.slf4j.Logger;
@@ -71,13 +70,17 @@ import org.apache.cassandra.utils.concurrent.Transactional;
  *
  * The transaction log file contains new and old sstables as follows:
  *
- * add: sstable-2
- * remove: sstable-1
+ * add:[sstable-2][CRC]
+ * remove:[sstable-1,max_update_time,file_crc][CRC]
  *
  * where sstable-2 is a new sstable to be retained if the transaction succeeds and sstable-1 is an old sstable to be
- * removed. Upon commit we add a final line to the log file:
+ * removed. CRC is an incremental CRC of the file content up to this point. For old sstable files we also log the
+ * last update time of all files for the sstable descriptor and a checksum of vital properties such as update times
+ * and file sizes.
  *
- * commit
+ * Upon commit we add a final line to the log file:
+ *
+ * commit:[commit_time][CRC]
  *
  * When the transaction log is cleaned-up by the TransactionTidier, which happens only after any old sstables have been
  * osoleted, then any sstable files for old sstables are removed before deleting the transaction log if the transaction
@@ -92,8 +95,8 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     private static final Logger logger = LoggerFactory.getLogger(TransactionLog.class);
 
     /**
-     * If the format of the lines in the transaction log is wrong or the CRC
-     * checks fail, then we throw this exception.
+     * If the format of the lines in the transaction log is wrong or the checksum
+     * does not match, then we throw this exception.
      */
     public static final class CorruptTransactionLogException extends RuntimeException
     {
@@ -107,7 +110,10 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     }
 
     /**
-     * The type of record to be logged, new files, old files or the commit flag.
+     * The type of record to be logged:
+     * - new files to be retained on commit
+     * - old files to be retained on abort
+     * - commit flag
      */
     public enum RecordType
     {
@@ -134,6 +140,10 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         }
     }
 
+    /**
+     * A log file record, each record is encoded in one line and has different
+     * content depending on the record type.
+     */
     final static class Record
     {
         public final RecordType type;
@@ -246,6 +256,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         @Override
         public int hashCode()
         {
+            // see comment in equals
             return Objects.hash(type, filePath);
         }
 
@@ -262,7 +273,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
             // we exclude on purpose checksum and update time as
             // we don't want duplicated records that differ only by
-            // checsum or update time
+            // checksum or update time
             return type.equals(other.type) &&
                    filePath.equals(other.filePath);
         }
@@ -275,7 +286,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     }
 
     /**
-     * The transaction log file.
+     * The transaction log file, which contains many records.
      */
     final static class TransactionFile
     {
@@ -381,6 +392,9 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         private void addRecord(Record record)
         {
+            // benedict: the checksum is not strictly speaking on the entire file content
+            // but only on the records, i.e. the checksums themseves are excluded, this
+            // should be OK IMO but just to bring it to your attention
             byte[] bytes = record.getBytes();
             checksum.update(bytes, 0, bytes.length);
 
@@ -397,7 +411,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             assert records.contains(record) : String.format("[%s] is not tracked by %s", record, file);
 
             records.remove(record);
-            delete(record);
+            deleteRecord(record);
         }
 
         public boolean contains(RecordType type, SSTable table)
@@ -405,24 +419,19 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             return records.contains(makeRecord(type, table));
         }
 
-        public void deleteContents(RecordType type)
+        public void deleteRecords(RecordType type)
         {
             assert file.exists() : String.format("Expected %s to exists", file);
             records.forEach(record ->
                             {
                                 if (record.type == type)
-                                    delete(record);
+                                    deleteRecord(record);
                             }
             );
             records.clear();
         }
 
-        public void delete()
-        {
-            TransactionLog.delete(file);
-        }
-
-        private void delete(Record record)
+        private void deleteRecord(Record record)
         {
             List<File> files = getTrackedFiles(record);
             if (files.isEmpty())
@@ -430,10 +439,10 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
             if (record.type == RecordType.OLD)
             {
-                // Paranoid sanity checks: we create another record by looking at files as they are
+                // Paranoid sanity checks: we create another record by looking at the files as they are
                 // on disk right now, if either the last update time or the checksum do not match
-                // what we save when the table was obsoleted, it means something went horribly wrong:
-                // either the file system is corrupt or the user has overwrittent the files, so we
+                // what we saved when the table was obsoleted, it means something went horribly wrong:
+                // either the file system is corrupt or the user has overwritten the files, so we
                 // log a panic and skip deleting this record files
                 Record currentRecord = Record.makeOld(record.filePath, files);
                 if (record.updateTime != currentRecord.updateTime)
@@ -454,8 +463,8 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
                     return;
                 }
 
-                // sort them in ascending order of last modified so that they are deleted from olest to newest
-                // benedit: why is this necessary?
+                // sort them in ascending order of last modified so that they are deleted from oldest to newest
+                // benedit: I did not undertand why this is necessary...
                 files.sort((f1, f2) -> Long.compare(f1.lastModified(), f2.lastModified()));
             }
 
@@ -484,6 +493,11 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             }));
         }
 
+        public void delete()
+        {
+            TransactionLog.delete(file);
+        }
+
         public boolean exists()
         {
             return file.exists();
@@ -491,8 +505,8 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     }
 
     /**
-     * We split the transaction data from the behavior because we need
-     * to reconstruct any left-overs and clean them up, as well as work
+     * We split the transaction data from TransactionLog that implements the behavior
+     * because we need to reconstruct any left-overs and clean them up, as well as work
      * out which files are temporary. So for these cases we don't want the full
      * transactional behavior, plus it's handy for the TransactionTidier.
      */
@@ -524,9 +538,23 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             this.folderDescriptor = CLibrary.tryOpenDirectory(folder.getPath());
         }
 
-        public void readLogFile()
+        public Throwable readLogFile(Throwable accumulate)
         {
-            file.readRecords();
+            try
+            {
+                file.readRecords();
+            }
+            catch (CorruptTransactionLogException ex)
+            {
+                logger.error("PANIC!!! - Failed to read corrupt transaction log {}, lines parsed so far {}", ex.file.file, ex.file.records, ex);
+                accumulate = merge(accumulate, ex);
+            }
+            catch (Throwable t)
+            {
+                accumulate = merge(accumulate, t);
+            }
+
+            return accumulate;
         }
 
         public void close()
@@ -559,9 +587,9 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             try
             {
                 if (file.committed())
-                    file.deleteContents(RecordType.OLD);
+                    file.deleteRecords(RecordType.OLD);
                 else
-                    file.deleteContents(RecordType.NEW);
+                    file.deleteRecords(RecordType.NEW);
 
                 // we sync the parent file descriptor between contents and log deletion
                 // to ensure there is a happens before edge between them
@@ -745,7 +773,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
      * The transaction tidier.
      *
      * When the transaction reference is fully released we try to delete all the obsolete files
-     * depending on the transaction result.
+     * depending on the transaction result, as well as the transaction log file.
      */
     private static class TransactionTidier implements RefCounted.Tidy, Runnable
     {
@@ -914,11 +942,9 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
     /**
      * Called on startup to scan existing folders for any unfinished leftovers of
-     * operations that were ongoing when the process exited.
+     * operations that were ongoing when the process exited. Also called by the standalone
+     * sstableutil tool when the cleanup option is specified, @see StandaloneSSTableUtil.
      *
-     * We check if the new transaction file exists first, and if so we clean it up
-     * along with its contents, which includes the old file, else if only the old file exists
-     * it means the operation has completed and we only cleanup the old file with its contents.
      */
     static void removeUnfinishedLeftovers(CFMetaData metadata)
     {
@@ -934,12 +960,9 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             {
                 try (TransactionData data = TransactionData.make(log))
                 {
-                    data.readLogFile();
-                    accumulate = data.removeUnfinishedLeftovers(accumulate);
-                }
-                catch (CorruptTransactionLogException ex)
-                {
-                    handleCorruptFile(ex);
+                    accumulate = data.readLogFile(accumulate);
+                    if (accumulate == null)
+                        accumulate = data.removeUnfinishedLeftovers(accumulate);
                 }
             }
         }
@@ -969,25 +992,17 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             {
                 try(TransactionData data = TransactionData.make(log))
                 {
-                    data.readLogFile();
-                    ret.addAll(data.getTemporaryFiles()
-                                   .stream()
-                                   .filter(file -> FileUtils.isContained(folder, file))
-                                   .collect(Collectors.toSet()));
-                }
-                catch(CorruptTransactionLogException ex)
-                {
-                    handleCorruptFile(ex);
+                    Throwable err = data.readLogFile(null);
+                    if (err == null)
+                        ret.addAll(data.getTemporaryFiles()
+                                       .stream()
+                                       .filter(file -> FileUtils.isContained(folder, file))
+                                       .collect(Collectors.toSet()));
                 }
             }
         }
 
         return ret;
-    }
-
-    private static void handleCorruptFile(CorruptTransactionLogException ex)
-    {
-        logger.error("PANIC!!! - Failed to read corrupt transaction log {}, lines parsed so far {}", ex.file.file, ex.file.records, ex);
     }
 
     /**
