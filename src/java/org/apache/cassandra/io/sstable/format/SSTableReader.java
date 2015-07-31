@@ -1903,22 +1903,6 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
              : (sstableMetadata.totalRows == 0 ? 0 : (int)(sstableMetadata.totalColumnsSet / sstableMetadata.totalRows));
     }
 
-    public Set<Integer> getAncestors()
-    {
-        try
-        {
-            CompactionMetadata compactionMetadata = (CompactionMetadata) descriptor.getMetadataSerializer().deserialize(descriptor, MetadataType.COMPACTION);
-            if (compactionMetadata != null)
-                return compactionMetadata.ancestors;
-            return Collections.emptySet();
-        }
-        catch (IOException e)
-        {
-            SSTableReader.logOpenException(descriptor, e);
-            return Collections.emptySet();
-        }
-    }
-
     public int getSSTableLevel()
     {
         return sstableMetadata.sstableLevel;

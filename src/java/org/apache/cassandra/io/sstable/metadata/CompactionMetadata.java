@@ -39,13 +39,10 @@ public class CompactionMetadata extends MetadataComponent
 {
     public static final IMetadataComponentSerializer serializer = new CompactionMetadataSerializer();
 
-    public final Set<Integer> ancestors;
-
     public final ICardinality cardinalityEstimator;
 
-    public CompactionMetadata(Set<Integer> ancestors, ICardinality cardinalityEstimator)
+    public CompactionMetadata(ICardinality cardinalityEstimator)
     {
-        this.ancestors = ancestors;
         this.cardinalityEstimator = cardinalityEstimator;
     }
 
@@ -60,14 +57,14 @@ public class CompactionMetadata extends MetadataComponent
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
 
-        CompactionMetadata that = (CompactionMetadata) o;
-        return ancestors == null ? that.ancestors == null : ancestors.equals(that.ancestors);
+        //CompactionMetadata that = (CompactionMetadata) o;
+        return true; // what about the cardinality estimator ?
     }
 
     @Override
     public int hashCode()
     {
-        return ancestors != null ? ancestors.hashCode() : 0;
+        return 0;
     }
 
     public static class CompactionMetadataSerializer implements IMetadataComponentSerializer<CompactionMetadata>
@@ -75,9 +72,6 @@ public class CompactionMetadata extends MetadataComponent
         public int serializedSize(CompactionMetadata component) throws IOException
         {
             int size = 0;
-            size += TypeSizes.sizeof(component.ancestors.size());
-            for (int g : component.ancestors)
-                size += TypeSizes.sizeof(g);
             byte[] serializedCardinality = component.cardinalityEstimator.getBytes();
             size += TypeSizes.sizeof(serializedCardinality.length) + serializedCardinality.length;
             return size;
@@ -85,20 +79,13 @@ public class CompactionMetadata extends MetadataComponent
 
         public void serialize(CompactionMetadata component, DataOutputPlus out) throws IOException
         {
-            out.writeInt(component.ancestors.size());
-            for (int g : component.ancestors)
-                out.writeInt(g);
             ByteBufferUtil.writeWithLength(component.cardinalityEstimator.getBytes(), out);
         }
 
         public CompactionMetadata deserialize(Version version, DataInputPlus in) throws IOException
         {
-            int nbAncestors = in.readInt();
-            Set<Integer> ancestors = new HashSet<>(nbAncestors);
-            for (int i = 0; i < nbAncestors; i++)
-                ancestors.add(in.readInt());
             ICardinality cardinality = HyperLogLogPlus.Builder.build(ByteBufferUtil.readBytes(in, in.readInt()));
-            return new CompactionMetadata(ancestors, cardinality);
+            return new CompactionMetadata(cardinality);
         }
     }
 }

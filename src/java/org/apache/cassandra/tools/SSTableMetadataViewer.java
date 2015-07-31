@@ -78,7 +78,6 @@ public class SSTableMetadataViewer
                 }
                 if (compaction != null)
                 {
-                    out.printf("Ancestors: %s%n", compaction.ancestors.toString());
                     out.printf("Estimated cardinality: %s%n", compaction.cardinalityEstimator.cardinality());
 
                 }
