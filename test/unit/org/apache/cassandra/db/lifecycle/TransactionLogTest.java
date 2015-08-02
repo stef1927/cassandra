@@ -21,8 +21,11 @@ import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import com.google.common.collect.ImmutableSet;
@@ -503,32 +506,101 @@ public class TransactionLogTest extends AbstractTransactionalTest
     }
 
     @Test
-    public void testWrongChecksum() throws IOException
+    public void testWrongChecksumLastLine() throws IOException
     {
-        testChecksumProblem(t ->
-                            { // Fake a commit with invalid CRC
-                                FileUtils.append(t.getData().getLogFile().file,
-                                                 String.format("%s:[%d][%d]",
-                                                               TransactionLog.TransactionFile.COMMIT,
-                                                               System.currentTimeMillis(),
-                                                               12345678L));
-                            });
+        testCorruptRecord((t, s) ->
+                          { // Fake a commit with invalid checksum
+                              FileUtils.append(t.getData().getLogFile().file,
+                                               String.format("commit:[%d,0,0][%d]",
+                                                             System.currentTimeMillis(),
+                                                             12345678L));
+                          },
+                          true);
     }
 
     @Test
-    public void testMissingChecksum() throws IOException
+    public void testWrongChecksumSecondFromLastLine() throws IOException
     {
-        testChecksumProblem(t ->
-                            {
-                                // Fake a commit without a crc
-                                FileUtils.append(t.getData().getLogFile().file,
-                                                 String.format("%s:[%d]",
-                                                               TransactionLog.TransactionFile.COMMIT,
-                                                               System.currentTimeMillis()));
-                            });
+        testCorruptRecord((t, s) ->
+                          { // Fake two lines with invalid checksum
+                              FileUtils.append(t.getData().getLogFile().file,
+                                               String.format("add:[ma-3-big,%d,4][%d]",
+                                                             System.currentTimeMillis(),
+                                                             12345678L));
+
+                              FileUtils.append(t.getData().getLogFile().file,
+                                               String.format("commit:[%d,0,0][%d]",
+                                                             System.currentTimeMillis(),
+                                                             12345678L));
+                          },
+                          false);
     }
 
-    private void testChecksumProblem(Consumer<TransactionLog> fakeCommit) throws IOException
+    @Test
+    public void testWrongChecksumLastLineMissingFile() throws IOException
+    {
+        testCorruptRecord((t, s) ->
+                          { // Fake a commit with invalid checksum and also delete one of the old files
+                              for (String filePath : s.getAllFilePaths())
+                              {
+                                  if (filePath.endsWith("Data.db"))
+                                  {
+                                      FileUtils.delete(filePath);
+                                      break;
+                                  }
+                              }
+
+                              FileUtils.append(t.getData().getLogFile().file,
+                                               String.format("commit:[%d,0,0][%d]",
+                                                             System.currentTimeMillis(),
+                                                             12345678L));
+                          },
+                          false);
+    }
+
+    @Test
+    public void testWrongChecksumLastLineWrongRecordFormat() throws IOException
+    {
+        testCorruptRecord((t, s) ->
+                          { // Fake a commit with invalid checksum and a wrong record format (extra spaces)
+                              FileUtils.append(t.getData().getLogFile().file,
+                                               String.format("commit:[%d ,0 ,0 ][%d]",
+                                                             System.currentTimeMillis(),
+                                                             12345678L));
+                          },
+                          true);
+    }
+
+    @Test
+    public void testMissingChecksumLastLine() throws IOException
+    {
+        testCorruptRecord((t, s) ->
+                          {
+                              // Fake a commit without a checksum
+                              FileUtils.append(t.getData().getLogFile().file,
+                                               String.format("commit:[%d,0,0]",
+                                                             System.currentTimeMillis()));
+                          },
+                          true);
+    }
+
+    @Test
+    public void testMissingChecksumSecondFromLastLine() throws IOException
+    {
+        testCorruptRecord((t, s) ->
+                          { // Fake two lines without a checksum
+                              FileUtils.append(t.getData().getLogFile().file,
+                                               String.format("add:[ma-3-big,%d,4]",
+                                                             System.currentTimeMillis()));
+
+                              FileUtils.append(t.getData().getLogFile().file,
+                                               String.format("commit:[%d,0,0]",
+                                                             System.currentTimeMillis()));
+                          },
+                          false);
+    }
+
+    private void testCorruptRecord(BiConsumer<TransactionLog, SSTableReader> modifier, boolean isRecoverable) throws IOException
     {
         ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
         SSTableReader sstableOld = sstable(cfs, 0, 128);
@@ -543,18 +615,37 @@ public class TransactionLogTest extends AbstractTransactionalTest
         transactionLog.trackNew(sstableNew);
         transactionLog.obsoleted(sstableOld);
 
-        //Fake a commit that will invalidate the crc
-        fakeCommit.accept(transactionLog);
+        //Modify the transaction log in some way
+        modifier.accept(transactionLog, sstableOld);
 
-        //This should not remove any files
-        TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
+        if (isRecoverable)
+        { // the corruption is recoverable, we assume there is a commit record
 
-        //This should not return any files
-        assertEquals(Collections.emptySet(), TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder));
+            //This should return the old files and the tx log
+            assertFiles(Iterables.concat(sstableOld.getAllFilePaths(), Collections.singleton(transactionLog.getData().getFileName())),
+                        TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder));
 
-        assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(), sstableOld.getAllFilePaths())));
-        assertFiles(transactionLog.getLogsFolder(), Sets.newHashSet(transactionLog.getData().getLogFile().file.getPath()));
-        assertEquals(1, TransactionLog.getLogFiles(cfs.metadata).size());
+            //This should remove old files
+            TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
+
+            assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(sstableNew.getAllFilePaths()));
+            assertFiles(transactionLog.getLogsFolder(), Collections.emptySet());
+            assertEquals(0, TransactionLog.getLogFiles(cfs.metadata).size());
+        }
+        else
+        { // if an intermediate line was modified, we cannot tell,
+          // it should just throw and handle the exception with a log message
+
+            //This should not return any files
+            assertEquals(Collections.emptySet(), TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder));
+
+            //This should not remove any files
+            TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
+
+            assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(), sstableOld.getAllFilePaths())), true);
+            assertFiles(transactionLog.getLogsFolder(), Sets.newHashSet(transactionLog.getData().getLogFile().file.getPath()));
+            assertEquals(1, TransactionLog.getLogFiles(cfs.metadata).size());
+        }
 
         transactionLog.close();
     }
@@ -571,20 +662,6 @@ public class TransactionLogTest extends AbstractTransactionalTest
                                              assertTrue(new File(filePath).setLastModified(System.currentTimeMillis() + 60000)); //one minute later
                                      }
                                  });
-    }
-
-    @Test
-    public void testObsoletedDataFileContentChanged() throws IOException
-    {
-        testObsoletedFilesChanged(sstable ->
-                                  {
-                                      // increase the modification time of the Data file
-                                      for (String filePath : sstable.getAllFilePaths())
-                                      {
-                                          if (filePath.endsWith("Data.db"))
-                                              FileUtils.append(new File(filePath), "Blah blah blah....");
-                                      }
-                                  });
     }
 
     private void testObsoletedFilesChanged(Consumer<SSTableReader> modifier) throws IOException
@@ -610,7 +687,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
 
         assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(), sstableOld.getAllFilePaths())));
-        assertFiles(transactionLog.getLogsFolder(), Collections.emptySet());
+        assertFiles(transactionLog.getLogsFolder(), Sets.newHashSet(transactionLog.getData().getLogFile().file.getPath()));
 
         sstableOld.selfRef().release();
         sstableNew.selfRef().release();
@@ -619,7 +696,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         transactionLog.close();
 
         assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(), sstableOld.getAllFilePaths())));
-        assertFiles(transactionLog.getLogsFolder(), Collections.emptySet());
+        assertFiles(transactionLog.getLogsFolder(), Sets.newHashSet(transactionLog.getData().getLogFile().file.getPath()));
     }
 
     @Test
@@ -685,6 +762,11 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
     private static void assertFiles(String dirPath, Set<String> expectedFiles)
     {
+        assertFiles(dirPath, expectedFiles, false);
+    }
+
+    private static void assertFiles(String dirPath, Set<String> expectedFiles, boolean excludeNonExistingFiles)
+    {
         File dir = new File(dirPath);
         for (File file : dir.listFiles())
         {
@@ -694,6 +776,28 @@ public class TransactionLogTest extends AbstractTransactionalTest
             String filePath = file.getPath();
             assertTrue(filePath, expectedFiles.contains(filePath));
             expectedFiles.remove(filePath);
+        }
+
+        if (excludeNonExistingFiles)
+        {
+            for (String filePath : expectedFiles)
+            {
+                File file = new File(filePath);
+                if (!file.exists())
+                    expectedFiles.remove(filePath);
+            }
+        }
+
+        assertTrue(expectedFiles.isEmpty());
+    }
+
+    private static void assertFiles(Iterable<String> filePaths, Set<File> expectedFiles)
+    {
+        for (String filePath : filePaths)
+        {
+            File file = new File(filePath);
+            assertTrue(filePath, expectedFiles.contains(file));
+            expectedFiles.remove(file);
         }
 
         assertTrue(expectedFiles.isEmpty());

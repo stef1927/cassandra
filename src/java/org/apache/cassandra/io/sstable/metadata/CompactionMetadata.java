@@ -18,8 +18,6 @@
 package org.apache.cassandra.io.sstable.metadata;
 
 import java.io.IOException;
-import java.util.HashSet;
-import java.util.Set;
 
 import com.clearspring.analytics.stream.cardinality.HyperLogLogPlus;
 import com.clearspring.analytics.stream.cardinality.ICardinality;
@@ -54,27 +52,30 @@ public class CompactionMetadata extends MetadataComponent
     @Override
     public boolean equals(Object o)
     {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o)
+            return true;
 
-        //CompactionMetadata that = (CompactionMetadata) o;
-        return true; // benedict, what about the cardinality estimator ?
+        if (o == null || getClass() != o.getClass())
+            return false;
+
+        // keeping equals and hashCode as all classes inheriting from MetadataComponent
+        // implement them but we have really nothing to compare
+        return true;
     }
 
     @Override
     public int hashCode()
     {
-        return 0;
+        // see comment in equals
+        return 31;
     }
 
     public static class CompactionMetadataSerializer implements IMetadataComponentSerializer<CompactionMetadata>
     {
         public int serializedSize(CompactionMetadata component) throws IOException
         {
-            int size = 0;
             byte[] serializedCardinality = component.cardinalityEstimator.getBytes();
-            size += TypeSizes.sizeof(serializedCardinality.length) + serializedCardinality.length;
-            return size;
+            return TypeSizes.sizeof(serializedCardinality.length) + serializedCardinality.length;
         }
 
         public void serialize(CompactionMetadata component, DataOutputPlus out) throws IOException
@@ -84,6 +85,11 @@ public class CompactionMetadata extends MetadataComponent
 
         public CompactionMetadata deserialize(Version version, DataInputPlus in) throws IOException
         {
+            if (version.hasCompactionAncestors())
+            { // skip ancestors
+                int nbAncestors = in.readInt();
+                in.skipBytes(nbAncestors * TypeSizes.sizeof(nbAncestors));
+            }
             ICardinality cardinality = HyperLogLogPlus.Builder.build(ByteBufferUtil.readBytes(in, in.readInt()));
             return new CompactionMetadata(cardinality);
         }

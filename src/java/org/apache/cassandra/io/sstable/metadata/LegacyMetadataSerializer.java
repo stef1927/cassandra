@@ -23,6 +23,7 @@ import java.util.*;
 
 import com.google.common.collect.Maps;
 
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.db.commitlog.ReplayPosition;
 import org.apache.cassandra.io.sstable.Component;
 import org.apache.cassandra.io.sstable.Descriptor;
@@ -97,9 +98,8 @@ public class LegacyMetadataSerializer extends MetadataSerializer
                 double bloomFilterFPChance = in.readDouble();
                 double compressionRatio = in.readDouble();
                 String partitioner = in.readUTF();
-                int nbAncestors = in.readInt();
-                for (int i = 0; i < nbAncestors; i++)
-                    in.readInt(); // ancerstors deprecated, just skip
+                int nbAncestors = in.readInt(); //skip compaction ancestors
+                in.skipBytes(nbAncestors * TypeSizes.sizeof(nbAncestors));
                 StreamingHistogram tombstoneHistogram = StreamingHistogram.serializer.deserialize(in);
                 int sstableLevel = 0;
                 if (in.available() > 0)

@@ -79,7 +79,6 @@ public class SSTableMetadataViewer
                 if (compaction != null)
                 {
                     out.printf("Estimated cardinality: %s%n", compaction.cardinalityEstimator.cardinality());
-
                 }
             }
             else
