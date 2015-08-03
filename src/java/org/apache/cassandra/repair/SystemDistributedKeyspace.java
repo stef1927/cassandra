@@ -66,8 +66,7 @@ public final class SystemDistributedKeyspace
                      + "columnfamily_name text,"
                      + "id timeuuid,"
                      + "parent_id timeuuid,"
-                     + "range_begin text,"
-                     + "range_end text,"
+                     + "ranges set<text>,"
                      + "coordinator inet,"
                      + "participants set<inet>,"
                      + "exception_message text,"
@@ -130,7 +129,7 @@ public final class SystemDistributedKeyspace
         processSilent(fmtQuery);
     }
 
-    public static void startRepairs(UUID id, UUID parent_id, String keyspaceName, String[] cfnames, Range<Token> range, Iterable<InetAddress> endpoints)
+    public static void startRepairs(UUID id, UUID parent_id, String keyspaceName, String[] cfnames, Collection<Range<Token>> ranges, Iterable<InetAddress> endpoints)
     {
         String coordinator = FBUtilities.getBroadcastAddress().getHostAddress();
         Set<String> participants = Sets.newHashSet(coordinator);
@@ -139,7 +138,7 @@ public final class SystemDistributedKeyspace
             participants.add(endpoint.getHostAddress());
 
         String query =
-                "INSERT INTO %s.%s (keyspace_name, columnfamily_name, id, parent_id, range_begin, range_end, coordinator, participants, status, started_at) " +
+                "INSERT INTO %s.%s (keyspace_name, columnfamily_name, id, parent_id, ranges, coordinator, participants, status, started_at) " +
                         "VALUES (   '%s',          '%s',              %s, %s,        '%s',        '%s',      '%s',        { '%s' },     '%s',   toTimestamp(now()))";
 
         for (String cfname : cfnames)
@@ -149,8 +148,7 @@ public final class SystemDistributedKeyspace
                                           cfname,
                                           id.toString(),
                                           parent_id.toString(),
-                                          range.left.toString(),
-                                          range.right.toString(),
+                                          Joiner.on("', '").join(ranges),
                                           coordinator,
                                           Joiner.on("', '").join(participants),
                     RepairState.STARTED.toString());
