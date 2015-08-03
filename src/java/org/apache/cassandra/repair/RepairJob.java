@@ -60,7 +60,7 @@ public class RepairJob extends AbstractFuture<RepairResult> implements Runnable
                      ListeningExecutorService taskExecutor)
     {
         this.session = session;
-        this.desc = new RepairJobDesc(session.parentRepairSession, session.getId(), session.keyspace, columnFamily, session.getRange());
+        this.desc = new RepairJobDesc(session.parentRepairSession, session.getId(), session.keyspace, columnFamily, session.getRanges());
         this.repairedAt = repairedAt;
         this.taskExecutor = taskExecutor;
         this.parallelismDegree = parallelismDegree;

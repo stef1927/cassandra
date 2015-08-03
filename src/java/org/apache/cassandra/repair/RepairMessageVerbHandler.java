@@ -18,7 +18,7 @@
 package org.apache.cassandra.repair;
 
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -84,14 +84,14 @@ public class RepairMessageVerbHandler implements IVerbHandler<RepairMessage>
                 case SNAPSHOT:
                     logger.debug("Snapshotting {}", desc);
                     ColumnFamilyStore cfs = Keyspace.open(desc.keyspace).getColumnFamilyStore(desc.columnFamily);
-                    final Range<Token> repairingRange = desc.range;
+                    final Collection<Range<Token>> repairingRange = desc.ranges;
                     Set<SSTableReader> snapshottedSSSTables = cfs.snapshot(desc.sessionId.toString(), new Predicate<SSTableReader>()
                     {
                         public boolean apply(SSTableReader sstable)
                         {
                             return sstable != null &&
                                     !(sstable.partitioner instanceof LocalPartitioner) && // exclude SSTables from 2i
-                                    new Bounds<>(sstable.first.getToken(), sstable.last.getToken()).intersects(Collections.singleton(repairingRange));
+                                    new Bounds<>(sstable.first.getToken(), sstable.last.getToken()).intersects(repairingRange);
                         }
                     });
                     Set<SSTableReader> currentlyRepairing = ActiveRepairService.instance.currentlyRepairing(cfs.metadata.cfId, desc.parentSessionId);

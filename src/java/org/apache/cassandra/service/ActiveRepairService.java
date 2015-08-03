@@ -104,7 +104,7 @@ public class ActiveRepairService
      * @return Future for asynchronous call or null if there is no need to repair
      */
     public RepairSession submitRepairSession(UUID parentRepairSession,
-                                             Range<Token> range,
+                                             Collection<Range<Token>> range,
                                              String keyspace,
                                              RepairParallelism parallelismDegree,
                                              Set<InetAddress> endpoints,
@@ -363,7 +363,7 @@ public class ActiveRepairService
         {
             case VALIDATION_COMPLETE:
                 ValidationComplete validation = (ValidationComplete) message;
-                session.validationComplete(desc, endpoint, validation.tree);
+                session.validationComplete(desc, endpoint, validation.trees);
                 break;
             case SYNC_COMPLETE:
                 // one of replica is synced.
