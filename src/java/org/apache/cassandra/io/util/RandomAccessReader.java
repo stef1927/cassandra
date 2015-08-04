@@ -19,11 +19,11 @@ package org.apache.cassandra.io.util;
 
 import java.io.*;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.ReadableByteChannel;
 import java.util.Map;
 import java.util.TreeMap;
 
-import com.google.common.collect.Maps;
 import com.google.common.primitives.Ints;
 import com.google.common.util.concurrent.RateLimiter;
 
@@ -32,14 +32,9 @@ import org.apache.cassandra.io.compress.BufferType;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.memory.BufferPool;
 
-public class RandomAccessReader extends AbstractDataInput implements FileDataInput
+public class RandomAccessReader extends NIODataInputStream implements FileDataInput
 {
     public static final int DEFAULT_BUFFER_SIZE = 4096;
-
-    // the IO channel to the file, we do not own a reference to this due to
-    // performance reasons (CASSANDRA-9379) so it's up to the owner of the RAR to
-    // ensure that the channel stays open and that it is closed afterwards
-    protected final Channel channel;
 
     // optional mmapped buffers for the channel, the key is the channel position
     protected final TreeMap<Long, ByteBuffer> segments;
@@ -58,9 +53,6 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     // the buffer type for buffered readers
     private final BufferType bufferType;
 
-    // buffer which will cache file blocks or mirror mmapped segments
-    protected ByteBuffer buffer;
-
     // when this is true a call to releaseBuffer will release the buffer
     // else we assume the buffer is a mmapped segment
     private boolean hasAllocatedBuffer;
@@ -73,10 +65,11 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
 
     protected RandomAccessReader(Builder builder)
     {
-        this.channel = builder.channel;
+        super(builder.channel);
+
         this.segments = builder.segments;
         this.limiter = builder.limiter;
-        this.fileLength = builder.overrideLength <= 0 ? channel.size() : builder.overrideLength;
+        this.fileLength = builder.overrideLength <= 0 ? builder.channel.size() : builder.overrideLength;
         this.bufferSize = getBufferSize(builder.bufferSize);
         this.bufferType = builder.bufferType;
 
@@ -108,7 +101,7 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     protected ByteBuffer allocateBuffer(int size)
     {
         hasAllocatedBuffer = true;
-        return BufferPool.get(size, bufferType);
+        return BufferPool.get(size, bufferType).order(ByteOrder.BIG_ENDIAN);
     }
 
     protected void releaseBuffer()
@@ -122,6 +115,11 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         buffer = null;
     }
 
+    protected Channel fileChannel()
+    {
+        return (Channel) channel;
+    }
+
     /**
      * Read data from file starting from current currentOffset to populate buffer.
      */
@@ -130,14 +128,12 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         if (limiter != null)
             limiter.acquire(buffer.capacity());
 
-        if (!segments.isEmpty())
-        {
-            reBufferMmap();
-        }
-        else
-        {
+        if (segments.isEmpty())
             reBufferStandard();
-        }
+        else
+            reBufferMmap();
+
+        assert buffer.order() == ByteOrder.BIG_ENDIAN : "Buffer must have BIG ENDIAN byte ordering";
     }
 
     protected void reBufferStandard()
@@ -157,7 +153,7 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         buffer.limit((int)(upperLimit - position));
         while (buffer.hasRemaining() && limit < upperLimit)
         {
-            int n = channel.read(buffer, position);
+            int n = fileChannel().read(buffer, position);
             if (n < 0)
                 break;
             position += n;
@@ -207,12 +203,19 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
 
     public String getPath()
     {
-        return channel.filePath();
+        return fileChannel().filePath();
     }
 
-    public void reset()
+    @Override
+    public void reset() throws IOException
     {
         seek(markedPointer);
+    }
+
+    @Override
+    public boolean markSupported()
+    {
+        return true;
     }
 
     public long bytesPastMark()
@@ -256,6 +259,12 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
     }
 
     @Override
+    public int available() throws IOException
+    {
+        return Ints.checkedCast(bytesRemaining());
+    }
+
+    @Override
     public void close()
     {
 	    //make idempotent
@@ -264,12 +273,15 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
 
         bufferOffset += buffer.position();
         releaseBuffer();
+
+        //For performance reasons we don't keep a reference to the file
+        //channel so we don't close it, hence super.close() is not called.
     }
 
     @Override
     public String toString()
     {
-        return getClass().getSimpleName() + "(" + "filePath='" + channel + "')";
+        return getClass().getSimpleName() + "(" + "filePath='" + fileChannel().filePath() + "')";
     }
 
     /**
@@ -316,9 +328,10 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         assert current() == newPosition;
     }
 
+
     // -1 will be returned if there is nothing to read; higher-level methods like readInt
     // or readFully (from RandomAccessFile) will throw EOFException but this should not
-    public int read()
+    public int read() throws IOException
     {
         if (buffer == null)
             throw new AssertionError("Attempted to read from closed RAR");
@@ -326,22 +339,13 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         if (isEOF())
             return -1; // required by RandomAccessFile
 
-        if (!buffer.hasRemaining())
-            reBuffer();
-
-        return (int)buffer.get() & 0xff;
-    }
-
-    @Override
-    public int read(byte[] buffer)
-    {
-        return read(buffer, 0, buffer.length);
+       return super.read();
     }
 
     @Override
     // -1 will be returned if there is nothing to read; higher-level methods like readInt
     // or readFully (from RandomAccessFile) will throw EOFException but this should not
-    public int read(byte[] buff, int offset, int length)
+    public int read(byte[] buff, int offset, int length) throws IOException
     {
         if (buffer == null)
             throw new IllegalStateException("Attempted to read from closed RAR");
@@ -352,13 +356,9 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         if (isEOF())
             return -1;
 
-        if (!buffer.hasRemaining())
-            reBuffer();
-
-        int toCopy = Math.min(length, buffer.remaining());
-        buffer.get(buff, offset, toCopy);
-        return toCopy;
+        return super.read(buff, offset, length);
     }
+
 
     public ByteBuffer readBytes(int length) throws EOFException
     {
@@ -391,6 +391,50 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         }
     }
 
+    /**
+     * Reads a line of text form the current position in this file. A line is
+     * represented by zero or more characters followed by {@code '\n'}, {@code
+     * '\r'}, {@code "\r\n"} or the end of file marker. The string does not
+     * include the line terminating sequence.
+     * <p>
+     * Blocks until a line terminating sequence has been read, the end of the
+     * file is reached or an exception is thrown.
+     *
+     * @return the contents of the line or {@code null} if no characters have
+     *         been read before the end of the file has been reached.
+     * @throws IOException
+     *             if this file is closed or another I/O error occurs.
+     */
+    public final String readLine() throws IOException {
+        StringBuilder line = new StringBuilder(80); // Typical line length
+        boolean foundTerminator = false;
+        long unreadPosition = -1;
+        while (true) {
+            int nextByte = read();
+            switch (nextByte) {
+                case -1:
+                    return line.length() != 0 ? line.toString() : null;
+                case (byte) '\r':
+                    if (foundTerminator) {
+                        seek(unreadPosition);
+                        return line.toString();
+                    }
+                    foundTerminator = true;
+                    /* Have to be able to peek ahead one byte */
+                    unreadPosition = getPosition();
+                    break;
+                case (byte) '\n':
+                    return line.toString();
+                default:
+                    if (foundTerminator) {
+                        seek(unreadPosition);
+                        return line.toString();
+                    }
+                    line.append((char) nextByte);
+            }
+        }
+    }
+
     public long length()
     {
         return fileLength;
@@ -406,15 +450,13 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
         return length();
     }
 
-    public interface Channel
+    public interface Channel extends ReadableByteChannel
     {
         String filePath();
 
         int read(ByteBuffer buffer, long position);
 
         long size();
-
-        void close();
     }
 
     public static class EmptyChannel implements Channel
@@ -433,6 +475,11 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
             return filePath;
         }
 
+        public int read(ByteBuffer dst) throws IOException
+        {
+            throw new IllegalStateException("Unsupported operation");
+        }
+
         public int read(ByteBuffer buffer, long position)
         {
             throw new IllegalStateException("Unsupported operation at position " + position);
@@ -443,10 +490,12 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
             return size;
         }
 
-        public void close()
+        public boolean isOpen()
         {
-
+            return false;
         }
+
+        public void close() { }
     }
 
     public static class Builder
@@ -542,7 +591,7 @@ public class RandomAccessReader extends AbstractDataInput implements FileDataInp
             }
             finally
             {
-                channel.close();
+                FileUtils.closeQuietly(channel);
             }
         }
     }

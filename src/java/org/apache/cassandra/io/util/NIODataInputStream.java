@@ -27,6 +27,7 @@ import java.nio.ByteOrder;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.SeekableByteChannel;
 
+import net.nicoulaj.compilecommand.annotations.DontInline;
 import org.apache.cassandra.utils.vint.VIntCoding;
 
 import com.google.common.base.Preconditions;
@@ -45,8 +46,8 @@ import com.google.common.base.Preconditions;
  */
 public class NIODataInputStream extends InputStream implements DataInputPlus, Closeable
 {
-    protected final ReadableByteChannel rbc;
-    protected final ByteBuffer buf;
+    protected final ReadableByteChannel channel;
+    protected ByteBuffer buffer;
 
     /*
      *  Used when wrapping a fixed buffer of data instead of a channel. Should never attempt
@@ -74,25 +75,33 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
 
     };
 
-    public NIODataInputStream(ReadableByteChannel rbc, int bufferSize)
+    private static ByteBuffer makeBuffer(int bufferSize)
     {
-        Preconditions.checkNotNull(rbc);
         Preconditions.checkArgument(bufferSize >= 9, "Buffer size must be large enough to accomadate a varint");
-        this.rbc = rbc;
-        this.buf = ByteBuffer.allocateDirect(bufferSize);
-        this.buf.position(0);
-        this.buf.limit(0);
+        ByteBuffer buffer = ByteBuffer.allocateDirect(bufferSize);
+        buffer.position(0);
+        buffer.limit(0);
+
+        return buffer;
     }
 
-    protected NIODataInputStream(ByteBuffer buf, boolean duplicate)
+    public NIODataInputStream(ReadableByteChannel channel, ByteBuffer buffer)
     {
-        Preconditions.checkNotNull(buf);
-        if (duplicate)
-            this.buf = buf.duplicate();
-        else
-            this.buf = buf;
+        Preconditions.checkNotNull(channel);
+        Preconditions.checkArgument(buffer == null || buffer.order() == ByteOrder.BIG_ENDIAN, "Buffer must have BIG ENDIAN byte ordering");
 
-        this.rbc = emptyReadableByteChannel;
+        this.channel = channel;
+        this.buffer = buffer;
+    }
+
+    public NIODataInputStream(ReadableByteChannel channel, int bufferSize)
+    {
+        this(channel, makeBuffer(bufferSize));
+    }
+
+    protected NIODataInputStream(ByteBuffer buffer, boolean duplicate)
+    {
+        this(emptyReadableByteChannel, duplicate ? buffer.duplicate() : buffer);
     }
 
     /*
@@ -101,7 +110,12 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
      */
     protected NIODataInputStream(ByteBuffer buf)
     {
-        this(buf, false);
+        this(emptyReadableByteChannel, buf);
+    }
+
+    protected NIODataInputStream(ReadableByteChannel channel)
+    {
+        this(channel, null);
     }
 
     @Override
@@ -130,8 +144,7 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
             throw new NullPointerException();
 
         // avoid int overflow
-        if (off < 0 || off > b.length || len < 0
-                || len > b.length - off)
+        if (off < 0 || off > b.length || len < 0 || len > b.length - off)
             throw new IndexOutOfBoundsException();
 
         if (len == 0)
@@ -140,17 +153,17 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
         int copied = 0;
         while (copied < len)
         {
-            if (buf.hasRemaining())
+            if (buffer.hasRemaining())
             {
-                int toCopy = Math.min(len - copied, buf.remaining());
-                buf.get(b, off + copied, toCopy);
+                int toCopy = Math.min(len - copied, buffer.remaining());
+                buffer.get(b, off + copied, toCopy);
                 copied += toCopy;
             }
             else
             {
-                int read = readNext();
-                if (read < 0 && copied == 0) return -1;
-                if (read <= 0) return copied;
+                reBuffer();
+                if (!buffer.hasRemaining())
+                    return copied == 0 ? -1 : copied;
             }
         }
 
@@ -158,75 +171,25 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
     }
 
     /*
-     * Refill the buffer, preserving any unread bytes remaining in the buffer
+     * Refill the buffer.
      */
-    protected int readNext() throws IOException
+    protected void reBuffer() throws IOException
     {
-        Preconditions.checkState(buf.remaining() != buf.capacity());
-        assert(buf.remaining() < 9);
+        Preconditions.checkState(buffer.remaining() == 0);
+        buffer.clear();
 
-        /*
-         * If there is data already at the start of the buffer, move the position to the end
-         * If there is data but not at the start, move it to the start
-         * Otherwise move the position to 0 so writes start at the beginning of the buffer
-         *
-         * We go to the trouble of shuffling the bytes remaining for cases where the buffer isn't fully drained
-         * while retrieving a multi-byte value while the position is in the middle.
-         */
-        if (buf.position() == 0 && buf.hasRemaining())
-        {
-            buf.position(buf.limit());
-        }
-        else if (buf.hasRemaining())
-        {
-            //FastByteOperations.copy failed to do the copy so inline a simple one here
-            int position = buf.position();
-            int remaining  = buf.remaining();
-            buf.clear();
-            for (int ii = 0; ii < remaining; ii++)
-                buf.put(buf.get(position + ii));
-        }
-        else
-        {
-            buf.position(0);
-        }
+        while ((channel.read(buffer)) == 0) {}
 
-        buf.limit(buf.capacity());
-
-        int read;
-        while ((read = rbc.read(buf)) == 0) {}
-
-        buf.flip();
-
-        return read;
+        buffer.flip();
     }
 
-    /*
-     * Read the minimum number of bytes and throw EOF if the minimum could not be read
-     */
-    private void readMinimum(int minimum) throws IOException
+    @DontInline
+    private long readPrimitiveSlowly(int bytes) throws IOException
     {
-        assert(buf.remaining() < 8);
-        while (buf.remaining() < minimum)
-        {
-            int read = readNext();
-            if (read == -1)
-            {
-                //DataInputStream consumes the bytes even if it doesn't get the entire value, match the behavior here
-                buf.position(0);
-                buf.limit(0);
-                throw new EOFException();
-            }
-        }
-    }
-
-    /*
-     * Ensure the buffer contains the minimum number of readable bytes, throws EOF if enough bytes aren't available
-     */
-    private void prepareReadPrimitive(int minimum) throws IOException
-    {
-        if (buf.remaining() < minimum)
-            readMinimum(minimum);
+        long result = 0;
+        for (int i = 0; i < bytes; i++)
+            result = (result << 8) | (readByte() & 0xFFL);
+        return result;
     }
 
     @Override
@@ -247,29 +210,35 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
     @Override
     public boolean readBoolean() throws IOException
     {
-        prepareReadPrimitive(1);
-        return buf.get() != 0;
+        return readByte() != 0;
     }
 
     @Override
     public byte readByte() throws IOException
     {
-        prepareReadPrimitive(1);
-        return buf.get();
+        if (!buffer.hasRemaining())
+        {
+            reBuffer();
+            if (!buffer.hasRemaining())
+                throw new EOFException();
+        }
+
+        return buffer.get();
     }
 
     @Override
     public int readUnsignedByte() throws IOException
     {
-        prepareReadPrimitive(1);
-        return buf.get() & 0xff;
+        return readByte() & 0xff;
     }
 
     @Override
     public short readShort() throws IOException
     {
-        prepareReadPrimitive(2);
-        return buf.getShort();
+        if (buffer.remaining() >= 2)
+            return buffer.getShort();
+        else
+            return (short) readPrimitiveSlowly(2);
     }
 
     @Override
@@ -281,22 +250,28 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
     @Override
     public char readChar() throws IOException
     {
-        prepareReadPrimitive(2);
-        return buf.getChar();
+        if (buffer.remaining() >= 2)
+            return buffer.getChar();
+        else
+            return (char) readPrimitiveSlowly(2);
     }
 
     @Override
     public int readInt() throws IOException
     {
-        prepareReadPrimitive(4);
-        return buf.getInt();
+        if (buffer.remaining() >= 4)
+            return buffer.getInt();
+        else
+            return (int) readPrimitiveSlowly(4);
     }
 
     @Override
     public long readLong() throws IOException
     {
-        prepareReadPrimitive(8);
-        return buf.getLong();
+        if (buffer.remaining() >= 8)
+            return buffer.getLong();
+        else
+            return readPrimitiveSlowly(8);
     }
 
     public long readVInt() throws IOException
@@ -307,10 +282,10 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
     public long readUnsignedVInt() throws IOException
     {
         //If 9 bytes aren't available use the slow path in VIntCoding
-        if (buf.remaining() < 9)
+        if (buffer.remaining() < 9)
             return VIntCoding.readUnsignedVInt(this);
 
-        byte firstByte = buf.get();
+        byte firstByte = buffer.get();
 
         //Bail out early if this is one byte, necessary or it fails later
         if (firstByte >= 0)
@@ -318,13 +293,13 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
 
         int extraBytes = VIntCoding.numberOfExtraBytesToRead(firstByte);
 
-        int position = buf.position();
+        int position = buffer.position();
         int extraBits = extraBytes * 8;
 
-        long retval = buf.getLong(position);
-        if (buf.order() == ByteOrder.LITTLE_ENDIAN)
+        long retval = buffer.getLong(position);
+        if (buffer.order() == ByteOrder.LITTLE_ENDIAN)
             retval = Long.reverseBytes(retval);
-        buf.position(position + extraBytes);
+        buffer.position(position + extraBytes);
 
         // truncate the bytes we read in excess of those we needed
         retval >>>= 64 - extraBits;
@@ -338,15 +313,19 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
     @Override
     public float readFloat() throws IOException
     {
-        prepareReadPrimitive(4);
-        return buf.getFloat();
+        if (buffer.remaining() >= 4)
+            return buffer.getFloat();
+        else
+            return Float.intBitsToFloat((int)readPrimitiveSlowly(4));
     }
 
     @Override
     public double readDouble() throws IOException
     {
-        prepareReadPrimitive(8);
-        return buf.getDouble();
+        if (buffer.remaining() >= 8)
+            return buffer.getDouble();
+        else
+            return Double.longBitsToDouble(readPrimitiveSlowly(8));
     }
 
     @Override
@@ -364,7 +343,7 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
     @Override
     public void close() throws IOException
     {
-        rbc.close();
+        channel.close();
     }
 
     @Override
@@ -376,13 +355,13 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
     @Override
     public int available() throws IOException
     {
-        if (rbc instanceof SeekableByteChannel)
+        if (channel instanceof SeekableByteChannel)
         {
-            SeekableByteChannel sbc = (SeekableByteChannel)rbc;
+            SeekableByteChannel sbc = (SeekableByteChannel) channel;
             long remainder = Math.max(0, sbc.size() - sbc.position());
-            return (remainder > Integer.MAX_VALUE) ? Integer.MAX_VALUE : (int)(remainder + buf.remaining());
+            return (remainder > Integer.MAX_VALUE) ? Integer.MAX_VALUE : (int)(remainder + buffer.remaining());
         }
-        return buf.remaining();
+        return buffer.remaining();
     }
 
     @Override

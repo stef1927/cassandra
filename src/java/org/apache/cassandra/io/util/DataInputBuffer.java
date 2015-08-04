@@ -17,12 +17,13 @@
  */
 package org.apache.cassandra.io.util;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
 /**
  * Input stream around a fixed ByteBuffer. Necessary to have this derived class to avoid NIODataInputStream's
- * shuffling of bytes behavior in readNext()
+ * shuffling of bytes behavior in reBuffer()
  *
  */
 public class DataInputBuffer extends NIODataInputStream
@@ -61,8 +62,7 @@ public class DataInputBuffer extends NIODataInputStream
     }
 
     @Override
-    protected int readNext() throws IOException
+    protected void reBuffer() throws IOException
     {
-        return -1;
     }
 }

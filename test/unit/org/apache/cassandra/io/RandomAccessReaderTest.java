@@ -3,6 +3,7 @@ package org.apache.cassandra.io;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
@@ -11,12 +12,14 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import com.google.common.primitives.Ints;
 import org.junit.Test;
 
 import static org.junit.Assert.*;
@@ -281,18 +284,16 @@ public class RandomAccessReaderTest
     private void testSeek(int numThreads) throws IOException, InterruptedException
     {
         final File f = File.createTempFile("testMark", "1");
-        final String[] expected = new String[10];
-        int len = 0;
-        for (int i = 0; i < expected.length; i++)
-        {
-            expected[i] = UUID.randomUUID().toString();
-            len += expected[i].length();
-        }
-        final int totalLength = len;
+        final byte[] expected = new byte[1 << 16];
+
+        long seed = System.nanoTime();
+        //seed = 365238103404423L;
+        System.out.println("Seed " + seed);
+        Random r = new Random(seed);
+        r.nextBytes(expected);
 
         SequentialWriter writer = SequentialWriter.open(f);
-        for (int i = 0; i < expected.length; i++)
-            writer.write(expected[i].getBytes());
+        writer.write(expected);
         writer.finish();
 
         assert f.exists();
@@ -304,32 +305,33 @@ public class RandomAccessReaderTest
             try
             {
                 RandomAccessReader reader = new RandomAccessReader.Builder(channel).build();
-                assertEquals(totalLength, reader.length());
+                assertEquals(expected.length, reader.length());
 
-                ByteBuffer b = reader.readBytes(expected[0].length());
-                assertEquals(expected[0], new String(b.array(), Charset.forName("UTF-8")));
-
-                assertFalse(reader.isEOF());
-                assertEquals(totalLength - expected[0].length(), reader.bytesRemaining());
-
-                long filePointer = reader.getFilePointer();
-
-                for (int i = 1; i < expected.length; i++)
-                {
-                    b = reader.readBytes(expected[i].length());
-                    assertEquals(expected[i], new String(b.array(), Charset.forName("UTF-8")));
-                }
+                ByteBuffer b = reader.readBytes(expected.length);
+                assertTrue(Arrays.equals(expected, b.array()));
                 assertTrue(reader.isEOF());
+                assertEquals(0, reader.bytesRemaining());
 
-                reader.seek(filePointer);
-                assertFalse(reader.isEOF());
-                for (int i = 1; i < expected.length; i++)
+                reader.seek(0);
+                b = reader.readBytes(expected.length);
+                assertTrue(Arrays.equals(expected, b.array()));
+                assertTrue(reader.isEOF());
+                assertEquals(0, reader.bytesRemaining());
+
+                for (int i = 0; i < 10; i++)
                 {
-                    b = reader.readBytes(expected[i].length());
-                    assertEquals(expected[i], new String(b.array(), Charset.forName("UTF-8")));
+                    int pos = r.nextInt(expected.length);
+                    reader.seek(pos);
+                    assertEquals(pos, reader.getPosition());
+
+                    ByteBuffer buf = ByteBuffer.wrap(expected, pos, expected.length - pos)
+                                               .order(ByteOrder.BIG_ENDIAN);
+
+                    while(reader.bytesRemaining() > 4)
+                        assertEquals(buf.getInt(), reader.readInt());
+
                 }
 
-                assertTrue(reader.isEOF());
                 reader.close();
             }
             catch (Exception ex)
@@ -342,15 +344,16 @@ public class RandomAccessReaderTest
         if(numThreads == 1)
         {
             worker.run();
-            return;
         }
+        else
+        {
+            ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+            for (int i = 0; i < numThreads; i++)
+                executor.submit(worker);
 
-        ExecutorService executor = Executors.newFixedThreadPool(numThreads);
-        for (int i = 0; i < numThreads; i++)
-            executor.submit(worker);
-
-        executor.shutdown();
-        executor.awaitTermination(1, TimeUnit.MINUTES);
+            executor.shutdown();
+            executor.awaitTermination(1, TimeUnit.MINUTES);
+        }
 
         channel.close();
     }

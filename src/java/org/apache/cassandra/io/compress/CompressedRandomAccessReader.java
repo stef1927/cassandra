@@ -101,7 +101,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
                 compressed.clear();
             compressed.limit(chunk.length);
 
-            if (channel.read(compressed, chunk.offset) != chunk.length)
+            if (fileChannel().read(compressed, chunk.offset) != chunk.length)
                 throw new CorruptBlockException(getPath(), chunk);
             compressed.flip();
             buffer.clear();
@@ -214,7 +214,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     {
         long position = chunk.offset + chunk.length;
         checksumBytes.clear();
-        if (channel.read(checksumBytes, position) != checksumBytes.capacity())
+        if (fileChannel().read(checksumBytes, position) != checksumBytes.capacity())
             throw new CorruptBlockException(getPath(), chunk);
         return checksumBytes.getInt(0);
     }
