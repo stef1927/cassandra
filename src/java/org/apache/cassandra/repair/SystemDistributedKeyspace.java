@@ -138,8 +138,8 @@ public final class SystemDistributedKeyspace
             participants.add(endpoint.getHostAddress());
 
         String query =
-                "INSERT INTO %s.%s (keyspace_name, columnfamily_name, id, parent_id, ranges, coordinator, participants, status, started_at) " +
-                        "VALUES (   '%s',          '%s',              %s, %s,        '%s',        '%s',      '%s',        { '%s' },     '%s',   toTimestamp(now()))";
+                "INSERT INTO %s.%s (keyspace_name, columnfamily_name, id, parent_id, ranges  , coordinator, participants, status, started_at) " +
+                        "VALUES (   '%s',          '%s',              %s, %s,        { '%s' }, '%s',        { '%s' },     '%s',   toTimestamp(now()))";
 
         for (String cfname : cfnames)
         {

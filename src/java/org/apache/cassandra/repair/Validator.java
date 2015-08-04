@@ -144,8 +144,8 @@ public class Validator implements Runnable
         if (!findCorrectRange(lastKey.getToken()))
         {
             // add the empty hash, and move to the next range
-            range.ensureHashInitialised();
-            range = ranges.next();
+            ranges = trees.invalids();
+            findCorrectRange(lastKey.getToken());
         }
 
         assert range.contains(lastKey.getToken()) : "Token not in MerkleTree: " + lastKey.getToken();
