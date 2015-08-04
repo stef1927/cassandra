@@ -14,7 +14,6 @@ import java.util.ArrayDeque;
 import java.util.Queue;
 import java.util.Random;
 
-import org.apache.cassandra.io.util.NIODataInputStream;
 import org.junit.Test;
 
 import com.google.common.base.Charsets;
@@ -190,7 +189,14 @@ public class NIODataInputStreamTest
     @Test(expected = NullPointerException.class)
     public void testNullRBC() throws Exception
     {
-        new NIODataInputStream(null, 8);
+        new NIODataInputStream(null, 9);
+    }
+
+    @SuppressWarnings("resource")
+    @Test(expected = IllegalArgumentException.class)
+    public void testSmallBufferSize() throws Exception
+    {
+        new NIODataInputStream(new FakeChannel(), 8);
     }
 
     @SuppressWarnings("resource")
