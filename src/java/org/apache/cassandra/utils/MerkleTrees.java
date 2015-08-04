@@ -290,7 +290,9 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
     public byte[] hash(Range<Token> range)
     {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-
+        
+        boolean hashed = false;
+        
         try
         {
             for (Range<Token> rt : ranges)
@@ -299,7 +301,10 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
                 {
                     byte[] bytes = merkleTrees.get(rt).hash(range);
                     if (bytes != null)
+                    {
                         baos.write(bytes);
+                        hashed = true;
+                    }
                 }
             }
         }
@@ -307,12 +312,8 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
         {
             throw new RuntimeException("Unable to append merkle tree hash to result");
         }
-
-        byte[] ret = baos.toByteArray();
-
-        if (ret.length == 0)
-            return null;
-        return ret;
+        
+        return hashed ? baos.toByteArray() : null;
     }
 
     /**

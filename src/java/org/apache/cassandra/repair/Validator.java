@@ -97,7 +97,7 @@ public class Validator implements Runnable
                 List<DecoratedKey> keys = new ArrayList<>();
                 for (DecoratedKey sample : cfs.keySamples(range))
                 {
-                    assert desc.ranges.contains(sample.getToken()) : "Token " + sample.getToken() + " is not within range " + desc.ranges;
+                    assert range.contains(sample.getToken()) : "Token " + sample.getToken() + " is not within range " + desc.ranges;
                     keys.add(sample);
                 }
 
