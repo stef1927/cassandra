@@ -96,6 +96,26 @@ public class MerkleTreesTest
     }
 
     @Test
+    public void testIntersectingRanges()
+    {
+        mts = new MerkleTrees(partitioner);
+
+        boolean failure = true;
+        mts.addMerkleTree(1, new Range<>(tok(1), tok(3)));
+
+        try
+        {
+            mts.addMerkleTree(1, new Range<>(tok(2), tok(4)));
+        }
+        catch (AssertionError e)
+        {
+            failure = false;
+        }
+
+        assertFalse(failure);
+    }
+
+    @Test
     public void testSplit()
     {
         // split the range  (zero, zero] into:
@@ -390,7 +410,7 @@ public class MerkleTreesTest
     @Test
     public void testSerialization() throws Exception
     {
-        Range<Token> first = new Range<>(tok(8), tok(4));
+        Range<Token> first = new Range<>(tok(3), tok(4));
 
         Collection<Range<Token>> ranges = new ArrayList<>();
 

@@ -21,27 +21,25 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.TreeMap;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.PeekingIterator;
-import org.slf4j.Logger;
 
+import org.slf4j.Logger;
 import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataInputPlus;
 import org.apache.cassandra.io.util.DataOutputPlus;
-import org.apache.cassandra.net.MessagingService;
 
 
 /**
@@ -53,9 +51,7 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
 {
     public static final MerkleTreesSerializer serializer = new MerkleTreesSerializer();
 
-    private List<Range<Token>> ranges = new ArrayList<>();
-
-    private Map<Range<Token>, MerkleTree> merkleTrees = new HashMap<>();
+    private Map<Range<Token>, MerkleTree> merkleTrees = new TreeMap<>(new TokenRangeComparator());
 
     private IPartitioner partitioner;
 
@@ -66,10 +62,10 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
      */
     public MerkleTrees(IPartitioner partitioner)
     {
-        this(partitioner, new HashMap<>());
+        this(partitioner, new ArrayList<>());
     }
 
-    private MerkleTrees(IPartitioner partitioner, Map<Range<Token>, MerkleTree> merkleTrees)
+    private MerkleTrees(IPartitioner partitioner, Collection<MerkleTree> merkleTrees)
     {
         this.partitioner = partitioner;
         addTrees(merkleTrees);
@@ -125,7 +121,7 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
     public MerkleTree addMerkleTree(int maxsize, byte hashdepth, Range<Token> range)
     {
         MerkleTree tree = new MerkleTree(partitioner, range, hashdepth, maxsize);
-        addTree(range, tree);
+        addTree(tree);
 
         return tree;
     }
@@ -146,7 +142,7 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
      */
     public void init()
     {
-        for (Range<Token> range : ranges)
+        for (Range<Token> range : merkleTrees.keySet())
         {
             init(range);
         }
@@ -220,7 +216,7 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
      */
     private MerkleTree getMerkleTree(Token t)
     {
-        for (Range<Token> range : ranges)
+        for (Range<Token> range : merkleTrees.keySet())
         {
             if (range.contains(t))
                 return merkleTrees.get(range);
@@ -229,26 +225,30 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
         return null;
     }
 
-    private void addTrees(Map<Range<Token>, MerkleTree> trees)
+    private void addTrees(Collection<MerkleTree> trees)
     {
-        for (Map.Entry<Range<Token>, MerkleTree> tree : trees.entrySet())
+        for (MerkleTree tree : trees)
         {
-            addTree(tree.getKey(), tree.getValue(), false);
+            addTree(tree);
         }
-        Collections.sort(ranges);
     }
 
-    private void addTree(Range<Token> range, MerkleTree tree)
+    private void addTree(MerkleTree tree)
     {
-        addTree(range, tree, true);
+        assert validateNonOverlapping(tree) : "Range [" + tree.fullRange + "] is intersecting an existing range";
+
+        merkleTrees.put(tree.fullRange, tree);
     }
 
-    private void addTree(Range<Token> range, MerkleTree tree, boolean sort)
+    private boolean validateNonOverlapping(MerkleTree tree)
     {
-        merkleTrees.put(range, tree);
-        ranges.add(range);
-        if (sort)
-            Collections.sort(ranges);
+        for (Range<Token> range : merkleTrees.keySet())
+        {
+            if (tree.fullRange.intersects(range))
+                return false;
+        }
+
+        return true;
     }
 
     /**
@@ -295,7 +295,7 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
 
         try
         {
-            for (Range<Token> rt : ranges)
+            for (Range<Token> rt : merkleTrees.keySet())
             {
                 if (rt.intersects(range))
                 {
@@ -328,11 +328,13 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
             Iterable<MerkleTree.TreeRange>,
             PeekingIterator<MerkleTree.TreeRange>
     {
-        private int currentRange = 0;
+        Iterator<MerkleTree> it;
+
         private MerkleTree.TreeRangeIterator current = null;
 
         private TreeRangeIterator()
         {
+            it = merkleTrees.values().iterator();
         }
 
         public MerkleTree.TreeRange computeNext()
@@ -345,9 +347,9 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
 
         private MerkleTree.TreeRange nextIterator()
         {
-            if (currentRange < ranges.size())
+            if (it.hasNext())
             {
-                current = merkleTrees.get(ranges.get(currentRange++)).invalids();
+                current = it.next().invalids();
 
                 return current.next();
             }
@@ -371,9 +373,9 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
     public static List<Range<Token>> difference(MerkleTrees ltree, MerkleTrees rtree)
     {
         List<Range<Token>> differences = new ArrayList<>();
-        for (Map.Entry<Range<Token>, MerkleTree> entry : ltree)
+        for (MerkleTree tree : ltree.merkleTrees.values())
         {
-            differences.addAll(MerkleTree.difference(entry.getValue(), rtree.getMerkleTree(entry.getKey())));
+            differences.addAll(MerkleTree.difference(tree, rtree.getMerkleTree(tree.fullRange)));
         }
         return differences;
     }
@@ -383,10 +385,9 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
         public void serialize(MerkleTrees trees, DataOutputPlus out, int version) throws IOException
         {
             out.writeInt(trees.merkleTrees.size());
-            for (Entry<Range<Token>, MerkleTree> tree : trees.merkleTrees.entrySet())
+            for (MerkleTree tree : trees.merkleTrees.values())
             {
-                AbstractBounds.tokenSerializer.serialize(tree.getKey(), out, version);
-                MerkleTree.serializer.serialize(tree.getValue(), out, version);
+                MerkleTree.serializer.serialize(tree, out, version);
             }
         }
 
@@ -394,15 +395,13 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
         {
             IPartitioner partitioner = null;
             int nTrees = in.readInt();
-            Map<Range<Token>, MerkleTree> trees = new HashMap<>();
+            Collection<MerkleTree> trees = new ArrayList<>(nTrees);
             if (nTrees > 0)
             {
                 for (int i = 0; i < nTrees; i++)
                 {
-                    Range<Token> range = (Range<Token>) AbstractBounds.tokenSerializer.deserialize(in,
-                            MessagingService.globalPartitioner(), version);
                     MerkleTree tree = MerkleTree.serializer.deserialize(in, version);
-                    trees.put(range, tree);
+                    trees.add(tree);
 
                     if (partitioner == null)
                         partitioner = tree.partitioner();
@@ -419,13 +418,24 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
             assert trees != null;
 
             long size = TypeSizes.sizeof(trees.merkleTrees.size());
-            for (Entry<Range<Token>, MerkleTree> tree : trees.merkleTrees.entrySet())
+            for (MerkleTree tree : trees.merkleTrees.values())
             {
-                size += AbstractBounds.tokenSerializer.serializedSize(tree.getKey(), version);
-                size += MerkleTree.serializer.serializedSize(tree.getValue(), version);
+                size += MerkleTree.serializer.serializedSize(tree, version);
             }
             return size;
         }
 
+    }
+
+    private static class TokenRangeComparator implements Comparator<Range<Token>>
+    {
+        @Override
+        public int compare(Range<Token> rt1, Range<Token> rt2)
+        {
+            if (rt1.left.compareTo(rt2.left) == 0)
+                return 0;
+
+            return rt1.compareTo(rt2);
+        }
     }
 }
