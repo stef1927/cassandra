@@ -341,7 +341,7 @@ public class RepairRunnable extends WrappedRunnable implements ProgressEventNoti
             }
         }
 
-        List<Range<Token>> ranges = new ArrayList<Range<Token>>();
+        List<Range<Token>> ranges = new ArrayList<>();
         ranges.add(range);
         neighborRangeList.add(Pair.create(neighbors, ranges));
     }

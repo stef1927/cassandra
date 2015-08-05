@@ -20,9 +20,7 @@ package org.apache.cassandra.repair;
 import java.net.InetAddress;
 import java.security.MessageDigest;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Random;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -120,7 +118,8 @@ public class Validator implements Runnable
                 }
             }
         }
-        // logger.debug("Prepared AEService tree of size {} for {}", merkleTrees.size(), desc);
+        //CR-TODO : is this comment still required? Perhaps it should go in the for loop for each range?
+        //logger.debug("Prepared AEService tree of size {} for {}", trees.size(), desc);
         ranges = tree.invalids();
     }
 

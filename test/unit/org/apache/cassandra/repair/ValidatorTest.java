@@ -95,7 +95,7 @@ public class ValidatorTest
                         RepairMessage m = (RepairMessage) message.payload;
                         assertEquals(RepairMessage.Type.VALIDATION_COMPLETE, m.messageType);
                         assertEquals(desc, m.desc);
-                        assertTrue(((ValidationComplete) m).success);
+                        assertTrue(((ValidationComplete) m).success());
                         assertNotNull(((ValidationComplete) m).trees);
                     }
                 }
@@ -156,7 +156,7 @@ public class ValidatorTest
                         RepairMessage m = (RepairMessage) message.payload;
                         assertEquals(RepairMessage.Type.VALIDATION_COMPLETE, m.messageType);
                         assertEquals(desc, m.desc);
-                        assertFalse(((ValidationComplete) m).success);
+                        assertFalse(((ValidationComplete) m).success());
                         assertNull(((ValidationComplete) m).trees);
                     }
                 }

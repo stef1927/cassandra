@@ -407,9 +407,12 @@ public class MerkleTreesTest
 
         byte[] initialhash = mts.hash(first);
 
+        long serializedSize = MerkleTrees.serializer.serializedSize(mts, MessagingService.current_version);
         DataOutputBuffer out = new DataOutputBuffer();
         MerkleTrees.serializer.serialize(mts, out, MessagingService.current_version);
         byte[] serialized = out.toByteArray();
+
+        assertEquals(serializedSize, serialized.length);
 
         DataInputBuffer in = new DataInputBuffer(serialized);
         MerkleTrees restored = MerkleTrees.serializer.deserialize(in, MessagingService.current_version);

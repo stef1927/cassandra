@@ -28,6 +28,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.AbstractIterator;
+import com.google.common.collect.PeekingIterator;
+import org.slf4j.Logger;
+
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.IPartitioner;
@@ -37,16 +42,12 @@ import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataInputPlus;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.MessagingService;
-import org.slf4j.Logger;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.AbstractIterator;
-import com.google.common.collect.PeekingIterator;
 
 /**
  * Wrapper class for handling of multiple MerkleTrees at once.
  * 
- * The MerkleTree's are divided in Ranges of tokens.
+ * The MerkleTree's are divided in Ranges of non-overlapping tokens.
  */
 public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
 {
@@ -290,9 +291,8 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
     public byte[] hash(Range<Token> range)
     {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        
         boolean hashed = false;
-        
+
         try
         {
             for (Range<Token> rt : ranges)

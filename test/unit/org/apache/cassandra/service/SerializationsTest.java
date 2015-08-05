@@ -147,7 +147,7 @@ public class SerializationsTest extends AbstractSerializationsTester
             assert message.messageType == RepairMessage.Type.VALIDATION_COMPLETE;
             assert DESC.equals(message.desc);
 
-            assert ((ValidationComplete) message).success;
+            assert ((ValidationComplete) message).success();
             assert ((ValidationComplete) message).trees != null;
 
             // validation with a tree
@@ -155,7 +155,7 @@ public class SerializationsTest extends AbstractSerializationsTester
             assert message.messageType == RepairMessage.Type.VALIDATION_COMPLETE;
             assert DESC.equals(message.desc);
 
-            assert ((ValidationComplete) message).success;
+            assert ((ValidationComplete) message).success();
             assert ((ValidationComplete) message).trees != null;
 
             // failed validation
@@ -163,7 +163,7 @@ public class SerializationsTest extends AbstractSerializationsTester
             assert message.messageType == RepairMessage.Type.VALIDATION_COMPLETE;
             assert DESC.equals(message.desc);
 
-            assert !((ValidationComplete) message).success;
+            assert !((ValidationComplete) message).success();
             assert ((ValidationComplete) message).trees == null;
 
             // MessageOuts

@@ -41,9 +41,9 @@ import org.apache.cassandra.utils.MerkleTrees;
 import org.apache.cassandra.utils.Pair;
 
 /**
- * Coordinates the (active) repair of a token range.
+ * Coordinates the (active) repair of a list of non overlapping token ranges.
  *
- * A given RepairSession repairs a set of replicas for a given range on a list
+ * A given RepairSession repairs a set of replicas for a given set of ranges on a list
  * of column families. For each of the column family to repair, RepairSession
  * creates a {@link RepairJob} that handles the repair of that CF.
  *
@@ -64,11 +64,11 @@ import org.apache.cassandra.utils.Pair;
  * A given session will execute the first phase (validation phase) of each of it's job
  * sequentially. In other words, it will start the first job and only start the next one
  * once that first job validation phase is complete. This is done so that the replica only
- * create one merkle tree at a time, which is our way to ensure that such creation starts
+ * create one merkle tree per range at a time, which is our way to ensure that such creation starts
  * roughly at the same time on every node (see CASSANDRA-2816). However the synchronization
  * phases are allowed to run concurrently (with each other and with validation phases).
  *
- * A given RepairJob has 2 modes: either sequential or not (isSequential flag). If sequential,
+ * A given RepairJob has 2 modes: either sequential or not (RepairParallelism). If sequential,
  * it will requests merkle tree creation from each replica in sequence (though in that case
  * we still first send a message to each node to flush and snapshot data so each merkle tree
  * creation is still done on similar data, even if the actual creation is not
@@ -90,7 +90,7 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
     /** Range to repair */
     public final Collection<Range<Token>> ranges;
     public final Set<InetAddress> endpoints;
-    private final long repairedAt;
+    public final long repairedAt;
 
     // number of validations left to be performed
     private final AtomicInteger validationRemaining;
@@ -103,7 +103,7 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
     private final ConcurrentMap<Pair<RepairJobDesc, NodePair>, RemoteSyncTask> syncingTasks = new ConcurrentHashMap<>();
 
     // Tasks(snapshot, validate request, differencing, ...) are run on taskExecutor
-    private final ListeningExecutorService taskExecutor = MoreExecutors.listeningDecorator(DebuggableThreadPoolExecutor.createCachedThreadpoolWithMaxSize("RepairJobTask"));
+    public final ListeningExecutorService taskExecutor = MoreExecutors.listeningDecorator(DebuggableThreadPoolExecutor.createCachedThreadpoolWithMaxSize("RepairJobTask"));
 
     private volatile boolean terminated = false;
 
@@ -265,7 +265,7 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
         List<ListenableFuture<RepairResult>> jobs = new ArrayList<>(cfnames.length);
         for (String cfname : cfnames)
         {
-            RepairJob job = new RepairJob(this, cfname, parallelismDegree, repairedAt, taskExecutor);
+            RepairJob job = new RepairJob(this, cfname);
             executor.execute(job);
             jobs.add(job);
         }

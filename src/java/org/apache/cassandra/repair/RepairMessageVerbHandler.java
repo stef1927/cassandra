@@ -86,7 +86,7 @@ public class RepairMessageVerbHandler implements IVerbHandler<RepairMessage>
                         {
                             return sstable != null &&
                                    !sstable.metadata.isIndex() && // exclude SSTables from 2i
-                                    new Bounds<>(sstable.first.getToken(), sstable.last.getToken()).intersects(repairingRange);
+                                   new Bounds<>(sstable.first.getToken(), sstable.last.getToken()).intersects(repairingRange);
                         }
                     }, true); //ephemeral snapshot, if repair fails, it will be cleaned next startup
 
