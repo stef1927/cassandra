@@ -22,18 +22,16 @@ import java.math.BigInteger;
 import java.util.*;
 
 import com.google.common.collect.AbstractIterator;
-import com.google.common.io.ByteArrayDataInput;
-import com.google.common.io.ByteStreams;
 
-import org.junit.After;
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
-import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.dht.*;
 import org.apache.cassandra.dht.RandomPartitioner.BigIntegerToken;
 import org.apache.cassandra.io.util.DataInputBuffer;
 import org.apache.cassandra.io.util.DataOutputBuffer;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.MerkleTree.Hashable;
 import org.apache.cassandra.utils.MerkleTree.RowHash;
 import org.apache.cassandra.utils.MerkleTree.TreeRange;
@@ -51,7 +49,7 @@ public class MerkleTreesTest
      */
     public static BigInteger TOKEN_SCALE = new BigInteger("8");
 
-    protected IPartitioner partitioner;
+    protected static final IPartitioner partitioner = RandomPartitioner.instance;
     protected MerkleTrees mts;
 
     private Range<Token> fullRange()
@@ -59,13 +57,15 @@ public class MerkleTreesTest
         return new Range<>(partitioner.getMinimumToken(), partitioner.getMinimumToken());
     }
 
+    @BeforeClass
+    public static void setUp()
+    {
+        StorageService.instance.setPartitionerUnsafe(partitioner);
+    }
     @Before
     public void clear()
     {
         TOKEN_SCALE = new BigInteger("8");
-        partitioner = RandomPartitioner.instance;
-        // TODO need to trickle TokenSerializer
-        DatabaseDescriptor.setPartitionerUnsafe(partitioner);
         mts = new MerkleTrees(partitioner);
         mts.addMerkleTree(Integer.MAX_VALUE, fullRange());
     }
