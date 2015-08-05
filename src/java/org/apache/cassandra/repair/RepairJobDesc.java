@@ -76,8 +76,7 @@ public class RepairJobDesc
 
         if (!columnFamily.equals(that.columnFamily)) return false;
         if (!keyspace.equals(that.keyspace)) return false;
-        // CR-TODO : what if the ranges have different sizes?
-        if (ranges != null ? that.ranges == null || (ranges.size() == that.ranges.size() && !ranges.containsAll(that.ranges)) : that.ranges != null) return false;
+        if (ranges != null ? that.ranges == null || (ranges.size() != that.ranges.size()) || (ranges.size() == that.ranges.size() && !ranges.containsAll(that.ranges)) : that.ranges != null) return false;
         if (!sessionId.equals(that.sessionId)) return false;
         if (parentSessionId != null ? !parentSessionId.equals(that.parentSessionId) : that.parentSessionId != null) return false;
 

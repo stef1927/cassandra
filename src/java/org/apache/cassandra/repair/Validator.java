@@ -118,8 +118,7 @@ public class Validator implements Runnable
                 }
             }
         }
-        //CR-TODO : is this comment still required? Perhaps it should go in the for loop for each range?
-        //logger.debug("Prepared AEService tree of size {} for {}", trees.size(), desc);
+        logger.debug("Prepared AEService trees of size {} for {}", trees.size(), desc);
         ranges = tree.invalids();
     }
 
