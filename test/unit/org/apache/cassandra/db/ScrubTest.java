@@ -142,7 +142,7 @@ public class ScrubTest
 
         // with skipCorrupted == false, the scrub is expected to fail
         try (LifecycleTransaction txn = cfs.getTracker().tryModify(Arrays.asList(sstable), OperationType.SCRUB);
-             Scrubber scrubber = new Scrubber(cfs, txn, false, false, true);)
+             Scrubber scrubber = new Scrubber(cfs, txn, false, false, true))
         {
             scrubber.scrub();
             fail("Expected a CorruptSSTableException to be thrown");
@@ -152,7 +152,7 @@ public class ScrubTest
         // with skipCorrupted == true, the corrupt rows will be skipped
         Scrubber.ScrubResult scrubResult;
         try (LifecycleTransaction txn = cfs.getTracker().tryModify(Arrays.asList(sstable), OperationType.SCRUB);
-             Scrubber scrubber = new Scrubber(cfs, txn, true, false, true);)
+             Scrubber scrubber = new Scrubber(cfs, txn, true, false, true))
         {
             scrubResult = scrubber.scrubWithResult();
         }
