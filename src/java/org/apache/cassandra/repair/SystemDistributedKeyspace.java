@@ -66,7 +66,8 @@ public final class SystemDistributedKeyspace
                      + "columnfamily_name text,"
                      + "id timeuuid,"
                      + "parent_id timeuuid,"
-                     + "ranges set<text>,"
+                     + "range_begin text,"
+                     + "range_end text,"
                      + "coordinator inet,"
                      + "participants set<inet>,"
                      + "exception_message text,"
@@ -138,21 +139,25 @@ public final class SystemDistributedKeyspace
             participants.add(endpoint.getHostAddress());
 
         String query =
-                "INSERT INTO %s.%s (keyspace_name, columnfamily_name, id, parent_id, ranges  , coordinator, participants, status, started_at) " +
-                        "VALUES (   '%s',          '%s',              %s, %s,        { '%s' }, '%s',        { '%s' },     '%s',   toTimestamp(now()))";
+                "INSERT INTO %s.%s (keyspace_name, columnfamily_name, id, parent_id, range_begin, range_end, coordinator, participants, status, started_at) " +
+                        "VALUES (   '%s',          '%s',              %s, %s,        '%s',        '%s',      '%s',        { '%s' },     '%s',   toTimestamp(now()))";
 
         for (String cfname : cfnames)
         {
-            String fmtQry = String.format(query, NAME, REPAIR_HISTORY,
-                                          keyspaceName,
-                                          cfname,
-                                          id.toString(),
-                                          parent_id.toString(),
-                                          Joiner.on("', '").join(ranges),
-                                          coordinator,
-                                          Joiner.on("', '").join(participants),
-                    RepairState.STARTED.toString());
-            processSilent(fmtQry);
+            for (Range<Token> range : ranges)
+            {
+                String fmtQry = String.format(query, NAME, REPAIR_HISTORY,
+                                              keyspaceName,
+                                              cfname,
+                                              id.toString(),
+                                              parent_id.toString(),
+                                              range.left.toString(),
+                                              range.right.toString(),
+                                              coordinator,
+                                              Joiner.on("', '").join(participants),
+                                              RepairState.STARTED.toString());
+                processSilent(fmtQry);
+            }
         }
     }
 
