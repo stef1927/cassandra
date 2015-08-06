@@ -19,20 +19,13 @@ package org.apache.cassandra.utils;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Comparator;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.TreeMap;
+import java.util.*;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.PeekingIterator;
-
 import org.slf4j.Logger;
+
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Range;
@@ -47,7 +40,7 @@ import org.apache.cassandra.io.util.DataOutputPlus;
  * 
  * The MerkleTree's are divided in Ranges of non-overlapping tokens.
  */
-public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
+public class MerkleTrees implements Iterable<Map.Entry<Range<Token>, MerkleTree>>
 {
     public static final MerkleTreesSerializer serializer = new MerkleTreesSerializer();
 
@@ -319,7 +312,7 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
     /**
      * Get an iterator of all ranges and their MerkleTrees.
      */
-    public Iterator<Entry<Range<Token>, MerkleTree>> iterator()
+    public Iterator<Map.Entry<Range<Token>, MerkleTree>> iterator()
     {
         return merkleTrees.entrySet().iterator();
     }
@@ -328,7 +321,7 @@ public class MerkleTrees implements Iterable<Entry<Range<Token>, MerkleTree>>
             Iterable<MerkleTree.TreeRange>,
             PeekingIterator<MerkleTree.TreeRange>
     {
-        Iterator<MerkleTree> it;
+        private final Iterator<MerkleTree> it;
 
         private MerkleTree.TreeRangeIterator current = null;
 

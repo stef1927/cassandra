@@ -126,7 +126,6 @@ public class RepairJobDesc
 
             for (int i = 0; i < nRanges; i++)
             {
-                // CR-TODO : is it safe to use the MS.globalPartitioner() here?
                 range = (Range<Token>) AbstractBounds.tokenSerializer.deserialize(in,
                         MessagingService.globalPartitioner(), version);
                 ranges.add(range);
