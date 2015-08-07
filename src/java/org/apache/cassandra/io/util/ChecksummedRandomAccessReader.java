@@ -29,35 +29,24 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
     @SuppressWarnings("serial")
     public static class CorruptFileException extends RuntimeException
     {
-        public final File file;
+        public final String filePath;
 
-        public CorruptFileException(Exception cause, File file)
+        public CorruptFileException(Exception cause, String filePath)
         {
             super(cause);
-            this.file = file;
+            this.filePath = filePath;
         }
     }
 
     private final DataIntegrityMetadata.ChecksumValidator validator;
-    private final File file;
 
-    protected ChecksummedRandomAccessReader(File file, ChannelProxy channel, DataIntegrityMetadata.ChecksumValidator validator)
+    private ChecksummedRandomAccessReader(Builder builder)
     {
-        super(channel, validator.chunkSize, -1, BufferType.ON_HEAP);
-        this.validator = validator;
-        this.file = file;
+        super(builder);
+        this.validator = builder.validator;
     }
 
     @SuppressWarnings("resource")
-    public static ChecksummedRandomAccessReader open(File file, File crcFile) throws IOException
-    {
-        ChannelProxy channel = new ChannelProxy(file);
-        RandomAccessReader crcReader = RandomAccessReader.open(crcFile);
-        DataIntegrityMetadata.ChecksumValidator validator =
-            new DataIntegrityMetadata.ChecksumValidator(new CRC32(), crcReader, file.getPath());
-        return new ChecksummedRandomAccessReader(file, channel, validator);
-    }
-
     @Override
     protected void reBuffer()
     {
@@ -70,7 +59,7 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
         long position = bufferOffset;
         while (buffer.hasRemaining())
         {
-            int n = channel.read(buffer, position);
+            int n = fileChannel().read(buffer, position);
             if (n < 0)
                 break;
             position += n;
@@ -84,7 +73,7 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
         }
         catch (IOException e)
         {
-            throw new CorruptFileException(e, file);
+            throw new CorruptFileException(e, fileChannel().filePath());
         }
 
         buffer.position((int) (desiredPosition - bufferOffset));
@@ -106,8 +95,31 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
         }
         finally
         {
-            channel.close();
+            FileUtils.closeQuietly(channel);
             validator.close();
+        }
+    }
+
+    public static final class Builder extends RandomAccessReader.Builder
+    {
+        private final DataIntegrityMetadata.ChecksumValidator validator;
+
+        @SuppressWarnings("resource")
+        public Builder(File file, File crcFile) throws IOException
+        {
+            super(new ChannelProxy(file));
+            this.validator = new DataIntegrityMetadata.ChecksumValidator(new CRC32(),
+                                                                         RandomAccessReader.open(crcFile),
+                                                                         file.getPath());
+
+            super.bufferSize(validator.chunkSize)
+                 .bufferType(BufferType.ON_HEAP);
+        }
+
+        @Override
+        public RandomAccessReader build()
+        {
+            return new ChecksummedRandomAccessReader(this);
         }
     }
 }
