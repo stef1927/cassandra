@@ -19,6 +19,7 @@ package org.apache.cassandra.cache;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Iterator;
 import java.util.UUID;
 
@@ -124,6 +125,8 @@ public class OHCProvider implements CacheProvider<RowCacheKey, IRowCacheEntry>
         private static KeySerializer instance = new KeySerializer();
         public void serialize(RowCacheKey rowCacheKey, ByteBuffer buf)
         {
+            buf.order(ByteOrder.BIG_ENDIAN);
+
             buf.putLong(rowCacheKey.cfId.getMostSignificantBits());
             buf.putLong(rowCacheKey.cfId.getLeastSignificantBits());
             buf.putInt(rowCacheKey.key.length);
@@ -132,6 +135,8 @@ public class OHCProvider implements CacheProvider<RowCacheKey, IRowCacheEntry>
 
         public RowCacheKey deserialize(ByteBuffer buf)
         {
+            buf.order(ByteOrder.BIG_ENDIAN);
+
             long msb = buf.getLong();
             long lsb = buf.getLong();
             byte[] key = new byte[buf.getInt()];
@@ -150,6 +155,8 @@ public class OHCProvider implements CacheProvider<RowCacheKey, IRowCacheEntry>
         private static ValueSerializer instance = new ValueSerializer();
         public void serialize(IRowCacheEntry entry, ByteBuffer buf)
         {
+            buf.order(ByteOrder.BIG_ENDIAN);
+
             assert entry != null; // unlike CFS we don't support nulls, since there is no need for that in the cache
             DataOutputBufferFixed out = new DataOutputBufferFixed(buf);
             try
@@ -172,6 +179,8 @@ public class OHCProvider implements CacheProvider<RowCacheKey, IRowCacheEntry>
         {
             try
             {
+                buf.order(ByteOrder.BIG_ENDIAN);
+
                 NIODataInputStream in = new DataInputBuffer(buf, false);
                 boolean isSentinel = in.readBoolean();
                 if (isSentinel)
