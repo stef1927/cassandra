@@ -125,6 +125,9 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
      */
     protected void reBuffer()
     {
+        if (isEOF())
+            return;
+
         if (limiter != null)
             limiter.acquire(buffer.capacity());
 
@@ -327,38 +330,6 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
         reBuffer();
         assert current() == newPosition;
     }
-
-
-    // -1 will be returned if there is nothing to read; higher-level methods like readInt
-    // or readFully (from RandomAccessFile) will throw EOFException but this should not
-    public int read() throws IOException
-    {
-        if (buffer == null)
-            throw new AssertionError("Attempted to read from closed RAR");
-
-        if (isEOF())
-            return -1; // required by RandomAccessFile
-
-       return super.read();
-    }
-
-    @Override
-    // -1 will be returned if there is nothing to read; higher-level methods like readInt
-    // or readFully (from RandomAccessFile) will throw EOFException but this should not
-    public int read(byte[] buff, int offset, int length) throws IOException
-    {
-        if (buffer == null)
-            throw new IllegalStateException("Attempted to read from closed RAR");
-
-        if (length == 0)
-            return 0;
-
-        if (isEOF())
-            return -1;
-
-        return super.read(buff, offset, length);
-    }
-
 
     public ByteBuffer readBytes(int length) throws EOFException
     {

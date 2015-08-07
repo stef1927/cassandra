@@ -140,6 +140,10 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
 
     @Override
     public int read(byte b[], int off, int len) throws IOException {
+
+        if (buffer == null)
+            throw new AssertionError("Attempted to read from closed stream");
+
         if (b == null)
             throw new NullPointerException();
 
@@ -216,6 +220,9 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
     @Override
     public byte readByte() throws IOException
     {
+        if (buffer == null)
+            throw new AssertionError("Attempted to read from closed stream");
+
         if (!buffer.hasRemaining())
         {
             reBuffer();
@@ -349,7 +356,14 @@ public class NIODataInputStream extends InputStream implements DataInputPlus, Cl
     @Override
     public int read() throws IOException
     {
-        return readUnsignedByte();
+        try
+        {
+            return readUnsignedByte();
+        }
+        catch (EOFException ex)
+        {
+            return -1;
+        }
     }
 
     @Override

@@ -48,7 +48,7 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
 
     @SuppressWarnings("resource")
     @Override
-    protected void reBuffer()
+    protected void reBufferStandard()
     {
         long desiredPosition = current();
         // align with buffer size, as checksums were computed in chunks of buffer size each.
@@ -77,6 +77,12 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
         }
 
         buffer.position((int) (desiredPosition - bufferOffset));
+    }
+
+    @Override
+    protected void reBufferMmap()
+    {
+        throw new AssertionError("Unsupported operation");
     }
 
     @Override

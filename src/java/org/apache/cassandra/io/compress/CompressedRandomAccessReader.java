@@ -220,6 +220,12 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     }
 
     @Override
+    public boolean isEOF()
+    {
+        return current() == metadata.dataLength;
+    }
+
+    @Override
     public long length()
     {
         return metadata.dataLength;
