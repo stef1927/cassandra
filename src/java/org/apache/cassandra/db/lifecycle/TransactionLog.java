@@ -32,6 +32,7 @@ import java.util.zip.CRC32;
 import java.util.zip.Checksum;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.util.concurrent.Runnables;
 import org.apache.commons.lang3.StringUtils;
 
 import org.slf4j.Logger;
@@ -70,7 +71,7 @@ import org.apache.cassandra.utils.concurrent.Transactional;
  * The transaction log file contains new and old sstables as follows:
  *
  * add:[sstable-2][CRC]
- * remove:[sstable-1,max_update_time,file_crc][CRC]
+ * remove:[sstable-1,max_update_time,num files][CRC]
  *
  * where sstable-2 is a new sstable to be retained if the transaction succeeds and sstable-1 is an old sstable to be
  * removed. CRC is an incremental CRC of the file content up to this point. For old sstable files we also log the
@@ -89,9 +90,7 @@ import org.apache.cassandra.utils.concurrent.Transactional;
  *
  * See CASSANDRA-7066 for full details.
  */
-public class
-
-TransactionLog extends Transactional.AbstractTransactional implements Transactional
+public class TransactionLog extends Transactional.AbstractTransactional implements Transactional
 {
     private static final Logger logger = LoggerFactory.getLogger(TransactionLog.class);
 
@@ -110,34 +109,14 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
         }
     }
 
-    /**
-     * The type of record to be logged:
-     * - new files to be retained on commit
-     * - old files to be retained on abort
-     * - commit flag
-     */
     public enum RecordType
     {
-        NEW ("add"),
-        OLD ("remove"),
-        COMMIT("commit");
-
-        public final String prefix;
-
-        RecordType(String prefix)
-        {
-            this.prefix = prefix;
-        }
-
+        ADD,    // new files to be retained on commit
+        REMOVE, // old files to be retained on abort
+        COMMIT; // commit flag
         public static RecordType fromPrefix(String prefix)
         {
-            for (RecordType t : RecordType.values())
-            {
-                if (t.prefix.equals(prefix))
-                    return t;
-            }
-
-            return  null;
+            return valueOf(prefix.toUpperCase());
         }
     }
 
@@ -148,13 +127,13 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
     final static class Record
     {
         public final RecordType type;
-        public final String filePath;
+        public final String relativeFilePath;
         public final long updateTime;
         public final int numFiles;
         public final String record;
 
         static String REGEX_STR = "^(add|remove|commit):\\[([^,]*),?([^,]*),?([^,]*)\\]$";
-        static Pattern REGEX = Pattern.compile(REGEX_STR); // (add|remove|commit):[*,*,*]
+        static Pattern REGEX = Pattern.compile(REGEX_STR, Pattern.CASE_INSENSITIVE); // (add|remove|commit):[*,*,*]
 
         public static Record make(String record, boolean isLast)
         {
@@ -165,9 +144,6 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
                     throw new IllegalStateException(String.format("Invalid record \"%s\"", record));
 
                 RecordType type = RecordType.fromPrefix(matcher.group(1));
-                if (type == null)
-                    throw new IllegalStateException("Invalid record type : " + matcher.group(1));
-
                 return new Record(type, matcher.group(2), Long.valueOf(matcher.group(3)), Integer.valueOf(matcher.group(4)), record);
             }
             catch (Throwable t)
@@ -179,9 +155,15 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
                 if (pos <= 0)
                     throw t;
 
-                RecordType recordType = RecordType.fromPrefix(record.substring(0, pos));
-                if (recordType == null)
+                RecordType recordType;
+                try
+                {
+                    recordType = RecordType.fromPrefix(record.substring(0, pos));
+                }
+                catch (Throwable ignore)
+                {
                     throw t;
+                }
 
                 return new Record(recordType, "", 0, 0, record);
 
@@ -193,17 +175,17 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
             return new Record(RecordType.COMMIT, "", updateTime, 0, "");
         }
 
-        public static Record makeNew(String filePath)
+        public static Record makeNew(String relativeFilePath)
         {
-            return new Record(RecordType.NEW, filePath, 0, 0, "");
+            return new Record(RecordType.ADD, relativeFilePath, 0, 0, "");
         }
 
-        public static Record makeOld(String parentFolder, String filePath)
+        public static Record makeOld(String parentFolder, String relativeFilePath)
         {
-            return makeOld(getTrackedFiles(parentFolder, filePath), filePath);
+            return makeOld(getTrackedFiles(parentFolder, relativeFilePath), relativeFilePath);
         }
 
-        public static Record makeOld(List<File> files, String filePath)
+        public static Record makeOld(List<File> files, String relativeFilePath)
         {
             long lastModified = 0;
             for (File file : files)
@@ -211,25 +193,25 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
                 if (file.lastModified() > lastModified)
                     lastModified = file.lastModified();
             }
-            return new Record(RecordType.OLD, filePath, lastModified, files.size(), "");
+            return new Record(RecordType.REMOVE, relativeFilePath, lastModified, files.size(), "");
         }
 
         private Record(RecordType type,
-                       String filePath,
+                       String relativeFilePath,
                        long updateTime,
                        int numFiles,
                        String record)
         {
             this.type = type;
-            this.filePath = type == RecordType.COMMIT ? "" : filePath; // only meaningful for file records
-            this.updateTime = type == RecordType.OLD ? updateTime : 0; // only meaningful for old records
-            this.numFiles = type == RecordType.OLD ? numFiles : 0; // only meaningful for old records
+            this.relativeFilePath = type == RecordType.COMMIT ? "" : relativeFilePath; // only meaningful for file records
+            this.updateTime = type == RecordType.REMOVE ? updateTime : 0; // only meaningful for old records
+            this.numFiles = type == RecordType.REMOVE ? numFiles : 0; // only meaningful for old records
             this.record = record.isEmpty() ? format() : record;
         }
 
         private String format()
         {
-            return String.format("%s:[%s,%d,%d]", type.prefix, filePath, updateTime, numFiles);
+            return String.format("%s:[%s,%d,%d]", type.toString(), relativeFilePath, updateTime, numFiles);
         }
 
         public byte[] getBytes()
@@ -239,18 +221,18 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
 
         public boolean verify(String parentFolder, boolean lastRecordIsCorrupt)
         {
-            if (type != RecordType.OLD)
+            if (type != RecordType.REMOVE)
                 return true;
 
             List<File> files = getTrackedFiles(parentFolder);
 
             // Paranoid sanity checks: we create another record by looking at the files as they are
             // on disk right now and make sure the information still matches
-            Record currentRecord = Record.makeOld(files, filePath);
+            Record currentRecord = Record.makeOld(files, relativeFilePath);
             if (updateTime != currentRecord.updateTime)
             {
                 logger.error("Possible disk corruption detected for sstable [{}], record [{}]: last update time [{}] should have been [{}]",
-                             filePath,
+                             relativeFilePath,
                              record,
                              new Date(currentRecord.updateTime),
                              new Date(updateTime));
@@ -260,7 +242,7 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
             if (lastRecordIsCorrupt && currentRecord.numFiles < numFiles)
             { // if we found a corruption in the last record, then we continue only if the number of files matches exactly.
                 logger.error("Possible disk corruption detected for sstable [{}], record [{}]: number of files [{}] should have been [{}]",
-                             filePath,
+                             relativeFilePath,
                              record,
                              currentRecord.numFiles,
                              numFiles);
@@ -275,21 +257,19 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
             if (type.equals(RecordType.COMMIT))
                 return Collections.emptyList();
 
-            return getTrackedFiles(parentFolder, filePath);
+            return getTrackedFiles(parentFolder, relativeFilePath);
         }
 
-        public static List<File> getTrackedFiles(String parentFolder, String filePath)
+        public static List<File> getTrackedFiles(String parentFolder, String relativeFilePath)
         {
-            return Arrays.asList(new File(parentFolder).listFiles((dir, name) -> {
-                return name.startsWith(filePath);
-            }));
+            return Arrays.asList(new File(parentFolder).listFiles((dir, name) -> name.startsWith(relativeFilePath)));
         }
 
         @Override
         public int hashCode()
         {
             // see comment in equals
-            return Objects.hash(type, filePath);
+            return Objects.hash(type, relativeFilePath);
         }
 
         @Override
@@ -308,7 +288,7 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
             // properties that might change on disk, especially COMMIT records,
             // there should be only one regardless of update time
             return type.equals(other.type) &&
-                   filePath.equals(other.filePath);
+                   relativeFilePath.equals(other.relativeFilePath);
         }
 
         @Override
@@ -348,7 +328,7 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
 
             Iterator<String> it = FileUtils.readLines(file).iterator();
             while(it.hasNext())
-                records.add(readRecord(it.next(), !it.hasNext()));
+                records.add(readRecord(it.next(), !it.hasNext())); // JLS execution order is left-to-right
 
             for (Record record : records)
             {
@@ -398,7 +378,7 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
 
                 // if only the last record is corrupt and all other records have matching files on disk, @see verifyRecord,
                 // then we simply exited whilst serializing the last record and we carry on
-                logger.error(String.format("Last record of transaction %s is corrupt [%s] but all previous records match state on disk, continuing", parent.getId(), message));
+                logger.warn(String.format("Last record of transaction %s is corrupt or incomplete [%s], but all previous records match state on disk; continuing", parent.getId(), message));
 
             }
             else
@@ -417,7 +397,7 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
 
         public boolean committed()
         {
-            return records.contains(Record.makeCommit(System.currentTimeMillis()));
+            return records.contains(Record.makeCommit(0));
         }
 
         public boolean add(RecordType type, SSTable table)
@@ -433,11 +413,11 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
         private Record makeRecord(RecordType type, SSTable table)
         {
             String relativePath = FileUtils.getRelativePath(parent.getParentFolder(), table.descriptor.baseFilename());
-            if (type == RecordType.NEW)
+            if (type == RecordType.ADD)
             {
                 return Record.makeNew(relativePath);
             }
-            else if (type == RecordType.OLD)
+            else if (type == RecordType.REMOVE)
             {
                 return Record.makeOld(parent.getParentFolder(), relativePath);
             }
@@ -449,9 +429,7 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
 
         private void addRecord(Record record)
         {
-            // benedict: the checksum is not strictly speaking on the entire file content
-            // but only on the records, i.e. the checksums themseves are excluded, this
-            // should be OK IMO but just to bring it to your attention
+            // we only checksum the records, not the checksums themselves
             byte[] bytes = record.getBytes();
             checksum.update(bytes, 0, bytes.length);
 
@@ -479,12 +457,9 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
         public void deleteRecords(RecordType type)
         {
             assert file.exists() : String.format("Expected %s to exists", file);
-            records.forEach(record ->
-                            {
-                                if (record.type == type)
-                                    deleteRecord(record);
-                            }
-            );
+            records.stream()
+                   .filter((r) -> r.type == type)
+                   .forEach((r) -> deleteRecord(r));
             records.clear();
         }
 
@@ -503,14 +478,11 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
 
         public Set<File> getTrackedFiles(RecordType type)
         {
-            Set<File> ret = new HashSet<>();
-            records.forEach(record ->
-                            {
-                                if (record.type == type)
-                                    ret.addAll(record.getTrackedFiles(parent.getParentFolder()));
-                            });
-            ret.add(file);
-            return ret;
+            return records.stream()
+                   .filter((r) -> r.type == type)
+                   .map((r) -> r.getTrackedFiles(parent.getParentFolder()))
+                   .flatMap(List::stream)
+                   .collect(Collectors.toSet());
         }
 
         public void delete()
@@ -607,9 +579,9 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
             try
             {
                 if (file.committed())
-                    file.deleteRecords(RecordType.OLD);
+                    file.deleteRecords(RecordType.REMOVE);
                 else
-                    file.deleteRecords(RecordType.NEW);
+                    file.deleteRecords(RecordType.ADD);
 
                 // we sync the parent file descriptor between contents and log deletion
                 // to ensure there is a happens before edge between them
@@ -633,9 +605,9 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
                 return Collections.emptySet();
 
             if (file.committed())
-                return file.getTrackedFiles(RecordType.OLD);
+                return file.getTrackedFiles(RecordType.REMOVE);
             else
-                return file.getTrackedFiles(RecordType.NEW);
+                return file.getTrackedFiles(RecordType.ADD);
         }
 
         String getFileName()
@@ -706,7 +678,7 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
      **/
     void trackNew(SSTable table)
     {
-        if (!data.file.add(RecordType.NEW, table))
+        if (!data.file.add(RecordType.ADD, table))
             throw new IllegalStateException(table + " is already tracked as new");
     }
 
@@ -715,7 +687,7 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
      */
     void untrackNew(SSTable table)
     {
-        data.file.remove(RecordType.NEW, table);
+        data.file.remove(RecordType.ADD, table);
     }
 
     /**
@@ -724,15 +696,15 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
      */
     SSTableTidier obsoleted(SSTableReader reader)
     {
-        if (data.file.contains(RecordType.NEW, reader))
+        if (data.file.contains(RecordType.ADD, reader))
         {
-            if (data.file.contains(RecordType.OLD, reader))
+            if (data.file.contains(RecordType.REMOVE, reader))
                 throw new IllegalArgumentException();
 
             return new SSTableTidier(reader, true, this);
         }
 
-        if (!data.file.add(RecordType.OLD, reader))
+        if (!data.file.add(RecordType.REMOVE, reader))
             throw new IllegalStateException();
 
         if (tracker != null)
@@ -923,8 +895,7 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
      */
     public static void waitForDeletions()
     {
-        FBUtilities.waitOnFuture(ScheduledExecutors.nonPeriodicTasks.schedule(() -> {
-        }, 0, TimeUnit.MILLISECONDS));
+        FBUtilities.waitOnFuture(ScheduledExecutors.nonPeriodicTasks.schedule(Runnables.doNothing(), 0, TimeUnit.MILLISECONDS));
     }
 
     @VisibleForTesting
@@ -972,9 +943,7 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
 
         for (File dir : getFolders(metadata, null))
         {
-            File[] logs = dir.listFiles((dir1, name) -> {
-                return TransactionData.isLogFile(name);
-            });
+            File[] logs = dir.listFiles((dir1, name) -> TransactionData.isLogFile(name));
 
             for (File log : logs)
             {
@@ -1013,11 +982,48 @@ TransactionLog extends Transactional.AbstractTransactional implements Transactio
                 try(TransactionData data = TransactionData.make(log))
                 {
                     Throwable err = data.readLogFile(null);
-                    if (err == null)
+                    if (err != null)
+                    {
+                        // review:
+                        // we may want to have an "in progress" set of txn logs that can be consulted for processes that
+                        // hit the filesystem directly but fail processing a txn log we're actively updating
+                        // (because of e.g. CRC check failures due to partial writes)
+                        // either that, or when performing a Directories.filter we want to detect this kind of issue
+                        // and wait a few millis before retrying, to ensure we're not listing temporary files as non-temporary
+
+                        // I think we also need to move our txn logs into the same directory as the sstables, so that
+                        // the same directory listing yields the transaction logs we need to work with and the sstables
+                        // those logs filter, so that we always have the complete set of filters for the files they cover.
+
+                        // this actually looks to have a lot of weird races already (old and new), such as when running loadNewSSTables:
+                        // we could have somewhere else created an sstable writer but not yet finished it and put it in
+                        // the Tracker; we then list it, and attempt to add it to the tracker before it's finished. we use it
+                        // whilst it is incomplete, and when we finish our real write we fail to add it (because our assertions fail),
+                        // and probably rollback the txn, ultimately deleting the file that is erroneously in use elsewhere.
+                        //
+                        // the above reading of in-progress logs should mostly fix that, but we could still have a weird race where the
+                        // listing happens long before the write completes, but the attempt to add to the tracker is delayed
+                        // past the completion (and deletion of the log file). In this case we don't list the log file
+                        // because it's gone, but try to mutate the tracker. Since the txn logs update happens before
+                        // the tracker, it's even _theoretically_ possible for this weird race to happen in an order
+                        // that results in the real writer failing. admittedly this is unlikely, but I would prefer
+                        // we try to make it as solid as possible.
+
+                        // it's possible for similar races with deleted files, and there are probably more races that
+                        // can occur that I haven't thought through.
+                        //
+                        // I think listing the directory contents just once should remove all of them, on the assumption
+                        // the OS lists it atomically (which I hope all do). If any log file is missing when we come
+                        // to read it, we should re-list the whole dir contents and try again.
+                        logger.warn("Failed to read transaction log {}: {}", log, err);
+                    }
+                    else
+                    {
                         ret.addAll(data.getTemporaryFiles()
                                        .stream()
                                        .filter(file -> FileUtils.isContained(folder, file))
                                        .collect(Collectors.toSet()));
+                    }
                 }
             }
         }
