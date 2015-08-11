@@ -20,10 +20,6 @@ package org.apache.cassandra.db.lifecycle;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -35,6 +31,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import static junit.framework.Assert.assertNotNull;
+import static junit.framework.Assert.assertNull;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -248,8 +245,6 @@ public class TransactionLogTest extends AbstractTransactionalTest
         sstableOld1.selfRef().release();
         sstableOld2.selfRef().release();
 
-        TransactionLog.waitForDeletions();
-
         assertFiles(transactionLog.getDataFolder(), new HashSet<>(sstableNew.getAllFilePaths()));
         assertFiles(transactionLog.getLogsFolder(), Collections.<String>emptySet());
         assertEquals(0, TransactionLog.getLogFiles(cfs.metadata).size());
@@ -291,8 +286,6 @@ public class TransactionLogTest extends AbstractTransactionalTest
         transactionLog.finish();
         sstable.markObsolete(tidier);
         sstable.selfRef().release();
-
-        TransactionLog.waitForDeletions();
 
         assertFiles(transactionLog.getDataFolder(), new HashSet<>());
         assertFiles(transactionLog.getLogsFolder(), Collections.<String>emptySet());
@@ -340,14 +333,6 @@ public class TransactionLogTest extends AbstractTransactionalTest
         assertEquals(0, TransactionLog.getLogFiles(cfs.metadata).size());
     }
 
-    private File copyToTmpFile(File file) throws IOException
-    {
-        File ret = File.createTempFile(file.getName(), ".tmp");
-        ret.deleteOnExit();
-        Files.copy(file.toPath(), ret.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        return ret;
-    }
-
     @Test
     public void testRemoveUnfinishedLeftovers_abort() throws Throwable
     {
@@ -361,9 +346,6 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
         transactionLog.trackNew(sstableNew);
         TransactionLog.SSTableTidier tidier = transactionLog.obsoleted(sstableOld);
-
-        // save a copy for later else we won't be able to close the transaction and will end up with LEAK errors
-        File tmpLog = copyToTmpFile(transactionLog.getData().getLogFile().file);
 
         Set<File> tmpFiles = new HashSet<>(TransactionLog.getLogFiles(cfs.metadata));
         for (String p : sstableNew.getAllFilePaths())
@@ -387,9 +369,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
         tidier.run();
 
-        // copy old transaction file contents back or transactionlogs will throw assertions
-        Files.move(tmpLog.toPath(), transactionLog.getData().getLogFile().file.toPath());
-
+        // complete the transaction to avoid LEAK errors
         transactionLog.close();
     }
 
@@ -406,9 +386,6 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
         transactionLog.trackNew(sstableNew);
         TransactionLog.SSTableTidier tidier = transactionLog.obsoleted(sstableOld);
-
-        // save a copy for later else we won't be able to close the transaction and will end up with LEAK errors
-        File tmpNewLog = copyToTmpFile(transactionLog.getData().getLogFile().file);
 
         //Fake a commit
         transactionLog.getData().getLogFile().commit();
@@ -435,10 +412,8 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
         tidier.run();
 
-        // copy old transaction files contents back or transactionlogs will throw assertions
-        Files.move(tmpNewLog.toPath(), transactionLog.getData().getLogFile().file.toPath());
-
-        transactionLog.close();
+        // complete the transaction to avoid LEAK errors
+        assertNull(transactionLog.complete(null));
     }
 
     @Test
@@ -675,7 +650,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         assertNotNull(transactionLog);
 
         transactionLog.trackNew(sstableNew);
-        TransactionLog.SSTableTidier tidier = transactionLog.obsoleted(sstableOld);
+        /*TransactionLog.SSTableTidier tidier =*/ transactionLog.obsoleted(sstableOld);
 
         //modify the old sstable files
         modifier.accept(sstableOld);
@@ -692,8 +667,8 @@ public class TransactionLogTest extends AbstractTransactionalTest
         sstableOld.selfRef().release();
         sstableNew.selfRef().release();
 
-        // cannot commit again, so let's abort
-        transactionLog.close();
+        // complete the transaction to avoid LEAK errors
+        assertNull(transactionLog.complete(null));
 
         assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(), sstableOld.getAllFilePaths())));
         assertFiles(transactionLog.getLogsFolder(), Sets.newHashSet(transactionLog.getData().getLogFile().file.getPath()));
@@ -706,10 +681,10 @@ public class TransactionLogTest extends AbstractTransactionalTest
         SSTableReader sstable = sstable(cfs, 0, 128);
         File dataFolder = sstable.descriptor.directory;
 
-        TransactionLogs transactionLogs = new TransactionLogs(OperationType.COMPACTION, cfs.metadata);
+        TransactionLog transactionLogs = new TransactionLog(OperationType.COMPACTION, cfs.metadata);
         assertNotNull(transactionLogs);
 
-        TransactionLogs.SSTableTidier tidier = transactionLogs.obsoleted(sstable);
+        TransactionLog.SSTableTidier tidier = transactionLogs.obsoleted(sstable);
 
         transactionLogs.finish();
         sstable.markObsolete(tidier);
@@ -719,7 +694,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         {
             // This should race with the asynchronous deletion of txn log files
             // It doesn't matter what it returns but it should not throw
-            TransactionLogs.getTemporaryFiles(cfs.metadata, dataFolder);
+            TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder);
         }
     }
 
@@ -767,6 +742,8 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
     private static void assertFiles(String dirPath, Set<String> expectedFiles, boolean excludeNonExistingFiles)
     {
+        TransactionLog.waitForDeletions();
+
         File dir = new File(dirPath);
         for (File file : dir.listFiles())
         {

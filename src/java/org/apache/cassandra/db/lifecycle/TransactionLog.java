@@ -54,7 +54,6 @@ import org.apache.cassandra.utils.CLibrary;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Throwables;
 import org.apache.cassandra.utils.UUIDGen;
-import org.apache.cassandra.utils.concurrent.Blocker;
 import org.apache.cassandra.utils.concurrent.Ref;
 import org.apache.cassandra.utils.concurrent.RefCounted;
 import org.apache.cassandra.utils.concurrent.Transactional;
@@ -113,7 +112,8 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     {
         ADD,    // new files to be retained on commit
         REMOVE, // old files to be retained on abort
-        COMMIT; // commit flag
+        COMMIT, // commit flag
+        ABORT;  // abort flag
         public static RecordType fromPrefix(String prefix)
         {
             return valueOf(prefix.toUpperCase());
@@ -132,8 +132,8 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         public final int numFiles;
         public final String record;
 
-        static String REGEX_STR = "^(add|remove|commit):\\[([^,]*),?([^,]*),?([^,]*)\\]$";
-        static Pattern REGEX = Pattern.compile(REGEX_STR, Pattern.CASE_INSENSITIVE); // (add|remove|commit):[*,*,*]
+        static String REGEX_STR = "^(add|remove|commit|abort):\\[([^,]*),?([^,]*),?([^,]*)\\]$";
+        static Pattern REGEX = Pattern.compile(REGEX_STR, Pattern.CASE_INSENSITIVE); // (add|remove|commit|abort):[*,*,*]
 
         public static Record make(String record, boolean isLast)
         {
@@ -175,6 +175,11 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             return new Record(RecordType.COMMIT, "", updateTime, 0, "");
         }
 
+        public static Record makeAbort(long updateTime)
+        {
+            return new Record(RecordType.ABORT, "", updateTime, 0, "");
+        }
+
         public static Record makeNew(String relativeFilePath)
         {
             return new Record(RecordType.ADD, relativeFilePath, 0, 0, "");
@@ -203,10 +208,15 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
                        String record)
         {
             this.type = type;
-            this.relativeFilePath = type == RecordType.COMMIT ? "" : relativeFilePath; // only meaningful for file records
+            this.relativeFilePath = hasFilePath(type) ? relativeFilePath : ""; // only meaningful for some records
             this.updateTime = type == RecordType.REMOVE ? updateTime : 0; // only meaningful for old records
             this.numFiles = type == RecordType.REMOVE ? numFiles : 0; // only meaningful for old records
             this.record = record.isEmpty() ? format() : record;
+        }
+
+        private static boolean hasFilePath(RecordType type)
+        {
+            return type == RecordType.ADD || type == RecordType.REMOVE;
         }
 
         private String format()
@@ -254,7 +264,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         public List<File> getTrackedFiles(String parentFolder)
         {
-            if (type.equals(RecordType.COMMIT))
+            if (!hasFilePath(type))
                 return Collections.emptyList();
 
             return getTrackedFiles(parentFolder, relativeFilePath);
@@ -389,15 +399,28 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         public void commit()
         {
-            Record record = Record.makeCommit(System.currentTimeMillis());
-            assert !records.contains(record) : "Already committed!";
+            assert !aborted() : "Already aborted!";
+            assert !committed() : "Already committed!";
 
-            addRecord(record);
+            addRecord(Record.makeCommit(System.currentTimeMillis()));
+        }
+
+        public void abort()
+        {
+            assert !aborted() : "Already aborted!";
+            assert !committed() : "Already committed!";
+
+            addRecord(Record.makeAbort(System.currentTimeMillis()));
         }
 
         public boolean committed()
         {
             return records.contains(Record.makeCommit(0));
+        }
+
+        public boolean aborted()
+        {
+            return records.contains(Record.makeAbort(0));
         }
 
         public boolean add(RecordType type, SSTable table)
@@ -478,11 +501,13 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         public Set<File> getTrackedFiles(RecordType type)
         {
-            return records.stream()
-                   .filter((r) -> r.type == type)
-                   .map((r) -> r.getTrackedFiles(parent.getParentFolder()))
-                   .flatMap(List::stream)
-                   .collect(Collectors.toSet());
+            Set<File> ret = records.stream()
+                            .filter((r) -> r.type == type)
+                            .map((r) -> r.getTrackedFiles(parent.getParentFolder()))
+                            .flatMap(List::stream)
+                            .collect(Collectors.toSet());
+            ret.add(file);
+            return ret;
         }
 
         public void delete()
@@ -493,6 +518,12 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         public boolean exists()
         {
             return file.exists();
+        }
+
+        @Override
+        public String toString()
+        {
+            return FileUtils.getRelativePath(parent.getParentFolder(), FileUtils.getCanonicalPath(file));
         }
     }
 
@@ -574,6 +605,11 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             return id;
         }
 
+        boolean completed()
+        {
+            return  file.committed() || file.aborted();
+        }
+
         Throwable removeUnfinishedLeftovers(Throwable accumulate)
         {
             try
@@ -634,6 +670,12 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         {
             return file;
         }
+
+        @Override
+        public String toString()
+        {
+            return String.format("[%s]", file.toString());
+        }
     }
 
     private final Tracker tracker;
@@ -644,7 +686,6 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     // Additionally, we need to make sure to delete the data file first, so on restart the others
     // will be recognized as GCable.
     private static final Queue<Runnable> failedDeletions = new ConcurrentLinkedQueue<>();
-    private static final Blocker blocker = new Blocker();
 
     TransactionLog(OperationType opType, CFMetaData metadata)
     {
@@ -783,13 +824,15 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         public String name()
         {
-            return data.id.toString();
+            return data.toString();
         }
 
         public void run()
         {
             if (logger.isDebugEnabled())
                 logger.debug("Removing files for transaction {}", name());
+
+            assert data.completed() : "Expected a completed transaction: " + data;
 
             Throwable err = data.removeUnfinishedLeftovers(null);
 
@@ -845,8 +888,6 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         public void run()
         {
-            blocker.ask();
-
             SystemKeyspace.clearSSTableReadMeter(desc.ksname, desc.cfname, desc.generation);
 
             try
@@ -899,12 +940,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     }
 
     @VisibleForTesting
-    public static void pauseDeletions(boolean stop)
-    {
-        blocker.block(stop);
-    }
-
-    private Throwable complete(Throwable accumulate)
+    Throwable complete(Throwable accumulate)
     {
         try
         {
@@ -926,6 +962,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
     protected Throwable doAbort(Throwable accumulate)
     {
+        data.file.abort();
         return complete(accumulate);
     }
 
