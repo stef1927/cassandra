@@ -31,6 +31,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiFunction;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Predicate;
@@ -522,7 +523,6 @@ public class Directories
     public class SSTableLister
     {
         private boolean skipTemporary;
-        private boolean onlyTemporary;
         private boolean includeBackups;
         private boolean onlyBackups;
         private int nbFiles;
@@ -535,14 +535,6 @@ public class Directories
             if (filtered)
                 throw new IllegalStateException("list() has already been called");
             skipTemporary = b;
-            return this;
-        }
-
-        public SSTableLister onlyTemporary(boolean b)
-        {
-            if (filtered)
-                throw new IllegalStateException("list() has already been called");
-            onlyTemporary = b;
             return this;
         }
 
@@ -603,57 +595,44 @@ public class Directories
 
                 if (snapshotName != null)
                 {
-                    getSnapshotDirectory(location, snapshotName).listFiles(getFilter(location));
+                    LifecycleTransaction.getFiles(getSnapshotDirectory(location, snapshotName).toPath(), getFilter());
                     continue;
                 }
 
                 if (!onlyBackups)
-                    location.listFiles(getFilter(location));
+                    LifecycleTransaction.getFiles(location.toPath(), getFilter());
 
                 if (includeBackups)
-                    getBackupsDirectory(location).listFiles(getFilter(location));
+                    LifecycleTransaction.getFiles(getBackupsDirectory(location).toPath(), getFilter());
             }
             filtered = true;
         }
 
-        private FileFilter getFilter(File location)
+        private BiFunction<File, LifecycleTransaction.FileType, Boolean> getFilter()
         {
-           final Set<File> temporaryFiles = skipTemporary || onlyTemporary
-                                            ? LifecycleTransaction.getTemporaryFiles(metadata, location)
-                                            : Collections.<File>emptySet();
-
-            return new FileFilter()
+            // This function always return false since it adds to the components map
+            return (file, type) ->
             {
-                // This function always return false since accepts adds to the components map
-                public boolean accept(File file)
-                {
-                    if (file.isDirectory())
-                        return false;
-
-                    Pair<Descriptor, Component> pair = SSTable.tryComponentFromFilename(file.getParentFile(), file.getName());
-                    if (pair == null)
-                        return false;
-
-                    // we are only interested in the SSTable files that belong to the specific ColumnFamily
-                    if (!pair.left.ksname.equals(metadata.ksName) || !pair.left.cfname.equals(metadata.cfName))
-                        return false;
-
-                    if (skipTemporary && temporaryFiles.contains(file))
-                        return false;
-
-                    if (onlyTemporary && !temporaryFiles.contains(file))
-                        return false;
-
-                    Set<Component> previous = components.get(pair.left);
-                    if (previous == null)
-                    {
-                        previous = new HashSet<>();
-                        components.put(pair.left, previous);
-                    }
-                    previous.add(pair.right);
-                    nbFiles++;
+                Pair<Descriptor, Component> pair = SSTable.tryComponentFromFilename(file.getParentFile(), file.getName());
+                if (pair == null)
                     return false;
+
+                // we are only interested in the SSTable files that belong to the specific ColumnFamily
+                if (!pair.left.ksname.equals(metadata.ksName) || !pair.left.cfname.equals(metadata.cfName))
+                    return false;
+
+                if (skipTemporary && type != LifecycleTransaction.FileType.FINAL)
+                    return false;
+
+                Set<Component> previous = components.get(pair.left);
+                if (previous == null)
+                {
+                    previous = new HashSet<>();
+                    components.put(pair.left, previous);
                 }
+                previous.add(pair.right);
+                nbFiles++;
+                return false;
             };
         }
     }

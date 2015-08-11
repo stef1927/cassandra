@@ -19,12 +19,16 @@ package org.apache.cassandra.db.lifecycle;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.nio.file.SecureDirectoryStream;
 import java.util.*;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiFunction;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -53,6 +57,7 @@ import org.apache.cassandra.io.sstable.format.big.BigFormat;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.CLibrary;
 import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.NoSpamLogger;
 import org.apache.cassandra.utils.Throwables;
 import org.apache.cassandra.utils.UUIDGen;
 import org.apache.cassandra.utils.concurrent.Ref;
@@ -93,6 +98,7 @@ import org.apache.cassandra.utils.concurrent.Transactional;
 public class TransactionLog extends Transactional.AbstractTransactional implements Transactional
 {
     private static final Logger logger = LoggerFactory.getLogger(TransactionLog.class);
+    private static final NoSpamLogger noSpamLogger = NoSpamLogger.getLogger(logger, 1L, TimeUnit.HOURS);
 
     /**
      * If the format of the lines in the transaction log is wrong or the checksum
@@ -502,13 +508,11 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         public Set<File> getTrackedFiles(RecordType type)
         {
-            Set<File> ret = records.stream()
-                            .filter((r) -> r.type == type)
-                            .map((r) -> r.getTrackedFiles(parent.getFolder()))
-                            .flatMap(List::stream)
-                            .collect(Collectors.toSet());
-            ret.add(file);
-            return ret;
+            return records.stream()
+                          .filter((r) -> r.type == type)
+                          .map((r) -> r.getTrackedFiles(parent.getFolder()))
+                          .flatMap(List::stream)
+                          .collect(Collectors.toSet());
         }
 
         public void delete()
@@ -996,13 +1000,113 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             logger.error("Failed to remove unfinished transaction leftovers", accumulate);
     }
 
-    /**
-     * Return a set of files that are temporary, that is they are involved with
-     * a transaction that hasn't completed yet.
-     *
-     * Only return the files that exist and that are located in the folder
-     * specified as a parameter or its sub-folders.
-     */
+    public static List<File> getFiles(Path folder, BiFunction<File, LifecycleTransaction.FileType, Boolean> filter)
+    {
+        // if we fail we try a few more times in case we are reading txn log files that are still being mutated
+        for (int i = 0; i < 5; i++)
+        {
+            try
+            {
+                return doGetFiles(folder, filter);
+            }
+            catch (Throwable t)
+            {
+                logger.warn("Failed to get files for {} : {}", folder, t.getMessage());
+                try
+                {
+                    Thread.sleep(5);
+                }
+                catch (InterruptedException e)
+                {
+                    logger.error("Interrupted whilst listing files for {}, giving up", folder, e);
+                    return Collections.emptyList();
+                }
+            }
+        }
+
+        logger.error("Failed to get files for {} after multiple attempts, giving up", folder);
+        return Collections.emptyList();
+    }
+
+    private static List<File> doGetFiles(Path folder, BiFunction<File, LifecycleTransaction.FileType, Boolean> filter) throws IOException
+    {
+        Set<File> temporaryFiles = new HashSet<>();
+        Set<File> txnLogFiles = new HashSet<>();
+        Set<File> finalFiles = new HashSet<>();
+
+        try (DirectoryStream<Path> in = Files.newDirectoryStream(folder))
+        {
+            if (!(in instanceof SecureDirectoryStream))
+                noSpamLogger.error("This platform does not support atomic directory streams (SecureDirectoryStream), " +
+                                   "race conditions when loading sstable files could occurr");
+
+            in.forEach(path ->
+                       {
+                           File file = path.toFile();
+                           if (file.isDirectory())
+                               return;
+
+                           if (TransactionData.isLogFile(file.getName()))
+                           {
+                               txnLogFiles.add(file);
+                               try (TransactionData txn = TransactionData.make(file))
+                               {
+                                   Throwables.maybeFail(txn.readLogFile(null));
+
+                                   Set<File> files = txn.getTemporaryFiles().stream().collect(Collectors.toSet());
+                                   temporaryFiles.addAll(files);
+                                   finalFiles.removeAll(files);
+                               }
+                           }
+                           else if (!temporaryFiles.contains(file))
+                           {
+                               finalFiles.add(file);
+                           }
+                       });
+        }
+
+        List<File> ret = new ArrayList<>();
+
+        ret.addAll(txnLogFiles.stream().filter(f -> filter.apply(f, LifecycleTransaction.FileType.TXN_LOG)).collect(Collectors.toList()));
+        ret.addAll(temporaryFiles.stream().filter(f -> filter.apply(f, LifecycleTransaction.FileType.TEMPORARY)).collect(Collectors.toList()));
+        ret.addAll(finalFiles.stream().filter(f -> filter.apply(f, LifecycleTransaction.FileType.FINAL)).collect(Collectors.toList()));
+
+        return ret;
+    }
+
+    // review:
+    // we may want to have an "in progress" set of txn logs that can be consulted for processes that
+    // hit the filesystem directly but fail processing a txn log we're actively updating
+    // (because of e.g. CRC check failures due to partial writes)
+    // either that, or when performing a Directories.filter we want to detect this kind of issue
+    // and wait a few millis before retrying, to ensure we're not listing temporary files as non-temporary
+
+    // I think we also need to move our txn logs into the same directory as the sstables, so that
+    // the same directory listing yields the transaction logs we need to work with and the sstables
+    // those logs filter, so that we always have the complete set of filters for the files they cover.
+
+    // this actually looks to have a lot of weird races already (old and new), such as when running loadNewSSTables:
+    // we could have somewhere else created an sstable writer but not yet finished it and put it in
+    // the Tracker; we then list it, and attempt to add it to the tracker before it's finished. we use it
+    // whilst it is incomplete, and when we finish our real write we fail to add it (because our assertions fail),
+    // and probably rollback the txn, ultimately deleting the file that is erroneously in use elsewhere.
+    //
+    // the above reading of in-progress logs should mostly fix that, but we could still have a weird race where the
+    // listing happens long before the write completes, but the attempt to add to the tracker is delayed
+    // past the completion (and deletion of the log file). In this case we don't list the log file
+    // because it's gone, but try to mutate the tracker. Since the txn logs update happens before
+    // the tracker, it's even _theoretically_ possible for this weird race to happen in an order
+    // that results in the real writer failing. admittedly this is unlikely, but I would prefer
+    // we try to make it as solid as possible.
+
+    // it's possible for similar races with deleted files, and there are probably more races that
+    // can occur that I haven't thought through.
+    //
+    // I think listing the directory contents just once should remove all of them, on the assumption
+    // the OS lists it atomically (which I hope all do). If any log file is missing when we come
+    // to read it, we should re-list the whole dir contents and try again.
+
+    @VisibleForTesting
     static Set<File> getTemporaryFiles(CFMetaData metadata, File folder)
     {
         Set<File> ret = new HashSet<>();
@@ -1010,75 +1114,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         List<File> directories = new Directories(metadata).getCFDirectories();
         directories.add(folder);
         for (File dir : directories)
-        {
-            File[] logs = dir.listFiles((dir1, name) -> {
-                return TransactionData.isLogFile(name);
-            });
-
-            for (File log : logs)
-            {
-                try(TransactionData data = TransactionData.make(log))
-                {
-                    Throwable err = data.readLogFile(null);
-                    if (err != null)
-                    {
-                        // review:
-                        // we may want to have an "in progress" set of txn logs that can be consulted for processes that
-                        // hit the filesystem directly but fail processing a txn log we're actively updating
-                        // (because of e.g. CRC check failures due to partial writes)
-                        // either that, or when performing a Directories.filter we want to detect this kind of issue
-                        // and wait a few millis before retrying, to ensure we're not listing temporary files as non-temporary
-
-                        // I think we also need to move our txn logs into the same directory as the sstables, so that
-                        // the same directory listing yields the transaction logs we need to work with and the sstables
-                        // those logs filter, so that we always have the complete set of filters for the files they cover.
-
-                        // this actually looks to have a lot of weird races already (old and new), such as when running loadNewSSTables:
-                        // we could have somewhere else created an sstable writer but not yet finished it and put it in
-                        // the Tracker; we then list it, and attempt to add it to the tracker before it's finished. we use it
-                        // whilst it is incomplete, and when we finish our real write we fail to add it (because our assertions fail),
-                        // and probably rollback the txn, ultimately deleting the file that is erroneously in use elsewhere.
-                        //
-                        // the above reading of in-progress logs should mostly fix that, but we could still have a weird race where the
-                        // listing happens long before the write completes, but the attempt to add to the tracker is delayed
-                        // past the completion (and deletion of the log file). In this case we don't list the log file
-                        // because it's gone, but try to mutate the tracker. Since the txn logs update happens before
-                        // the tracker, it's even _theoretically_ possible for this weird race to happen in an order
-                        // that results in the real writer failing. admittedly this is unlikely, but I would prefer
-                        // we try to make it as solid as possible.
-
-                        // it's possible for similar races with deleted files, and there are probably more races that
-                        // can occur that I haven't thought through.
-                        //
-                        // I think listing the directory contents just once should remove all of them, on the assumption
-                        // the OS lists it atomically (which I hope all do). If any log file is missing when we come
-                        // to read it, we should re-list the whole dir contents and try again.
-                        logger.warn("Failed to read transaction log {}: {}", log, err);
-                    }
-                    else
-                    {
-                        ret.addAll(data.getTemporaryFiles()
-                                       .stream()
-                                       .filter(file -> FileUtils.isContained(folder, file))
-                                       .collect(Collectors.toSet()));
-                    }
-                }
-            }
-        }
-
-        return ret;
-    }
-
-    /**
-     * Return the transaction log files that currently exist for this table.
-     */
-    static Set<File> getLogFiles(CFMetaData metadata)
-    {
-        Set<File> ret = new HashSet<>();
-        for (File dir : new Directories(metadata).getCFDirectories())
-            ret.addAll(Arrays.asList(dir.listFiles((dir1, name) -> {
-                return TransactionData.isLogFile(name);
-            })));
+            ret.addAll(getFiles(dir.toPath(), (file, type) -> type != LifecycleTransaction.FileType.FINAL));
 
         return ret;
     }

@@ -18,7 +18,9 @@
 package org.apache.cassandra.db.lifecycle;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.util.*;
+import java.util.function.BiFunction;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Predicate;
@@ -536,14 +538,16 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         TransactionLog.removeUnfinishedLeftovers(metadata);
     }
 
-    public static Set<File> getTemporaryFiles(CFMetaData metadata, File folder)
+    public enum FileType
     {
-        return TransactionLog.getTemporaryFiles(metadata, folder);
+        FINAL,
+        TEMPORARY,
+        TXN_LOG
     }
 
-    public static Set<File> getLogFiles(CFMetaData metadata)
+    public static List<File> getFiles(Path folder, BiFunction<File, FileType, Boolean> filter)
     {
-        return TransactionLog.getLogFiles(metadata);
+        return TransactionLog.getFiles(folder, filter);
     }
 
     // a class representing the current state of the reader within this transaction, encoding the actions both logged

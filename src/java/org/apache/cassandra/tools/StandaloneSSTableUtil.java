@@ -27,6 +27,7 @@ import org.apache.commons.cli.*;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.function.BiFunction;
 
 import static org.apache.cassandra.tools.BulkLoader.CmdLineOptions;
 
@@ -81,23 +82,28 @@ public class StandaloneSSTableUtil
     private static void listFiles(Options options, CFMetaData metadata, OutputHandler handler) throws IOException
     {
         Directories directories = new Directories(metadata);
-        Directories.SSTableLister lister = directories.sstableLister();
 
-        if (options.type == Options.FileType.FINAL)
-            lister.skipTemporary(true);
-        else if (options.type == Options.FileType.TMP)
-            lister.onlyTemporary(true);
-
-        for (File file : lister.listFiles())
-           handler.output(file.getCanonicalPath());
-
-        if (options.oplogs)
+        for (File dir : directories.getCFDirectories())
         {
-            for (File file : LifecycleTransaction.getLogFiles(metadata))
-            {
+            for (File file : LifecycleTransaction.getFiles(dir.toPath(), getFilter(options)))
                 handler.output(file.getCanonicalPath());
-            }
         }
+    }
+
+    private static BiFunction<File, LifecycleTransaction.FileType, Boolean> getFilter(Options options)
+    {
+        return (file, type) ->
+        {
+            if (type == LifecycleTransaction.FileType.FINAL)
+                return options.type != Options.FileType.TMP;
+            else if (type == LifecycleTransaction.FileType.TEMPORARY)
+                return options.type != Options.FileType.FINAL;
+            else if (type == LifecycleTransaction.FileType.TXN_LOG)
+                return options.oplogs;
+
+            assert false : "Unsupported file type : " + type;
+            return false;
+        };
     }
 
     private static class Options

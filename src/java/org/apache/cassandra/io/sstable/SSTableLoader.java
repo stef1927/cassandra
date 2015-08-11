@@ -77,15 +77,10 @@ public class SSTableLoader implements StreamEventHandler
     {
         outputHandler.output("Opening sstables and calculating sections to stream");
 
-        directory.list(new FilenameFilter()
-        {
-            final Map<File, Set<File>> allTemporaryFiles = new HashMap<>();
-            public boolean accept(File dir, String name)
+        LifecycleTransaction.getFiles(directory.toPath(), (file, type) ->
             {
-                File file = new File(dir, name);
-
-                if (file.isDirectory())
-                    return false;
+                File dir = file.getParentFile();
+                String name = file.getName();
 
                 Pair<Descriptor, Component> p = SSTable.tryComponentFromFilename(dir, name);
                 Descriptor desc = p == null ? null : p.left;
@@ -105,14 +100,7 @@ public class SSTableLoader implements StreamEventHandler
                     return false;
                 }
 
-                Set<File> temporaryFiles = allTemporaryFiles.get(dir);
-                if (temporaryFiles == null)
-                {
-                    temporaryFiles = LifecycleTransaction.getTemporaryFiles(metadata, dir);
-                    allTemporaryFiles.put(dir, temporaryFiles);
-                }
-
-                if (temporaryFiles.contains(file))
+                if (type != LifecycleTransaction.FileType.FINAL)
                 {
                     outputHandler.output(String.format("Skipping temporary file %s", name));
                     return false;
@@ -158,8 +146,8 @@ public class SSTableLoader implements StreamEventHandler
                     outputHandler.output(String.format("Skipping file %s, error opening it: %s", name, e.getMessage()));
                 }
                 return false;
-            }
-        });
+            });
+
         return sstables;
     }
 
