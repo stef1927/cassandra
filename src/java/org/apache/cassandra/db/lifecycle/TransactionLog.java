@@ -49,6 +49,7 @@ import org.apache.cassandra.io.sstable.Component;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
+import org.apache.cassandra.io.sstable.format.big.BigFormat;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.CLibrary;
 import org.apache.cassandra.utils.FBUtilities;
@@ -315,10 +316,10 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     {
         static String EXT = ".log";
         static char SEP = '_';
-        static String FILE_REGEX_STR = String.format("^(.*)_(.*)%s$", EXT);
-        static Pattern FILE_REGEX = Pattern.compile(FILE_REGEX_STR); //(opname)_(id).log
+        static String FILE_REGEX_STR = String.format("^%s_txn_(.*)_(.*)%s$", BigFormat.latestVersion, EXT);
+        static Pattern FILE_REGEX = Pattern.compile(FILE_REGEX_STR); // ma_txn_opname_id.log (where ma is the latest sstable version)
         static String LINE_REGEX_STR = "^(.*)\\[(\\d*)\\]$";
-        static Pattern LINE_REGEX = Pattern.compile(LINE_REGEX_STR); //*[checksum]
+        static Pattern LINE_REGEX = Pattern.compile(LINE_REGEX_STR); // *[checksum]
 
         public final File file;
         public final TransactionData parent;
@@ -342,7 +343,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
             for (Record record : records)
             {
-                if (!record.verify(parent.getParentFolder(), false))
+                if (!record.verify(parent.getFolder(), false))
                     throw new CorruptTransactionLogException(String.format("Failed to verify transaction %s record [%s]: possible disk corruption, aborting", parent.getId(), record),
                                                              this);
             }
@@ -379,7 +380,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             {
                 for (Record record : records)
                 {
-                    if (!record.verify(parent.getParentFolder(), true))
+                    if (!record.verify(parent.getFolder(), true))
                         throw new CorruptTransactionLogException(String.format("Last record of transaction %s is corrupt [%s] and at least " +
                                                                                "one previous record does not match state on disk, possible disk corruption, aborting",
                                                                                parent.getId(), message),
@@ -435,14 +436,14 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         private Record makeRecord(RecordType type, SSTable table)
         {
-            String relativePath = FileUtils.getRelativePath(parent.getParentFolder(), table.descriptor.baseFilename());
+            String relativePath = FileUtils.getRelativePath(parent.getFolder(), table.descriptor.baseFilename());
             if (type == RecordType.ADD)
             {
                 return Record.makeNew(relativePath);
             }
             else if (type == RecordType.REMOVE)
             {
-                return Record.makeOld(parent.getParentFolder(), relativePath);
+                return Record.makeOld(parent.getFolder(), relativePath);
             }
             else
             {
@@ -488,7 +489,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         private void deleteRecord(Record record)
         {
-            List<File> files = record.getTrackedFiles(parent.getParentFolder());
+            List<File> files = record.getTrackedFiles(parent.getFolder());
             if (files.isEmpty())
                 return; // Files no longer exist, nothing to do
 
@@ -503,7 +504,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         {
             Set<File> ret = records.stream()
                             .filter((r) -> r.type == type)
-                            .map((r) -> r.getTrackedFiles(parent.getParentFolder()))
+                            .map((r) -> r.getTrackedFiles(parent.getFolder()))
                             .flatMap(List::stream)
                             .collect(Collectors.toSet());
             ret.add(file);
@@ -523,7 +524,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         @Override
         public String toString()
         {
-            return FileUtils.getRelativePath(parent.getParentFolder(), FileUtils.getCanonicalPath(file));
+            return FileUtils.getRelativePath(parent.getFolder(), FileUtils.getCanonicalPath(file));
         }
     }
 
@@ -648,16 +649,20 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         String getFileName()
         {
-            String fileName = StringUtils.join(opType.fileName,
+            String fileName = StringUtils.join(BigFormat.latestVersion,
+                                               TransactionFile.SEP,
+                                               "txn",
+                                               TransactionFile.SEP,
+                                               opType.fileName,
                                                TransactionFile.SEP,
                                                id.toString(),
                                                TransactionFile.EXT);
             return StringUtils.join(folder, File.separator, fileName);
         }
 
-        String getParentFolder()
+        String getFolder()
         {
-            return folder.getParent();
+            return folder.getPath();
         }
 
         static boolean isLogFile(String name)
@@ -706,7 +711,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     {
         this.tracker = tracker;
         this.data = new TransactionData(opType,
-                                        Directories.getTransactionsDirectory(folder),
+                                        folder,
                                         UUIDGen.getTimeUUID());
         this.selfRef = new Ref<>(this, new TransactionTidier(data));
 
@@ -767,13 +772,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     @VisibleForTesting
     String getDataFolder()
     {
-        return data.getParentFolder();
-    }
-
-    @VisibleForTesting
-    String getLogsFolder()
-    {
-        return StringUtils.join(getDataFolder(), File.separator, Directories.TRANSACTIONS_SUBDIR);
+        return data.getFolder();
     }
 
     @VisibleForTesting
@@ -978,7 +977,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     {
         Throwable accumulate = null;
 
-        for (File dir : getFolders(metadata, null))
+        for (File dir : new Directories(metadata).getCFDirectories())
         {
             File[] logs = dir.listFiles((dir1, name) -> TransactionData.isLogFile(name));
 
@@ -1008,7 +1007,9 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     {
         Set<File> ret = new HashSet<>();
 
-        for (File dir : getFolders(metadata, folder))
+        List<File> directories = new Directories(metadata).getCFDirectories();
+        directories.add(folder);
+        for (File dir : directories)
         {
             File[] logs = dir.listFiles((dir1, name) -> {
                 return TransactionData.isLogFile(name);
@@ -1074,33 +1075,10 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     static Set<File> getLogFiles(CFMetaData metadata)
     {
         Set<File> ret = new HashSet<>();
-        for (File dir : getFolders(metadata, null))
+        for (File dir : new Directories(metadata).getCFDirectories())
             ret.addAll(Arrays.asList(dir.listFiles((dir1, name) -> {
                 return TransactionData.isLogFile(name);
             })));
-
-        return ret;
-    }
-
-    /**
-     * A utility method to work out the existing transaction sub-folders
-     * either for a table, or a specific parent folder, or both.
-     */
-    private static List<File> getFolders(CFMetaData metadata, File folder)
-    {
-        List<File> ret = new ArrayList<>();
-        if (metadata != null)
-        {
-            Directories directories = new Directories(metadata);
-            ret.addAll(directories.getExistingDirectories(Directories.TRANSACTIONS_SUBDIR));
-        }
-
-        if (folder != null)
-        {
-            File opDir = Directories.getExistingDirectory(folder, Directories.TRANSACTIONS_SUBDIR);
-            if (opDir != null)
-                ret.add(opDir);
-        }
 
         return ret;
     }

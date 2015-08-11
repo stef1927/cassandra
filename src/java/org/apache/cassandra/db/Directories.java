@@ -92,7 +92,6 @@ public class Directories
 
     public static final String BACKUPS_SUBDIR = "backups";
     public static final String SNAPSHOT_SUBDIR = "snapshots";
-    public static final String TRANSACTIONS_SUBDIR = "transactions";
     public static final String SECONDARY_INDEX_NAME_SEPARATOR = ".";
 
     public static final DataDirectory[] dataDirectories;
@@ -466,35 +465,6 @@ public class Directories
         {
             return getOrCreate(location, BACKUPS_SUBDIR);
         }
-    }
-
-    public static File getTransactionsDirectory(File folder)
-    {
-        return getOrCreate(folder, TRANSACTIONS_SUBDIR);
-    }
-
-    public List<File> getExistingDirectories(String subFolder)
-    {
-        List<File> ret = new ArrayList<>();
-        for (File dir : dataPaths)
-        {
-            File subDir = getExistingDirectory(dir, subFolder);
-            if (subDir != null)
-                ret.add(subDir);
-
-        }
-        return ret;
-    }
-
-    public static File getExistingDirectory(File folder, String subFolder)
-    {
-        File subDir = new File(folder, join(subFolder));
-        if (subDir.exists())
-        {
-            assert(subDir.isDirectory());
-            return subDir;
-        }
-        return null;
     }
 
     public SSTableLister sstableLister()

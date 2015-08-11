@@ -92,7 +92,6 @@ public class RealTransactionsTest extends SchemaLoader
         TransactionLog.waitForDeletions();
 
         assertFiles(txn.log().getDataFolder(), new HashSet<>(newSSTable.getAllFilePaths()));
-        assertFiles(txn.log().getLogsFolder(), Collections.<String>emptySet());
     }
 
     @Test
@@ -108,7 +107,6 @@ public class RealTransactionsTest extends SchemaLoader
         TransactionLog.waitForDeletions();
 
         assertFiles(txn.log().getDataFolder(), new HashSet<>(oldSSTable.getAllFilePaths()));
-        assertFiles(txn.log().getLogsFolder(), Collections.<String>emptySet());
     }
 
     @Test
@@ -120,11 +118,6 @@ public class RealTransactionsTest extends SchemaLoader
         SSTableReader ssTableReader = getSSTable(cfs, 100);
 
         String dataFolder = cfs.getLiveSSTables().iterator().next().descriptor.directory.getPath();
-        String transactionLogsFolder = StringUtils.join(dataFolder, File.separator, Directories.TRANSACTIONS_SUBDIR);
-
-        assertTrue(new File(transactionLogsFolder).exists());
-        assertFiles(transactionLogsFolder, Collections.<String>emptySet());
-
         assertFiles(dataFolder, new HashSet<>(ssTableReader.getAllFilePaths()));
     }
 
