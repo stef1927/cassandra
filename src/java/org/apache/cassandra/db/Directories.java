@@ -613,26 +613,36 @@ public class Directories
             // This function always return false since it adds to the components map
             return (file, type) ->
             {
-                Pair<Descriptor, Component> pair = SSTable.tryComponentFromFilename(file.getParentFile(), file.getName());
-                if (pair == null)
-                    return false;
-
-                // we are only interested in the SSTable files that belong to the specific ColumnFamily
-                if (!pair.left.ksname.equals(metadata.ksName) || !pair.left.cfname.equals(metadata.cfName))
-                    return false;
-
-                if (skipTemporary && type != LifecycleTransaction.FileType.FINAL)
-                    return false;
-
-                Set<Component> previous = components.get(pair.left);
-                if (previous == null)
+                switch (type)
                 {
-                    previous = new HashSet<>();
-                    components.put(pair.left, previous);
+                    case TXN_LOG:
+                        return false;
+                    case TEMPORARY:
+                        if (skipTemporary)
+                            return false;
+
+                    case FINAL:
+                        Pair<Descriptor, Component> pair = SSTable.tryComponentFromFilename(file.getParentFile(), file.getName());
+                        if (pair == null)
+                            return false;
+
+                        // we are only interested in the SSTable files that belong to the specific ColumnFamily
+                        if (!pair.left.ksname.equals(metadata.ksName) || !pair.left.cfname.equals(metadata.cfName))
+                            return false;
+
+                        Set<Component> previous = components.get(pair.left);
+                        if (previous == null)
+                        {
+                            previous = new HashSet<>();
+                            components.put(pair.left, previous);
+                        }
+                        previous.add(pair.right);
+                        nbFiles++;
+                        return false;
+
+                    default:
+                        throw new AssertionError();
                 }
-                previous.add(pair.right);
-                nbFiles++;
-                return false;
             };
         }
     }

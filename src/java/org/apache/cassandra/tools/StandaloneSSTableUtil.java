@@ -103,8 +103,7 @@ public class StandaloneSSTableUtil
                 case TXN_LOG:
                     return options.oplogs;
                 default:
-                    assert false : "Unsupported file type : " + type;
-                    return false;
+                    throw new AssertionError();
             }
         };
     }
