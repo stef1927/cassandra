@@ -517,7 +517,7 @@ public class ByteBufferUtil
     public static String bytesToHex(ByteBuffer bytes)
     {
         if (bytes.hasArray()) {
-            return Hex.bytesToHex( bytes.array(), bytes.arrayOffset() + bytes.position(), bytes.remaining());
+            return Hex.bytesToHex(bytes.array(), bytes.arrayOffset() + bytes.position(), bytes.remaining());
         }
 
         final int offset = bytes.position();
