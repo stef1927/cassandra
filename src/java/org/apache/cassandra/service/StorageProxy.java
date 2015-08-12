@@ -33,6 +33,7 @@ import com.google.common.cache.CacheLoader;
 import com.google.common.collect.*;
 import com.google.common.util.concurrent.Uninterruptibles;
 
+import org.apache.cassandra.db.batch.LegacyBatchMigrator;
 import org.apache.cassandra.db.marshal.UUIDType;
 import org.apache.cassandra.db.view.MaterializedViewManager;
 import org.apache.cassandra.db.view.MaterializedViewUtils;
@@ -841,7 +842,7 @@ public class StorageProxy implements StorageProxyMBean
             callback = syncWriteToBatchlog(mutations, endpoints.get(Boolean.TRUE), uuid);
 
         if (endpoints.containsKey(Boolean.FALSE))
-            legacyCallback = legacySyncWriteToBatchlog(mutations, endpoints.get(Boolean.FALSE), uuid);
+            legacyCallback = LegacyBatchMigrator.syncWriteToBatchlog(mutations, endpoints.get(Boolean.FALSE), uuid);
 
         // wait for at least one callback
         if (callback != null)
@@ -873,39 +874,13 @@ public class StorageProxy implements StorageProxyMBean
         return callback;
     }
 
-    private static AbstractWriteResponseHandler<?> legacySyncWriteToBatchlog(Collection<Mutation> mutations, Collection<InetAddress> endpoints, UUID uuid)
-    throws WriteTimeoutException, WriteFailureException
-    {
-        AbstractWriteResponseHandler<IMutation> handler = new WriteResponseHandler<>(endpoints,
-                                                                        Collections.<InetAddress>emptyList(),
-                                                                        ConsistencyLevel.ONE,
-                                                                        Keyspace.open(SystemKeyspace.NAME),
-                                                                        null,
-                                                                        WriteType.BATCH_LOG);
-
-        BatchStore batchStore = new BatchStore(uuid, FBUtilities.timestampMicros()).mutations(mutations);
-
-        for (InetAddress target : endpoints)
-        {
-            int targetVersion = MessagingService.instance().getVersion(target);
-            MessagingService.instance().sendRR(batchStore.getLegacyMutation(targetVersion)
-                                                         .createMessage(MessagingService.Verb.MUTATION),
-                                               target,
-                                               handler,
-                                               false);
-
-        }
-
-        return handler;
-    }
-
     private static void asyncRemoveFromBatchlog(ImmutableListMultimap<Boolean, InetAddress> endpoints, UUID uuid)
     {
         if (endpoints.containsKey(Boolean.TRUE))
             asyncRemoveFromBatchlog(endpoints.get(Boolean.TRUE), uuid);
 
         if (endpoints.containsKey(Boolean.FALSE))
-            legacyAsyncRemoveFromBatchlog(endpoints.get(Boolean.FALSE), uuid);
+            LegacyBatchMigrator.asyncRemoveFromBatchlog(endpoints.get(Boolean.FALSE), uuid);
     }
 
     private static void asyncRemoveFromBatchlog(Collection<InetAddress> endpoints, UUID uuid)
@@ -919,20 +894,6 @@ public class StorageProxy implements StorageProxyMBean
                 MessagingService.instance().sendOneWay(message, target);
         }
 
-    }
-
-    private static void legacyAsyncRemoveFromBatchlog(Collection<InetAddress> endpoints, UUID uuid)
-    {
-        AbstractWriteResponseHandler<IMutation> handler = new WriteResponseHandler<>(endpoints,
-                                                                        Collections.<InetAddress>emptyList(),
-                                                                        ConsistencyLevel.ANY,
-                                                                        Keyspace.open(SystemKeyspace.NAME),
-                                                                        null,
-                                                                        WriteType.SIMPLE);
-        Mutation mutation = BatchRemove.getMutation(uuid);
-
-        for (InetAddress target : endpoints)
-            MessagingService.instance().sendRR(mutation.createMessage(MessagingService.Verb.MUTATION), target, handler, false);
     }
 
     private static void asyncWriteBatchedMutations(List<WriteResponseHandlerWrapper> wrappers, String localDataCenter, Stage stage)

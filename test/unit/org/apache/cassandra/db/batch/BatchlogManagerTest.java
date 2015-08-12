@@ -166,7 +166,9 @@ public class BatchlogManagerTest
                            : (System.currentTimeMillis() + BatchlogManager.instance.getBatchlogTimeout());
 
             BatchStore batchStore = new BatchStore(UUIDGen.getTimeUUID(timestamp, i), FBUtilities.timestampMicros()).mutations(mutations);
-            Mutation mutation = legacy ? batchStore.getLegacyMutation(MessagingService.current_version) : batchStore.getMutation(MessagingService.current_version);
+            Mutation mutation = legacy
+                                ? LegacyBatchMigrator.getMutation(MessagingService.current_version, batchStore)
+                                : batchStore.getMutation(MessagingService.current_version);
             mutation.applyUnsafe();
         }
 
@@ -287,16 +289,14 @@ public class BatchlogManagerTest
 
     static Mutation fakeVersion12MutationFor(Collection<Mutation> mutations, long now)
     {
-        return new BatchStore(UUID.randomUUID(), now * 1000)
-               .mutations(mutations)
-               .getLegacyMutation(MessagingService.VERSION_30);
+        BatchStore batchStore = new BatchStore(UUID.randomUUID(), now * 1000).mutations(mutations);
+        return LegacyBatchMigrator.getMutation(MessagingService.VERSION_30, batchStore);
     }
 
     static Mutation fakeVersion20MutationFor(Collection<Mutation> mutations, UUID uuid)
     {
-        return new BatchStore(uuid, UUIDGen.unixTimestamp(uuid) * 1000)
-               .mutations(mutations)
-               .getLegacyMutation(MessagingService.VERSION_30);
+        BatchStore batchStore = new BatchStore(uuid, UUIDGen.unixTimestamp(uuid) * 1000).mutations(mutations);
+        return LegacyBatchMigrator.getMutation(MessagingService.VERSION_30, batchStore);
     }
 
     @Test

@@ -22,7 +22,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 
@@ -38,7 +37,6 @@ import org.apache.cassandra.io.util.DataOutputBuffer;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.MessageOut;
 import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.UUIDSerializer;
 
 public class BatchStore
@@ -108,31 +106,6 @@ public class BatchStore
             {
                 throw new RuntimeException(e);
             }
-        }
-    }
-
-    public Mutation getLegacyMutation(int version)
-    {
-        return new RowUpdateBuilder(SystemKeyspace.LegacyBatchlog, timeMicros, uuid)
-               .clustering()
-               .add("written_at", new Date(timeMicros / 1000))
-               .add("data", getLegacySerializedMutations(version))
-               .add("version", version)
-               .build();
-    }
-
-    private ByteBuffer getLegacySerializedMutations(int version)
-    {
-        try (DataOutputBuffer buf = new DataOutputBuffer())
-        {
-            buf.writeInt(mutations.size());
-            for (Mutation mutation : mutations)
-                Mutation.serializer.serialize(mutation, buf, version);
-            return buf.buffer();
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
         }
     }
 
