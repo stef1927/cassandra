@@ -322,10 +322,11 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     {
         static String EXT = ".log";
         static char SEP = '_';
-        static String FILE_REGEX_STR = String.format("^%s_txn_(.*)_(.*)%s$", BigFormat.latestVersion, EXT);
-        static Pattern FILE_REGEX = Pattern.compile(FILE_REGEX_STR); // ma_txn_opname_id.log (where ma is the latest sstable version)
-        static String LINE_REGEX_STR = "^(.*)\\[(\\d*)\\]$";
-        static Pattern LINE_REGEX = Pattern.compile(LINE_REGEX_STR); // *[checksum]
+        // cc_txn_opname_id.log (where cc is one of the sstable versions defined in BigVersion)
+        static String FILE_REGEX_STR = String.format("^(.{2})_txn_(.*)_(.*)%s$", EXT);
+        static Pattern FILE_REGEX = Pattern.compile(FILE_REGEX_STR);
+        static String LINE_REGEX_STR = "^(.*)\\[(\\d*)\\]$"; // *[checksum]
+        static Pattern LINE_REGEX = Pattern.compile(LINE_REGEX_STR);
 
         public final File file;
         public final TransactionData parent;
@@ -549,10 +550,14 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         static TransactionData make(File logFile)
         {
             Matcher matcher = TransactionFile.FILE_REGEX.matcher(logFile.getName());
-            assert matcher.matches();
+            assert matcher.matches() && matcher.groupCount() == 3;
 
-            OperationType operationType = OperationType.fromFileName(matcher.group(1));
-            UUID id = UUID.fromString(matcher.group(2));
+            // For now we don't need this but it is there in case we need to change
+            // file format later on, the version is the sstable version as defined in BigFormat
+            //String version = matcher.group(1);
+
+            OperationType operationType = OperationType.fromFileName(matcher.group(2));
+            UUID id = UUID.fromString(matcher.group(3));
 
             return new TransactionData(operationType, logFile.getParentFile(), id);
         }
