@@ -104,7 +104,7 @@ public final class MessagingService implements MessagingServiceMBean
         READ_REPAIR,
         READ,
         REQUEST_RESPONSE, // client-initiated reads and writes
-        BATCH_STORE, // was @Deprecated STREAM_INITIATE,
+        BATCH_STORE,  // was @Deprecated STREAM_INITIATE,
         BATCH_REMOVE, // was @Deprecated STREAM_INITIATE_DONE,
         @Deprecated STREAM_REPLY,
         @Deprecated STREAM_REQUEST,

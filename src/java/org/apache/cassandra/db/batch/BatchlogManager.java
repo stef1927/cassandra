@@ -102,13 +102,17 @@ public class BatchlogManager implements BatchlogManagerMBean
         batchlogTasks.awaitTermination(60, TimeUnit.SECONDS);
     }
 
+    @VisibleForTesting
     public int countAllBatches()
     {
+        int legacyCount = LegacyBatchMigrator.countAllBatches();
+
         String query = String.format("SELECT count(*) FROM %s.%s", SystemKeyspace.NAME, SystemKeyspace.BATCHES);
         UntypedResultSet results = executeInternal(query);
         if (results.isEmpty())
-            return 0;
-        return (int) results.one().getLong("count");
+            return legacyCount;
+
+        return (int) results.one().getLong("count") + legacyCount;
     }
 
     public long getTotalBatchesReplayed()
@@ -149,7 +153,7 @@ public class BatchlogManager implements BatchlogManagerMBean
         // There cannot be any live content where token(id) <= token(lastReplayedUuid) as every processed batch is
         // deleted, but the tombstoned content may still be present in the tables. To avoid walking over it we specify
         // token(id) > token(lastReplayedUuid) as part of the query.
-        String query = String.format("SELECT id, data, version FROM %s.%s WHERE token(id) > token(?) AND token(id) <= token(?)",
+        String query = String.format("SELECT id, mutations, version FROM %s.%s WHERE token(id) > token(?) AND token(id) <= token(?)",
                                      SystemKeyspace.NAME,
                                      SystemKeyspace.BATCHES);
         UntypedResultSet batches = executeInternalWithPaging(query, pageSize, lastReplayedUuid, limitUuid);

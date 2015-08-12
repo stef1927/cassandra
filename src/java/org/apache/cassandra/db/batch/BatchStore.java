@@ -88,7 +88,7 @@ public class BatchStore
             serializeMutations(version); // local case
 
         for (ByteBuffer serializedMutation : serializedMutations)
-            builder.addListEntry("mutations",serializedMutation);
+            builder.addListEntry("mutations", serializedMutation);
 
         return builder.build();
     }

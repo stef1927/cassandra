@@ -22,7 +22,6 @@ import java.io.IOException;
 
 import org.apache.cassandra.net.IVerbHandler;
 import org.apache.cassandra.net.MessageIn;
-import org.apache.cassandra.net.MessagingService;
 
 public class BatchRemoveVerbHandler implements IVerbHandler<BatchRemove>
 {

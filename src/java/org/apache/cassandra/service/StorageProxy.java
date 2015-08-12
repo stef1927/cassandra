@@ -27,14 +27,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 
-import com.google.common.base.Function;
 import com.google.common.base.Predicate;
 import com.google.common.cache.CacheLoader;
 import com.google.common.collect.*;
 import com.google.common.util.concurrent.Uninterruptibles;
 
 import org.apache.cassandra.db.batch.LegacyBatchMigrator;
-import org.apache.cassandra.db.marshal.UUIDType;
 import org.apache.cassandra.db.view.MaterializedViewManager;
 import org.apache.cassandra.db.view.MaterializedViewUtils;
 import org.apache.cassandra.metrics.*;
@@ -48,10 +46,7 @@ import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.batch.BatchCallback;
-import org.apache.cassandra.db.batch.BatchStore;
-import org.apache.cassandra.db.batch.BatchRemove;
-import org.apache.cassandra.db.batch.BatchlogManager;
+import org.apache.cassandra.db.batch.*;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.db.partitions.*;
 import org.apache.cassandra.db.filter.TombstoneOverwhelmingException;
@@ -680,6 +675,7 @@ public class StorageProxy implements StorageProxyMBean
 
                 wrappers.add(wrapper);
 
+                //TODO - shouldn't this be outside the for loop??
                 //Apply to local batchlog memtable in this thread
                 new BatchStore(batchUUID, FBUtilities.timestampMicros()).mutations(mutations)
                                                                         .getMutation(MessagingService.current_version)
@@ -771,15 +767,7 @@ public class StorageProxy implements StorageProxyMBean
                     batchConsistencyLevel = consistency_level;
             }
 
-            //final Collection<InetAddress> batchlogEndpoints = getBatchlogEndpoints(localDataCenter, batchConsistencyLevel);
-            ImmutableListMultimap<Boolean, InetAddress> batchlogEndpoints =
-                Multimaps.index(getBatchlogEndpoints(localDataCenter, consistency_level), new Function<InetAddress, Boolean>()
-                {
-                    public Boolean apply(InetAddress ep)
-                    {
-                        return MessagingService.instance().getVersion(ep) >= MessagingService.VERSION_30;
-                    }
-                });
+            final BatchlogEndpoints batchlogEndpoints = getBatchlogEndpoints(localDataCenter, batchConsistencyLevel);
             final UUID batchUUID = UUIDGen.getTimeUUID();
             BatchlogResponseHandler.BatchlogCleanup cleanup = new BatchlogResponseHandler.BatchlogCleanup(mutations.size(),
                                                                                                           () -> asyncRemoveFromBatchlog(batchlogEndpoints, batchUUID));
@@ -832,17 +820,17 @@ public class StorageProxy implements StorageProxyMBean
         return replica.equals(FBUtilities.getBroadcastAddress());
     }
 
-    private static void syncWriteToBatchlog(Collection<Mutation> mutations, ImmutableListMultimap<Boolean, InetAddress> endpoints, UUID uuid)
+    private static void syncWriteToBatchlog(Collection<Mutation> mutations, BatchlogEndpoints endpoints, UUID uuid)
     throws WriteTimeoutException, WriteFailureException
     {
         BatchCallback callback = null;
         AbstractWriteResponseHandler<?> legacyCallback = null;
 
-        if (endpoints.containsKey(Boolean.TRUE))
-            callback = syncWriteToBatchlog(mutations, endpoints.get(Boolean.TRUE), uuid);
+        if (!endpoints.current.isEmpty())
+            callback = syncWriteToBatchlog(mutations, endpoints.current, uuid);
 
-        if (endpoints.containsKey(Boolean.FALSE))
-            legacyCallback = LegacyBatchMigrator.syncWriteToBatchlog(mutations, endpoints.get(Boolean.FALSE), uuid);
+        if (!endpoints.legacy.isEmpty())
+            legacyCallback = LegacyBatchMigrator.syncWriteToBatchlog(mutations, endpoints.legacy, uuid);
 
         // wait for at least one callback
         if (callback != null)
@@ -874,13 +862,13 @@ public class StorageProxy implements StorageProxyMBean
         return callback;
     }
 
-    private static void asyncRemoveFromBatchlog(ImmutableListMultimap<Boolean, InetAddress> endpoints, UUID uuid)
+    private static void asyncRemoveFromBatchlog(BatchlogEndpoints endpoints, UUID uuid)
     {
-        if (endpoints.containsKey(Boolean.TRUE))
-            asyncRemoveFromBatchlog(endpoints.get(Boolean.TRUE), uuid);
+        if (!endpoints.current.isEmpty())
+            asyncRemoveFromBatchlog(endpoints.current, uuid);
 
-        if (endpoints.containsKey(Boolean.FALSE))
-            LegacyBatchMigrator.asyncRemoveFromBatchlog(endpoints.get(Boolean.FALSE), uuid);
+        if (!endpoints.legacy.isEmpty())
+            LegacyBatchMigrator.asyncRemoveFromBatchlog(endpoints.legacy, uuid);
     }
 
     private static void asyncRemoveFromBatchlog(Collection<InetAddress> endpoints, UUID uuid)
@@ -1018,13 +1006,36 @@ public class StorageProxy implements StorageProxyMBean
     }
 
     /*
+        A class to filter batchlog endpoints into legacy endpoints (version < 3.0) or not.
+     */
+    private final static class BatchlogEndpoints
+    {
+        public final Collection<InetAddress> current;
+        public final Collection<InetAddress> legacy;
+
+        public BatchlogEndpoints(Collection<InetAddress> endpoints)
+        {
+            this.current = new ArrayList<>(endpoints.size());
+            this.legacy = new ArrayList<>();
+
+            endpoints.forEach(ep ->
+                              {
+                                  if (MessagingService.instance().getVersion(ep) >= MessagingService.VERSION_30)
+                                      this.current.add(ep);
+                                  else
+                                      this.legacy.add(ep);
+                              });
+        }
+    }
+
+    /*
      * Replicas are picked manually:
      * - replicas should be alive according to the failure detector
      * - replicas should be in the local datacenter
      * - choose min(2, number of qualifying candiates above)
      * - allow the local node to be the only replica only if it's a single-node DC
      */
-    private static Collection<InetAddress> getBatchlogEndpoints(String localDataCenter, ConsistencyLevel consistencyLevel)
+    private static BatchlogEndpoints getBatchlogEndpoints(String localDataCenter, ConsistencyLevel consistencyLevel)
     throws UnavailableException
     {
         TokenMetadata.Topology topology = StorageService.instance.getTokenMetadata().cachedOnlyTokenMap().getTopology();
@@ -1035,12 +1046,12 @@ public class StorageProxy implements StorageProxyMBean
         if (chosenEndpoints.isEmpty())
         {
             if (consistencyLevel == ConsistencyLevel.ANY)
-                return Collections.singleton(FBUtilities.getBroadcastAddress());
+                return new BatchlogEndpoints(Collections.singleton(FBUtilities.getBroadcastAddress()));
 
             throw new UnavailableException(ConsistencyLevel.ONE, 1, 0);
         }
 
-        return chosenEndpoints;
+        return new BatchlogEndpoints(chosenEndpoints);
     }
 
     /**

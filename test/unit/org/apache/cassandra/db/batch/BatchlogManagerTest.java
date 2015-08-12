@@ -141,6 +141,7 @@ public class BatchlogManagerTest
         testReplay(true);
     }
 
+    @SuppressWarnings("deprecation")
     private void testReplay(boolean legacy) throws Exception
     {
         long initialAllBatches = BatchlogManager.instance.countAllBatches();
@@ -165,7 +166,7 @@ public class BatchlogManagerTest
                            ? (System.currentTimeMillis() - BatchlogManager.instance.getBatchlogTimeout())
                            : (System.currentTimeMillis() + BatchlogManager.instance.getBatchlogTimeout());
 
-            BatchStore batchStore = new BatchStore(UUIDGen.getTimeUUID(timestamp, i), FBUtilities.timestampMicros()).mutations(mutations);
+            BatchStore batchStore = new BatchStore(UUIDGen.getTimeUUID(timestamp, i), timestamp * 1000).mutations(mutations);
             Mutation mutation = legacy
                                 ? LegacyBatchMigrator.getMutation(MessagingService.current_version, batchStore)
                                 : batchStore.getMutation(MessagingService.current_version);
@@ -173,7 +174,9 @@ public class BatchlogManagerTest
         }
 
         // Flush the batchlog to disk (see CASSANDRA-6822).
-        Keyspace.open(SystemKeyspace.NAME).getColumnFamilyStore(SystemKeyspace.BATCHES).forceBlockingFlush();
+        Keyspace.open(SystemKeyspace.NAME)
+                .getColumnFamilyStore(legacy ? SystemKeyspace.LEGACY_BATCHLOG : SystemKeyspace.BATCHES)
+                .forceBlockingFlush();
 
         assertEquals(100, BatchlogManager.instance.countAllBatches() - initialAllBatches);
         assertEquals(0, BatchlogManager.instance.getTotalBatchesReplayed() - initialReplayedBatches);
@@ -290,13 +293,13 @@ public class BatchlogManagerTest
     static Mutation fakeVersion12MutationFor(Collection<Mutation> mutations, long now)
     {
         BatchStore batchStore = new BatchStore(UUID.randomUUID(), now * 1000).mutations(mutations);
-        return LegacyBatchMigrator.getMutation(MessagingService.VERSION_30, batchStore);
+        return LegacyBatchMigrator.getMutation(MessagingService.VERSION_12, batchStore);
     }
 
     static Mutation fakeVersion20MutationFor(Collection<Mutation> mutations, UUID uuid)
     {
         BatchStore batchStore = new BatchStore(uuid, UUIDGen.unixTimestamp(uuid) * 1000).mutations(mutations);
-        return LegacyBatchMigrator.getMutation(MessagingService.VERSION_30, batchStore);
+        return LegacyBatchMigrator.getMutation(MessagingService.VERSION_20, batchStore);
     }
 
     @Test
@@ -363,7 +366,7 @@ public class BatchlogManagerTest
         Keyspace.open(SystemKeyspace.NAME).getColumnFamilyStore(SystemKeyspace.LEGACY_BATCHLOG).forceBlockingFlush();
         Keyspace.open(SystemKeyspace.NAME).getColumnFamilyStore(SystemKeyspace.BATCHES).forceBlockingFlush();
 
-        assertEquals(100, BatchlogManager.instance.countAllBatches() - initialAllBatches);
+        assertEquals(1500, BatchlogManager.instance.countAllBatches() - initialAllBatches);
         assertEquals(0, BatchlogManager.instance.getTotalBatchesReplayed() - initialReplayedBatches);
 
         UntypedResultSet result = QueryProcessor.executeInternal(String.format("SELECT count(*) FROM \"%s\".\"%s\"", SystemKeyspace.NAME, SystemKeyspace.LEGACY_BATCHLOG));

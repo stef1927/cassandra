@@ -28,7 +28,6 @@ public class BatchStoreVerbHandler implements IVerbHandler<BatchStore>
 {
     public void doVerb(MessageIn<BatchStore> message, int id) throws IOException
     {
-
         message.payload.getMutation(message.version).apply();
         MessagingService.instance().sendReply(BatchResponse.message, id, message.from);
     }

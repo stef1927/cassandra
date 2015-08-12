@@ -21,11 +21,14 @@ package org.apache.cassandra.db.batch;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
+import java.util.List;
 import java.util.UUID;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,6 +42,8 @@ import org.apache.cassandra.db.SystemKeyspace;
 import org.apache.cassandra.db.WriteType;
 import org.apache.cassandra.exceptions.WriteFailureException;
 import org.apache.cassandra.exceptions.WriteTimeoutException;
+import org.apache.cassandra.io.util.DataInputBuffer;
+import org.apache.cassandra.io.util.DataInputPlus;
 import org.apache.cassandra.io.util.DataOutputBuffer;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.AbstractWriteResponseHandler;
@@ -46,6 +51,7 @@ import org.apache.cassandra.service.WriteResponseHandler;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.UUIDGen;
 
+import static org.apache.cassandra.cql3.QueryProcessor.executeInternal;
 import static org.apache.cassandra.cql3.QueryProcessor.executeInternalWithPaging;
 
 public class LegacyBatchMigrator
@@ -72,26 +78,52 @@ public class LegacyBatchMigrator
             UUID id = row.getUUID("id");
             long timestamp = row.getLong("written_at");
             int version = row.has("version") ? row.getInt("version") : MessagingService.VERSION_12;
-            logger.debug("Converting mutation at " + timestamp);
 
-            UUID newId = id;
-            if (id.version() != 1 || timestamp != UUIDGen.unixTimestamp(id))
-                newId = UUIDGen.getTimeUUID(timestamp, convertedBatches);
-            ++convertedBatches;
+            if (logger.isDebugEnabled())
+                logger.debug("Converting mutation at {}", timestamp);
 
-            Mutation addRow = new BatchStore(newId, FBUtilities.timestampMicros())
-                              .serializedMutations(Collections.singleton(row.getBytes("data")))
-                              .getMutation(version);
+            try
+            {
+                UUID newId = id;
+                if (id.version() != 1 || timestamp != UUIDGen.unixTimestamp(id))
+                    newId = UUIDGen.getTimeUUID(timestamp, convertedBatches);
+                ++convertedBatches;
 
-            addRow.apply();
+                DataInputPlus in = new DataInputBuffer(row.getBytes("data"), false);
+                int numMutations = in.readInt();
+                List<Mutation> mutations = new ArrayList(numMutations);
+                for (int i = 0; i < numMutations; i++)
+                    mutations.add(Mutation.serializer.deserialize(in, version));
+
+                Mutation addRow = new BatchStore(newId, FBUtilities.timestampMicros())
+                                  .mutations(mutations)
+                                  .getMutation(version);
+
+                addRow.apply();
+            }
+            catch (Throwable t)
+            {
+                logger.error("Failed to convert mutation {} at timestamp {}", id, timestamp, t);
+            }
         }
+
         if (convertedBatches > 0)
             Keyspace.openAndGetStore(SystemKeyspace.LegacyBatchlog).truncateBlocking();
         // cleanup will be called after replay
         logger.debug("Finished convertLegacyBatchEntries");
     }
 
+    @VisibleForTesting
     @SuppressWarnings("deprecation")
+    public static int countAllBatches()
+    {
+        String query = String.format("SELECT count(*) FROM %s.%s", SystemKeyspace.NAME, SystemKeyspace.LEGACY_BATCHLOG);
+        UntypedResultSet results = executeInternal(query);
+        if (results.isEmpty())
+            return 0;
+        return (int) results.one().getLong("count");
+    }
+
     public static AbstractWriteResponseHandler<?> syncWriteToBatchlog(Collection<Mutation> mutations, Collection<InetAddress> endpoints, UUID uuid)
     throws WriteTimeoutException, WriteFailureException
     {
@@ -134,7 +166,7 @@ public class LegacyBatchMigrator
     @SuppressWarnings("deprecation")
     static Mutation getMutation(int version, BatchStore cmd)
     {
-        return new RowUpdateBuilder(SystemKeyspace.LegacyBatchlog, cmd.timeMicros, cmd)
+        return new RowUpdateBuilder(SystemKeyspace.LegacyBatchlog, cmd.timeMicros, cmd.uuid)
                .clustering()
                .add("written_at", new Date(cmd.timeMicros / 1000))
                .add("data", getSerializedMutations(version, cmd.mutations))
@@ -142,7 +174,6 @@ public class LegacyBatchMigrator
                .build();
     }
 
-    @SuppressWarnings("deprecation")
     private static ByteBuffer getSerializedMutations(int version, Collection<Mutation> mutations)
     {
         try (DataOutputBuffer buf = new DataOutputBuffer())
