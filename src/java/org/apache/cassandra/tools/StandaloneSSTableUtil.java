@@ -94,15 +94,18 @@ public class StandaloneSSTableUtil
     {
         return (file, type) ->
         {
-            if (type == LifecycleTransaction.FileType.FINAL)
-                return options.type != Options.FileType.TMP;
-            else if (type == LifecycleTransaction.FileType.TEMPORARY)
-                return options.type != Options.FileType.FINAL;
-            else if (type == LifecycleTransaction.FileType.TXN_LOG)
-                return options.oplogs;
-
-            assert false : "Unsupported file type : " + type;
-            return false;
+            switch(type)
+            {
+                case FINAL:
+                    return options.type != Options.FileType.TMP;
+                case TEMPORARY:
+                    return options.type != Options.FileType.FINAL;
+                case TXN_LOG:
+                    return options.oplogs;
+                default:
+                    assert false : "Unsupported file type : " + type;
+                    return false;
+            }
         };
     }
 

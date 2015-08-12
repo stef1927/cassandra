@@ -407,17 +407,13 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         public void commit()
         {
-            assert !aborted() : "Already aborted!";
-            assert !committed() : "Already committed!";
-
+            assert !completed() : "Already completed!";
             addRecord(Record.makeCommit(System.currentTimeMillis()));
         }
 
         public void abort()
         {
-            assert !aborted() : "Already aborted!";
-            assert !committed() : "Already committed!";
-
+            assert !completed() : "Already completed!";
             addRecord(Record.makeAbort(System.currentTimeMillis()));
         }
 
@@ -429,6 +425,11 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         public boolean aborted()
         {
             return records.contains(Record.makeAbort(0));
+        }
+
+        public boolean completed()
+        {
+            return committed() || aborted();
         }
 
         public boolean add(RecordType type, SSTable table)
@@ -617,7 +618,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
 
         boolean completed()
         {
-            return  file.committed() || file.aborted();
+            return  file.completed();
         }
 
         Throwable removeUnfinishedLeftovers(Throwable accumulate)
@@ -997,6 +998,8 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
                     accumulate = data.readLogFile(accumulate);
                     if (accumulate == null)
                         accumulate = data.removeUnfinishedLeftovers(accumulate);
+                    else
+                        logger.error("Failed to remove unfinished leftovers for {}", data, accumulate);
                 }
             }
         }
@@ -1058,7 +1061,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
                                {
                                    Throwables.maybeFail(txn.readLogFile(null));
 
-                                   Set<File> files = txn.getTemporaryFiles().stream().collect(Collectors.toSet());
+                                   Set<File> files = txn.getTemporaryFiles();
                                    temporaryFiles.addAll(files);
                                    finalFiles.removeAll(files);
                                }
@@ -1079,6 +1082,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         return ret;
     }
 
+    // benedict: delete this on commit if you are happy with the changes, just left it to remind us of possible races
     // review:
     // we may want to have an "in progress" set of txn logs that can be consulted for processes that
     // hit the filesystem directly but fail processing a txn log we're actively updating

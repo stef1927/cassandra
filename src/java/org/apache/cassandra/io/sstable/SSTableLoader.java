@@ -82,6 +82,12 @@ public class SSTableLoader implements StreamEventHandler
                 File dir = file.getParentFile();
                 String name = file.getName();
 
+                if (type != LifecycleTransaction.FileType.FINAL)
+                {
+                    outputHandler.output(String.format("Skipping temporary file %s", name));
+                    return false;
+                }
+
                 Pair<Descriptor, Component> p = SSTable.tryComponentFromFilename(dir, name);
                 Descriptor desc = p == null ? null : p.left;
                 if (p == null || !p.right.equals(Component.DATA))
@@ -97,12 +103,6 @@ public class SSTableLoader implements StreamEventHandler
                 if (metadata == null)
                 {
                     outputHandler.output(String.format("Skipping file %s: table %s.%s doesn't exist", name, keyspace, desc.cfname));
-                    return false;
-                }
-
-                if (type != LifecycleTransaction.FileType.FINAL)
-                {
-                    outputHandler.output(String.format("Skipping temporary file %s", name));
                     return false;
                 }
 
