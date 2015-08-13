@@ -66,9 +66,9 @@ public class LegacyBatchMigrator
     }
 
     @SuppressWarnings("deprecation")
-    public static void convertLegacyBatchEntries()
+    public static void convertBatchEntries()
     {
-        logger.debug("Started convertLegacyBatchEntries");
+        logger.debug("Started convertBatchEntries");
 
         String query = String.format("SELECT id, data, written_at, version FROM %s.%s",
                                      SystemKeyspace.NAME,
@@ -89,7 +89,6 @@ public class LegacyBatchMigrator
                 UUID newId = id;
                 if (id.version() != 1 || timestamp != UUIDGen.unixTimestamp(id))
                     newId = UUIDGen.getTimeUUID(timestamp, convertedBatches);
-                ++convertedBatches;
 
                 DataInputPlus in = new DataInputBuffer(row.getBytes("data"), false);
                 int numMutations = in.readInt();
@@ -102,6 +101,7 @@ public class LegacyBatchMigrator
                                   .getMutation(version);
 
                 addRow.apply();
+                ++convertedBatches;
             }
             catch (Throwable t)
             {
@@ -111,8 +111,9 @@ public class LegacyBatchMigrator
 
         if (convertedBatches > 0)
             Keyspace.openAndGetStore(SystemKeyspace.LegacyBatchlog).truncateBlocking();
+
         // cleanup will be called after replay
-        logger.debug("Finished convertLegacyBatchEntries");
+        logger.debug("Finished convertBatchEntries");
     }
 
     @VisibleForTesting
