@@ -209,9 +209,9 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
         transactionLog.finish();
 
-        assertFiles(transactionLog.getDataFolder(), Collections.<String>emptySet());
-
         sstableNew.selfRef().release();
+
+        assertFiles(transactionLog.getDataFolder(), Collections.<String>emptySet());
     }
 
     @Test
@@ -575,17 +575,24 @@ public class TransactionLogTest extends AbstractTransactionalTest
         //Modify the transaction log in some way
         modifier.accept(transactionLog, sstableOld);
 
+        String txnFilePath = transactionLog.getData().getLogFile().file.getPath();
+
+        transactionLog.complete(null);
+
+        sstableOld.selfRef().release();
+        sstableNew.selfRef().release();
+
         if (isRecoverable)
         { // the corruption is recoverable, we assume there is a commit record
 
             //This should return the old files and the tx log
-            assertFiles(Iterables.concat(sstableOld.getAllFilePaths(), Collections.singleton(transactionLog.getData().getFileName())),
+            assertFiles(Iterables.concat(sstableOld.getAllFilePaths(), Collections.singleton(txnFilePath)),
                         TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder));
 
             //This should remove old files
             TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
 
-            assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(sstableNew.getAllFilePaths()));
+            assertFiles(dataFolder.getPath(), Sets.newHashSet(sstableNew.getAllFilePaths()));
         }
         else
         { // if an intermediate line was modified, we cannot tell,
@@ -597,13 +604,11 @@ public class TransactionLogTest extends AbstractTransactionalTest
             //This should not remove any files
             TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
 
-            assertFiles(transactionLog.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(),
-                                                                                         sstableOld.getAllFilePaths(),
-                                                                                         Collections.singleton(transactionLog.getData().getLogFile().file.getPath()))),
+            assertFiles(dataFolder.getPath(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(),
+                                                                               sstableOld.getAllFilePaths(),
+                                                                               Collections.singleton(txnFilePath))),
                         true);
         }
-
-        transactionLog.close();
     }
 
     @Test
