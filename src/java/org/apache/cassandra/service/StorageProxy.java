@@ -849,6 +849,9 @@ public class StorageProxy implements StorageProxyMBean
 
         for (InetAddress target : endpoints)
         {
+            if (logger.isDebugEnabled())
+                logger.debug("Sending batchlog store request {} to {} for {} mutations", uuid, target, mutations.size());
+
             if (canDoLocalRequest(target))
             {
                 performLocally(Stage.BATCHLOG_MUTATION, () -> message.payload.getMutation(MessagingService.current_version).apply(), callback);
@@ -876,6 +879,9 @@ public class StorageProxy implements StorageProxyMBean
         MessageOut<BatchRemove> message = new BatchRemove(uuid).createMessage();
         for (InetAddress target : endpoints)
         {
+            if (logger.isDebugEnabled())
+                logger.debug("Sending batchlog remove request {} to {}", uuid, target);
+
             if (canDoLocalRequest(target))
                 performLocally(Stage.BATCHLOG_MUTATION, () -> message.payload.getMutation().apply());
             else

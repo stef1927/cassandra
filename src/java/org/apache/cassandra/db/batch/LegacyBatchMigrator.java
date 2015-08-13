@@ -40,6 +40,8 @@ import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.RowUpdateBuilder;
 import org.apache.cassandra.db.SystemKeyspace;
 import org.apache.cassandra.db.WriteType;
+import org.apache.cassandra.db.marshal.UUIDType;
+import org.apache.cassandra.db.partitions.PartitionUpdate;
 import org.apache.cassandra.exceptions.WriteFailureException;
 import org.apache.cassandra.exceptions.WriteTimeoutException;
 import org.apache.cassandra.io.util.DataInputBuffer;
@@ -138,8 +140,11 @@ public class LegacyBatchMigrator
 
         for (InetAddress target : endpoints)
         {
+            if (logger.isDebugEnabled())
+                logger.debug("Sending legacy batchlog store request {} to {} for {} mutations", uuid, target, mutations.size());
+
             int targetVersion = MessagingService.instance().getVersion(target);
-            MessagingService.instance().sendRR(getMutation(targetVersion, batchStore).createMessage(MessagingService.Verb.MUTATION),
+            MessagingService.instance().sendRR(getStoreMutation(targetVersion, batchStore).createMessage(MessagingService.Verb.MUTATION),
                                                target,
                                                handler,
                                                false);
@@ -157,14 +162,19 @@ public class LegacyBatchMigrator
                                                                                      Keyspace.open(SystemKeyspace.NAME),
                                                                                      null,
                                                                                      WriteType.SIMPLE);
-        Mutation mutation = BatchRemove.getMutation(uuid);
+        Mutation mutation = getRemoveMutation(uuid);
 
         for (InetAddress target : endpoints)
+        {
+            if (logger.isDebugEnabled())
+                logger.debug("Sending legacy batchlog remove request {} to {}", uuid, target);
+
             MessagingService.instance().sendRR(mutation.createMessage(MessagingService.Verb.MUTATION), target, handler, false);
+        }
     }
 
     @SuppressWarnings("deprecation")
-    static Mutation getMutation(int version, BatchStore cmd)
+    static Mutation getStoreMutation(int version, BatchStore cmd)
     {
         return new RowUpdateBuilder(SystemKeyspace.LegacyBatchlog, cmd.timeMicros, cmd.uuid)
                .clustering()
@@ -172,6 +182,15 @@ public class LegacyBatchMigrator
                .add("data", getSerializedMutations(version, cmd.mutations))
                .add("version", version)
                .build();
+    }
+
+    @SuppressWarnings("deprecation")
+    static Mutation getRemoveMutation(UUID uuid)
+    {
+        return new Mutation(PartitionUpdate.fullPartitionDelete(SystemKeyspace.LegacyBatchlog,
+                                                                UUIDType.instance.decompose(uuid),
+                                                                FBUtilities.timestampMicros(),
+                                                                FBUtilities.nowInSeconds()));
     }
 
     private static ByteBuffer getSerializedMutations(int version, Collection<Mutation> mutations)

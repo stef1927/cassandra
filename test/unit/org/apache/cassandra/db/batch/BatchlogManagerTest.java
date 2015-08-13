@@ -17,33 +17,17 @@
  */
 package org.apache.cassandra.db.batch;
 
-import static org.apache.cassandra.utils.ByteBufferUtil.bytes;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 import java.net.InetAddress;
-import java.util.Collections;
-import java.util.Iterator;
-
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.db.partitions.ImmutableBTreePartition;
-import org.apache.cassandra.db.rows.Row;
-import org.apache.cassandra.db.partitions.PartitionUpdate;
-import org.apache.cassandra.schema.KeyspaceParams;
-import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.FBUtilities;
-
 import java.util.*;
 import java.util.concurrent.ExecutionException;
+
 import com.google.common.collect.Lists;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.*;
 
 import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.Util.PartitionerSwitcher;
+import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.cql3.QueryProcessor;
 import org.apache.cassandra.cql3.UntypedResultSet;
@@ -55,13 +39,20 @@ import org.apache.cassandra.db.RowUpdateBuilder;
 import org.apache.cassandra.db.SystemKeyspace;
 import org.apache.cassandra.db.commitlog.ReplayPosition;
 import org.apache.cassandra.db.marshal.BytesType;
-import org.apache.cassandra.db.marshal.LongType;
+import org.apache.cassandra.db.partitions.ImmutableBTreePartition;
+import org.apache.cassandra.db.partitions.PartitionUpdate;
+import org.apache.cassandra.db.rows.Row;
 import org.apache.cassandra.dht.Murmur3Partitioner;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.locator.TokenMetadata;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.schema.KeyspaceParams;
+import org.apache.cassandra.utils.ByteBufferUtil;
+import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.UUIDGen;
+
+import static org.junit.Assert.*;
 
 public class BatchlogManagerTest
 {
@@ -156,7 +147,7 @@ public class BatchlogManagerTest
             List<Mutation> mutations = new ArrayList<>(10);
             for (int j = 0; j < 10; j++)
             {
-                mutations.add(new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), bytes(i))
+                mutations.add(new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), ByteBufferUtil.bytes(i))
                               .clustering("name" + j)
                               .add("val", "val" + j)
                               .build());
@@ -168,7 +159,7 @@ public class BatchlogManagerTest
 
             BatchStore batchStore = new BatchStore(UUIDGen.getTimeUUID(timestamp, i), timestamp * 1000).mutations(mutations);
             Mutation mutation = legacy
-                                ? LegacyBatchMigrator.getMutation(MessagingService.current_version, batchStore)
+                                ? LegacyBatchMigrator.getStoreMutation(MessagingService.current_version, batchStore)
                                 : batchStore.getMutation(MessagingService.current_version);
             mutation.applyUnsafe();
         }
@@ -200,7 +191,7 @@ public class BatchlogManagerTest
                     assertTrue(it.hasNext());
                     UntypedResultSet.Row row = it.next();
 
-                    assertEquals(bytes(i), row.getBytes("key"));
+                    assertEquals(ByteBufferUtil.bytes(i), row.getBytes("key"));
                     assertEquals("name" + j, row.getString("name"));
                     assertEquals("val" + j, row.getString("val"));
                 }
@@ -228,11 +219,11 @@ public class BatchlogManagerTest
         // In the middle of the process, 'truncate' Standard2.
         for (int i = 0; i < 1000; i++)
         {
-            Mutation mutation1 = new RowUpdateBuilder(cf2, FBUtilities.timestampMicros(), bytes(i))
+            Mutation mutation1 = new RowUpdateBuilder(cf2, FBUtilities.timestampMicros(), ByteBufferUtil.bytes(i))
                 .clustering("name" + i)
                 .add("val", "val" + i)
                 .build();
-            Mutation mutation2 = new RowUpdateBuilder(cf3, FBUtilities.timestampMicros(), bytes(i))
+            Mutation mutation2 = new RowUpdateBuilder(cf3, FBUtilities.timestampMicros(), ByteBufferUtil.bytes(i))
                 .clustering("name" + i)
                 .add("val", "val" + i)
                 .build();
@@ -271,7 +262,7 @@ public class BatchlogManagerTest
             UntypedResultSet result = QueryProcessor.executeInternal(String.format("SELECT * FROM \"%s\".\"%s\" WHERE key = intAsBlob(%d)", KEYSPACE1, CF_STANDARD2,i));
             if (i >= 500)
             {
-                assertEquals(bytes(i), result.one().getBytes("key"));
+                assertEquals(ByteBufferUtil.bytes(i), result.one().getBytes("key"));
                 assertEquals("name" + i, result.one().getString("name"));
                 assertEquals("val" + i, result.one().getString("val"));
             }
@@ -284,7 +275,7 @@ public class BatchlogManagerTest
         for (int i = 0; i < 1000; i++)
         {
             UntypedResultSet result = QueryProcessor.executeInternal(String.format("SELECT * FROM \"%s\".\"%s\" WHERE key = intAsBlob(%d)", KEYSPACE1, CF_STANDARD3, i));
-            assertEquals(bytes(i), result.one().getBytes("key"));
+            assertEquals(ByteBufferUtil.bytes(i), result.one().getBytes("key"));
             assertEquals("name" + i, result.one().getString("name"));
             assertEquals("val" + i, result.one().getString("val"));
         }
@@ -293,13 +284,13 @@ public class BatchlogManagerTest
     static Mutation fakeVersion12MutationFor(Collection<Mutation> mutations, long now)
     {
         BatchStore batchStore = new BatchStore(UUID.randomUUID(), now * 1000).mutations(mutations);
-        return LegacyBatchMigrator.getMutation(MessagingService.VERSION_12, batchStore);
+        return LegacyBatchMigrator.getStoreMutation(MessagingService.VERSION_12, batchStore);
     }
 
     static Mutation fakeVersion20MutationFor(Collection<Mutation> mutations, UUID uuid)
     {
         BatchStore batchStore = new BatchStore(uuid, UUIDGen.unixTimestamp(uuid) * 1000).mutations(mutations);
-        return LegacyBatchMigrator.getMutation(MessagingService.VERSION_20, batchStore);
+        return LegacyBatchMigrator.getStoreMutation(MessagingService.VERSION_20, batchStore);
     }
 
     @Test
@@ -313,7 +304,7 @@ public class BatchlogManagerTest
         // Half (500) ready to be replayed, half not.
         for (int i = 0; i < 1000; i++)
         {
-            Mutation mutation = new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), bytes(i))
+            Mutation mutation = new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), ByteBufferUtil.bytes(i))
                 .clustering("name" + i)
                 .add("val", "val" + i)
                 .build();
@@ -330,7 +321,7 @@ public class BatchlogManagerTest
         // Half (200) ready to be replayed, half not.
         for (int i = 1000; i < 1400; i++)
         {
-            Mutation mutation = new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), bytes(i))
+            Mutation mutation = new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), ByteBufferUtil.bytes(i))
                 .clustering("name" + i)
                 .add("val", "val" + i)
                 .build();
@@ -346,7 +337,7 @@ public class BatchlogManagerTest
         // Mix in 100 current version mutations, 50 ready for replay.
         for (int i = 1400; i < 1500; i++)
         {
-            Mutation mutation = new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), bytes(i))
+            Mutation mutation = new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), ByteBufferUtil.bytes(i))
                 .clustering("name" + i)
                 .add("val", "val" + i)
                 .build();
@@ -386,7 +377,7 @@ public class BatchlogManagerTest
             result = QueryProcessor.executeInternal(String.format("SELECT * FROM \"%s\".\"%s\" WHERE key = intAsBlob(%d)", KEYSPACE1, CF_STANDARD4, i));
             if (i < 500 || i >= 1000 && i < 1200 || i >= 1400 && i < 1450)
             {
-                assertEquals(bytes(i), result.one().getBytes("key"));
+                assertEquals(ByteBufferUtil.bytes(i), result.one().getBytes("key"));
                 assertEquals("name" + i, result.one().getString("name"));
                 assertEquals("val" + i, result.one().getString("val"));
             }
