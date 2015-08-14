@@ -47,6 +47,7 @@ import org.apache.cassandra.db.rows.SerializationHelper;
 import org.apache.cassandra.db.partitions.PartitionUpdate;
 import org.apache.cassandra.db.lifecycle.SSTableSet;
 import org.apache.cassandra.exceptions.ConfigurationException;
+import org.apache.cassandra.io.util.RebufferingInputStream;
 import org.apache.cassandra.schema.CompressionParams;
 import org.apache.cassandra.io.compress.ICompressor;
 import org.apache.cassandra.io.util.ChannelProxy;
@@ -517,7 +518,7 @@ public class CommitLogReplayer
     {
 
         final Mutation mutation;
-        try (NIODataInputStream bufIn = new DataInputBuffer(inputBuffer, 0, size))
+        try (RebufferingInputStream bufIn = new DataInputBuffer(inputBuffer, 0, size))
         {
             mutation = Mutation.serializer.deserialize(bufIn,
                                                        desc.getMessagingVersion(),

@@ -59,7 +59,7 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
         long position = bufferOffset;
         while (buffer.hasRemaining())
         {
-            int n = fileChannel().read(buffer, position);
+            int n = channel.read(buffer, position);
             if (n < 0)
                 break;
             position += n;
@@ -73,7 +73,7 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
         }
         catch (IOException e)
         {
-            throw new CorruptFileException(e, fileChannel().filePath());
+            throw new CorruptFileException(e, channel.filePath());
         }
 
         buffer.position((int) (desiredPosition - bufferOffset));
@@ -93,7 +93,7 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
     }
 
     @Override
-    public void close()
+    public void close() throws IOException
     {
         try
         {
@@ -101,7 +101,7 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
         }
         finally
         {
-            FileUtils.closeQuietly(channel);
+            channel.close();
             validator.close();
         }
     }

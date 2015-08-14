@@ -26,14 +26,14 @@ import com.google.common.primitives.Ints;
 
 import org.apache.cassandra.utils.memory.MemoryUtil;
 
-public class MemoryInputStream extends NIODataInputStream implements DataInput
+public class MemoryInputStream extends RebufferingInputStream implements DataInput
 {
     private final Memory mem;
     private long offset;
 
     public MemoryInputStream(Memory mem)
     {
-        super(getByteBuffer(mem, 0), false);
+        super(getByteBuffer(mem, 0));
         this.mem = mem;
         this.offset = 0;
     }
@@ -53,4 +53,9 @@ public class MemoryInputStream extends NIODataInputStream implements DataInput
         return MemoryUtil.getByteBuffer(mem.peer + offset, Ints.checkedCast(mem.size - offset)).order(ByteOrder.BIG_ENDIAN);
     }
 
+    @Override
+    public int available() throws IOException
+    {
+        return buffer.remaining();
+    }
 }

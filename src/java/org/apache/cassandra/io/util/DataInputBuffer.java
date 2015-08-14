@@ -17,18 +17,14 @@
  */
 package org.apache.cassandra.io.util;
 
-import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
 /**
- * Input stream around a fixed ByteBuffer. Necessary to have this derived class to avoid NIODataInputStream's
- * shuffling of bytes behavior in reBuffer()
- *
+ * Input stream around a fixed ByteBuffer.
  */
-public class DataInputBuffer extends NIODataInputStream
+public class DataInputBuffer extends RebufferingInputStream
 {
-
     private static ByteBuffer slice(byte[] buffer, int offset, int length)
     {
         ByteBuffer buf = ByteBuffer.wrap(buffer);
@@ -42,13 +38,12 @@ public class DataInputBuffer extends NIODataInputStream
     }
 
     /**
-     *
-     * @param buf
+     * @param buffer
      * @param duplicate Whether or not to duplicate the buffer to ensure thread safety
      */
-    public DataInputBuffer(ByteBuffer buf, boolean duplicate)
+    public DataInputBuffer(ByteBuffer buffer, boolean duplicate)
     {
-        super(buf, duplicate);
+        super(duplicate ? buffer.duplicate() : buffer);
     }
 
     public DataInputBuffer(byte[] buffer, int offset, int length)
@@ -64,5 +59,12 @@ public class DataInputBuffer extends NIODataInputStream
     @Override
     protected void reBuffer() throws IOException
     {
+        //nope, we don't rebuffer, we are done!
+    }
+
+    @Override
+    public int available() throws IOException
+    {
+        return buffer.remaining();
     }
 }
