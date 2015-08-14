@@ -88,7 +88,7 @@ public class DataIntegrityMetadata
 
         public void close()
         {
-            reader.close();
+            FileUtils.closeQuietly(reader);
         }
     }
 
@@ -140,11 +140,11 @@ public class DataIntegrityMetadata
         {
             try
             {
-                this.digestReader.close();
+                FileUtils.closeQuietly(this.digestReader);
             }
             finally
             {
-                this.dataReader.close();
+                FileUtils.closeQuietly(this.dataReader);
             }
         }
     }

@@ -775,7 +775,7 @@ public class NIODataInputStreamTest
                 out.writeUnsignedVInt(value);
 
                 buf.position(ii);
-                NIODataInputStream in = new DataInputBuffer(buf, false);
+                RebufferingInputStream in = new DataInputBuffer(buf, false);
 
                 assertEquals(value, in.readUnsignedVInt());
             }
@@ -798,7 +798,7 @@ public class NIODataInputStreamTest
             out.writeUnsignedVInt(value);
 
             buf.position(0);
-            NIODataInputStream in = new DataInputBuffer(buf, false);
+            RebufferingInputStream in = new DataInputBuffer(buf, false);
 
             assertEquals(value, in.readUnsignedVInt());
 
@@ -837,7 +837,7 @@ public class NIODataInputStreamTest
             truncated.put(buf);
             truncated.flip();
 
-            NIODataInputStream in = new DataInputBuffer(truncated, false);
+            RebufferingInputStream in = new DataInputBuffer(truncated, false);
 
             boolean threw = false;
             try

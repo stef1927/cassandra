@@ -20,7 +20,6 @@ package org.apache.cassandra.io.util;
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.channels.ReadableByteChannel;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -32,9 +31,14 @@ import org.apache.cassandra.io.compress.BufferType;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.memory.BufferPool;
 
-public class RandomAccessReader extends NIODataInputStream implements FileDataInput
+public class RandomAccessReader extends RebufferingInputStream implements FileDataInput
 {
     public static final int DEFAULT_BUFFER_SIZE = 4096;
+
+    // the IO channel to the file, we do not own a reference to this due to
+    // performance reasons (CASSANDRA-9379) so it's up to the owner of the RAR to
+    // ensure that the channel stays open and that it is closed afterwards
+    protected final Channel channel;
 
     // optional mmapped buffers for the channel, the key is the channel position
     protected final TreeMap<Long, ByteBuffer> segments;
@@ -65,8 +69,9 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
 
     protected RandomAccessReader(Builder builder)
     {
-        super(builder.channel);
+        super(null);
 
+        this.channel = builder.channel;
         this.segments = builder.segments;
         this.limiter = builder.limiter;
         this.fileLength = builder.overrideLength <= 0 ? builder.channel.size() : builder.overrideLength;
@@ -115,11 +120,6 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
         buffer = null;
     }
 
-    protected Channel fileChannel()
-    {
-        return (Channel) channel;
-    }
-
     /**
      * Read data from file starting from current currentOffset to populate buffer.
      */
@@ -156,7 +156,7 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
         buffer.limit((int)(upperLimit - position));
         while (buffer.hasRemaining() && limit < upperLimit)
         {
-            int n = fileChannel().read(buffer, position);
+            int n = channel.read(buffer, position);
             if (n < 0)
                 break;
             position += n;
@@ -206,7 +206,7 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
 
     public String getPath()
     {
-        return fileChannel().filePath();
+        return channel.filePath();
     }
 
     @Override
@@ -268,7 +268,7 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
     }
 
     @Override
-    public void close()
+    public void close() throws IOException
     {
 	    //make idempotent
         if (buffer == null)
@@ -278,13 +278,15 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
         releaseBuffer();
 
         //For performance reasons we don't keep a reference to the file
-        //channel so we don't close it, hence super.close() is not called.
+        //channel so we don't close it
+
+        super.close();
     }
 
     @Override
     public String toString()
     {
-        return getClass().getSimpleName() + "(" + "filePath='" + fileChannel().filePath() + "')";
+        return getClass().getSimpleName() + "(" + "filePath='" + channel + "')";
     }
 
     /**
@@ -421,13 +423,15 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
         return length();
     }
 
-    public interface Channel extends ReadableByteChannel
+    public interface Channel
     {
         String filePath();
 
         int read(ByteBuffer buffer, long position);
 
         long size();
+
+        void close();
     }
 
     public static class EmptyChannel implements Channel
@@ -446,11 +450,6 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
             return filePath;
         }
 
-        public int read(ByteBuffer dst) throws IOException
-        {
-            throw new IllegalStateException("Unsupported operation");
-        }
-
         public int read(ByteBuffer buffer, long position)
         {
             throw new IllegalStateException("Unsupported operation at position " + position);
@@ -461,12 +460,10 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
             return size;
         }
 
-        public boolean isOpen()
+        public void close()
         {
-            return false;
-        }
 
-        public void close() { }
+        }
     }
 
     public static class Builder
@@ -554,7 +551,7 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
         }
 
         @Override
-        public void close()
+        public void close() throws IOException
         {
             try
             {
@@ -562,7 +559,7 @@ public class RandomAccessReader extends NIODataInputStream implements FileDataIn
             }
             finally
             {
-                FileUtils.closeQuietly(channel);
+                channel.close();
             }
         }
     }

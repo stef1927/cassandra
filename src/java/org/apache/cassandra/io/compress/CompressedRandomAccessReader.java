@@ -19,10 +19,8 @@ package org.apache.cassandra.io.compress;
 
 import java.io.*;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.zip.Adler32;
 import java.util.zip.Checksum;
 
 import com.google.common.primitives.Ints;
@@ -74,14 +72,19 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     }
 
     @Override
-    public void close()
+    public void close() throws IOException
     {
-        super.close();
-
-        if (compressed != null)
+        try
         {
-            BufferPool.put(compressed);
-            compressed = null;
+            super.close();
+        }
+        finally
+        {
+            if (compressed != null)
+            {
+                BufferPool.put(compressed);
+                compressed = null;
+            }
         }
     }
 
@@ -101,7 +104,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
                 compressed.clear();
             compressed.limit(chunk.length);
 
-            if (fileChannel().read(compressed, chunk.offset) != chunk.length)
+            if (channel.read(compressed, chunk.offset) != chunk.length)
                 throw new CorruptBlockException(getPath(), chunk);
             compressed.flip();
             buffer.clear();
@@ -214,7 +217,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     {
         long position = chunk.offset + chunk.length;
         checksumBytes.clear();
-        if (fileChannel().read(checksumBytes, position) != checksumBytes.capacity())
+        if (channel.read(checksumBytes, position) != checksumBytes.capacity())
             throw new CorruptBlockException(getPath(), chunk);
         return checksumBytes.getInt(0);
     }
