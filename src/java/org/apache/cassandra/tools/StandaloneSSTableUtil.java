@@ -85,7 +85,7 @@ public class StandaloneSSTableUtil
 
         for (File dir : directories.getCFDirectories())
         {
-            for (File file : LifecycleTransaction.getFiles(dir.toPath(), getFilter(options)))
+            for (File file : LifecycleTransaction.getFiles(dir.toPath(), true, getFilter(options)))
                 handler.output(file.getCanonicalPath());
         }
     }

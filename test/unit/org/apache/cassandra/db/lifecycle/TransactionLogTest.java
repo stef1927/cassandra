@@ -33,6 +33,8 @@ import org.junit.Test;
 
 import static junit.framework.Assert.assertNotNull;
 import static junit.framework.Assert.assertNull;
+import static junit.framework.Assert.fail;
+import static org.apache.cassandra.db.lifecycle.LifecycleTransaction.FileType.FINAL;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -599,7 +601,19 @@ public class TransactionLogTest extends AbstractTransactionalTest
           // it should just throw and handle the exception with a log message
 
             //This should not return any files
-            assertEquals(Collections.emptySet(), TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder));
+            assertEquals(Collections.emptyList(), new TransactionLog.FileLister(dataFolder.toPath(), false, (file, type) -> type != FINAL).list());
+
+            try
+            {
+                //This should throw a RuntimeException
+                new TransactionLog.FileLister(dataFolder.toPath(), true, (file, type) -> type != FINAL).list();
+                fail("Expected exception");
+            }
+            catch (RuntimeException ex)
+            {
+                // pass
+                ex.printStackTrace();
+            }
 
             //This should not remove any files
             TransactionLog.removeUnfinishedLeftovers(cfs.metadata);

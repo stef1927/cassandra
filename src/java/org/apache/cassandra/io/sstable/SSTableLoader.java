@@ -77,7 +77,7 @@ public class SSTableLoader implements StreamEventHandler
     {
         outputHandler.output("Opening sstables and calculating sections to stream");
 
-        LifecycleTransaction.getFiles(directory.toPath(), (file, type) ->
+        LifecycleTransaction.getFiles(directory.toPath(), false, (file, type) ->
             {
                 File dir = file.getParentFile();
                 String name = file.getName();

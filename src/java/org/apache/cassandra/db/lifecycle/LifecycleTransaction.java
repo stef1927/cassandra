@@ -538,16 +538,35 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         TransactionLog.removeUnfinishedLeftovers(metadata);
     }
 
+    /** A transaction file type */
     public enum FileType
     {
+        /** A permanent sstable file that is safe to use. */
         FINAL,
+
+        /** A temporary sstable file that will soon be deleted. */
         TEMPORARY,
+
+        /** A transaction log file (contains information on final and temporary files). */
         TXN_LOG
     }
 
-    public static List<File> getFiles(Path folder, BiFunction<File, FileType, Boolean> filter)
+    /**
+     * Get the files in the folder specified, provided that the filter returns true.
+     * A filter is given each file and its type, and decides which files should be returned
+     * and which should be discarded. To classify files into their type, see @FileType above,
+     * we have to read transaction log files. Should we fail to read these log files after
+     * a few times, we ignore them if hardFailure is false or throw an exception if it is true.
+     *
+     * @param folder - the folder to list
+     * @param hardFailure - if true throw an exception after trying to read a txn log file a few times and failing
+     *                    to do so, else ignore the txn log file
+     * @param filter - A function that receives each file and its type, it should return true to have the file returned
+     * @return - the list of files that were scanned and for which the filter returned true
+     */
+    public static List<File> getFiles(Path folder, boolean hardFailure, BiFunction<File, FileType, Boolean> filter)
     {
-        return TransactionLog.getFiles(folder, filter);
+        return new TransactionLog.FileLister(folder, hardFailure, filter).list();
     }
 
     // a class representing the current state of the reader within this transaction, encoding the actions both logged

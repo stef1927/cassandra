@@ -522,6 +522,7 @@ public class Directories
 
     public class SSTableLister
     {
+        private boolean hardFailure;
         private boolean skipTemporary;
         private boolean includeBackups;
         private boolean onlyBackups;
@@ -529,6 +530,19 @@ public class Directories
         private final Map<Descriptor, Set<Component>> components = new HashMap<>();
         private boolean filtered;
         private String snapshotName;
+
+        /**
+         * This determines the behavior in case we cannot read transaction log files,
+         * either ignore the log files we cannot read if this flag is false or
+         * throw an exception if this flag is true.
+         */
+        public SSTableLister hardFailure(boolean b)
+        {
+            if (filtered)
+                throw new IllegalStateException("list() has already been called");
+            hardFailure = b;
+            return this;
+        }
 
         public SSTableLister skipTemporary(boolean b)
         {
@@ -595,16 +609,17 @@ public class Directories
 
                 if (snapshotName != null)
                 {
-                    LifecycleTransaction.getFiles(getSnapshotDirectory(location, snapshotName).toPath(), getFilter());
+                    LifecycleTransaction.getFiles(getSnapshotDirectory(location, snapshotName).toPath(), hardFailure, getFilter());
                     continue;
                 }
 
                 if (!onlyBackups)
-                    LifecycleTransaction.getFiles(location.toPath(), getFilter());
+                    LifecycleTransaction.getFiles(location.toPath(), hardFailure, getFilter());
 
                 if (includeBackups)
-                    LifecycleTransaction.getFiles(getBackupsDirectory(location).toPath(), getFilter());
+                    LifecycleTransaction.getFiles(getBackupsDirectory(location).toPath(), hardFailure, getFilter());
             }
+
             filtered = true;
         }
 

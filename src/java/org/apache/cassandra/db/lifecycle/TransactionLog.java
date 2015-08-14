@@ -32,22 +32,14 @@ import java.util.function.BiFunction;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import java.util.zip.CRC32;
 import java.util.zip.Checksum;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.Ordering;
 import com.google.common.util.concurrent.Runnables;
 import org.apache.commons.lang3.StringUtils;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import static org.apache.cassandra.db.lifecycle.LifecycleTransaction.FileType.FINAL;
-import static org.apache.cassandra.db.lifecycle.LifecycleTransaction.FileType.TEMPORARY;
-import static org.apache.cassandra.db.lifecycle.LifecycleTransaction.FileType.TXN_LOG;
-import static org.apache.cassandra.utils.Throwables.merge;
 
 import org.apache.cassandra.concurrent.ScheduledExecutors;
 import org.apache.cassandra.config.CFMetaData;
@@ -64,6 +56,12 @@ import org.apache.cassandra.utils.*;
 import org.apache.cassandra.utils.concurrent.Ref;
 import org.apache.cassandra.utils.concurrent.RefCounted;
 import org.apache.cassandra.utils.concurrent.Transactional;
+
+import static org.apache.cassandra.db.lifecycle.LifecycleTransaction.FileType.FINAL;
+import static org.apache.cassandra.db.lifecycle.LifecycleTransaction.FileType.TEMPORARY;
+import static org.apache.cassandra.db.lifecycle.LifecycleTransaction.FileType.TXN_LOG;
+import static org.apache.cassandra.utils.Throwables.maybeFail;
+import static org.apache.cassandra.utils.Throwables.merge;
 
 /**
  * IMPORTANT: When this object is involved in a transactional graph, and is not encapsulated in a LifecycleTransaction,
@@ -578,7 +576,6 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             }
             catch (CorruptTransactionLogException ex)
             {
-                logger.error("Possible disk corruption detected: failed to read corrupted transaction log {}", ex.file.file, ex);
                 accumulate = merge(accumulate, ex);
             }
             catch (Throwable t)
@@ -997,7 +994,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
                     if (accumulate == null)
                         accumulate = data.removeUnfinishedLeftovers(accumulate);
                     else
-                        logger.error("Failed to remove unfinished leftovers for {}", data, accumulate);
+                        logger.error("Possible disk corruption: failed to read transaction log {}", log, accumulate);
                 }
             }
         }
@@ -1006,70 +1003,126 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             logger.error("Failed to remove unfinished transaction leftovers", accumulate);
     }
 
-    public static List<File> getFiles(Path folder, BiFunction<File, LifecycleTransaction.FileType, Boolean> filter)
+    /**
+     * A class for listing files in a folder. If we fail we try a few more times
+     * in case we are reading txn log files that are still being mutated.
+     */
+    static final class FileLister
     {
-        // if we fail we try a few more times in case we are reading txn log files that are still being mutated
-        for (int i = 0; i < 5; i++)
+        // The maximum number of attempts for scanning the folder
+        private static final int MAX_ATTEMPTS = 5;
+
+        // The delay between each attempt
+        private static final int REATTEMPT_DELAY_MILLIS = 5;
+
+        // The folder to scan
+        private final Path folder;
+
+        // If true we will throw an exception in case of problems else we ignore txn log
+        // files that cannot be read after the maximum number of attempts
+        private final boolean hardFailure;
+
+        // The filter determines which files the client wants returned, we pass to the filter
+        // the file itself as well as the file type
+        private final BiFunction<File, LifecycleTransaction.FileType, Boolean> filter;
+
+        // Each time we scan the folder we increment this counter, we scan at most for MAX_ATTEMPTS
+        private int attempts;
+
+        public FileLister(Path folder, boolean hardFailure, BiFunction<File, LifecycleTransaction.FileType, Boolean> filter)
         {
-            try
+            this.folder = folder;
+            this.hardFailure = hardFailure;
+            this.filter = filter;
+            this.attempts = 0;
+        }
+
+        public List<File> list()
+        {
+            while(true)
             {
-                return doGetFiles(folder, filter);
-            }
-            catch (Throwable t)
-            {
-                logger.warn("Failed to get files for {} : {}", folder, t.getMessage());
                 try
                 {
-                    Thread.sleep(5);
+                    return attemptList();
                 }
-                catch (InterruptedException e)
+                catch (Throwable t)
                 {
-                    logger.error("Interrupted whilst listing files for {}, giving up", folder, e);
-                    return Collections.emptyList();
+                    if (attempts >= MAX_ATTEMPTS)
+                        throw new RuntimeException(String.format("Failed to list files in %s after multiple attempts, giving up", folder), t);
+
+                    logger.warn("Failed to list files in {} : {}", folder, t.getMessage());
+                    try
+                    {
+                        Thread.sleep(REATTEMPT_DELAY_MILLIS);
+                    }
+                    catch (InterruptedException e)
+                    {
+                        logger.error("Interrupted whilst waiting to reattempt listing files in {}, giving up", folder, e);
+                        throw new RuntimeException(String.format("Failed to list files in %s due to interruption, giving up", folder), t);
+                    }
                 }
             }
         }
 
-        logger.error("Failed to get files for {} after multiple attempts, giving up", folder);
-        return Collections.emptyList();
-    }
-
-    private static List<File> doGetFiles(Path folder, BiFunction<File, LifecycleTransaction.FileType, Boolean> filter) throws IOException
-    {
-        Map<File, LifecycleTransaction.FileType> files = new HashMap<>();
-
-        try (DirectoryStream<Path> in = Files.newDirectoryStream(folder))
+        List<File> attemptList() throws IOException
         {
-            if (!(in instanceof SecureDirectoryStream))
-                noSpamLogger.error("This platform does not support atomic directory streams (SecureDirectoryStream); " +
-                                   "race conditions when loading sstable files could occurr");
+            attempts++;
 
-            in.forEach(path ->
-                       {
-                           File file = path.toFile();
-                           if (file.isDirectory())
-                               return;
+            Map<File, LifecycleTransaction.FileType> files = new HashMap<>();
+            try (DirectoryStream<Path> in = Files.newDirectoryStream(folder))
+            {
+                if (!(in instanceof SecureDirectoryStream))
+                    noSpamLogger.error("This platform does not support atomic directory streams (SecureDirectoryStream); " +
+                                       "race conditions when loading sstable files could occurr");
 
-                           if (TransactionData.isLogFile(file.getName()))
+                in.forEach(path ->
                            {
-                               files.put(file, TXN_LOG);
-                               try (TransactionData txn = TransactionData.make(file))
+                               File file = path.toFile();
+                               if (file.isDirectory())
+                                   return;
+
+                               if (TransactionData.isLogFile(file.getName()))
                                {
-                                   Throwables.maybeFail(txn.readLogFile(null));
-                                   txn.getTemporaryFiles().stream().forEach((f) -> files.put(f, TEMPORARY));
+                                   Set<File> tmpFiles = getTemporaryFiles(file);
+                                   if (tmpFiles != null)
+                                   { // process the txn log file only if we can read it (tmpFiles != null)
+                                       tmpFiles.stream().forEach((f) -> files.put(f, TEMPORARY));
+                                       files.put(file, TXN_LOG);
+                                   }
                                }
-                           }
-                           else
-                           {
-                               files.putIfAbsent(file, FINAL);
-                           }
-                       });
+                               else
+                               {
+                                   files.putIfAbsent(file, FINAL);
+                               }
+                           });
+            }
+
+            return files.entrySet().stream()
+                        .filter((e) -> filter.apply(e.getKey(), e.getValue()))
+                        .map(Map.Entry::getKey)
+                        .collect(Collectors.toList());
         }
 
-        return files.entrySet().stream()
-                    .filter((e) -> filter.apply(e.getKey(), e.getValue()))
-                    .map(Map.Entry::getKey)
-                    .collect(Collectors.toList());
+        Set<File> getTemporaryFiles(File file)
+        {
+            try (TransactionData txn = TransactionData.make(file))
+            {
+                maybeFail(txn.readLogFile(null));
+                return txn.getTemporaryFiles();
+            }
+            catch(Throwable t)
+            {
+                // We always fail if the hardFailure flag is set to true or if we haven't
+                // reached the maximum number of attempts yet. If that's not the case
+                // we just log an error and continue as if the txn log file does not exist
+                // clients can choose which behavior they want via the hardFailure flag
+                if (hardFailure || attempts < MAX_ATTEMPTS)
+                    throw new RuntimeException(t);
+
+                logger.error("Failed to read temporary files of txn log {}", file, t);
+                return null; // txn.getTemporaryFiles() could be empty so we must use null to differentiate
+            }
+        }
     }
 
     @VisibleForTesting
@@ -1080,7 +1133,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         List<File> directories = new Directories(metadata).getCFDirectories();
         directories.add(folder);
         for (File dir : directories)
-            ret.addAll(getFiles(dir.toPath(), (file, type) -> type != FINAL));
+            ret.addAll(new FileLister(dir.toPath(), false, (file, type) -> type != FINAL).list());
 
         return ret;
     }
