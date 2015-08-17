@@ -85,12 +85,12 @@ public class StandaloneSSTableUtil
 
         for (File dir : directories.getCFDirectories())
         {
-            for (File file : LifecycleTransaction.getFiles(dir.toPath(), true, getFilter(options)))
+            for (File file : LifecycleTransaction.getFiles(dir.toPath(), getFilter(options), Directories.OnTxnErr.THROW))
                 handler.output(file.getCanonicalPath());
         }
     }
 
-    private static BiFunction<File, LifecycleTransaction.FileType, Boolean> getFilter(Options options)
+    private static BiFunction<File, Directories.FileType, Boolean> getFilter(Options options)
     {
         return (file, type) ->
         {

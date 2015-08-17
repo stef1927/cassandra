@@ -142,7 +142,7 @@ public class Directories
     {
         X, W, XW, R, XR, RW, XRW;
 
-        private FileAction()
+        FileAction()
         {
         }
 
@@ -468,11 +468,6 @@ public class Directories
         }
     }
 
-    public SSTableLister sstableLister()
-    {
-        return new SSTableLister();
-    }
-
     public static class DataDirectory
     {
         public final File location;
@@ -520,9 +515,41 @@ public class Directories
         }
     }
 
+    /** The type of files that can be listed by SSTableLister, we never return txn logs,
+     * use LifecycleTransaction.getFiles() if you need txn logs. */
+    public enum FileType
+    {
+        /** A permanent sstable file that is safe to use. */
+        FINAL,
+
+        /** A temporary sstable file that will soon be deleted. */
+        TEMPORARY,
+
+        /** A transaction log file (contains information on final and temporary files). */
+        TXN_LOG
+    }
+
+    /**
+     * How to handle a failure to read a txn log file. Note that we will try a few
+     * times before giving up.
+     **/
+    public enum OnTxnErr
+    {
+        /** Throw the exception */
+        THROW,
+
+        /** Ignore the txn log file */
+        IGNORE
+    }
+
+    public SSTableLister sstableLister(OnTxnErr onTxnErr)
+    {
+        return new SSTableLister(onTxnErr);
+    }
+
     public class SSTableLister
     {
-        private boolean hardFailure;
+        private final OnTxnErr onTxnErr;
         private boolean skipTemporary;
         private boolean includeBackups;
         private boolean onlyBackups;
@@ -531,17 +558,9 @@ public class Directories
         private boolean filtered;
         private String snapshotName;
 
-        /**
-         * This determines the behavior in case we cannot read transaction log files,
-         * either ignore the log files we cannot read if this flag is false or
-         * throw an exception if this flag is true.
-         */
-        public SSTableLister hardFailure(boolean b)
+        private SSTableLister(OnTxnErr onTxnErr)
         {
-            if (filtered)
-                throw new IllegalStateException("list() has already been called");
-            hardFailure = b;
-            return this;
+            this.onTxnErr = onTxnErr;
         }
 
         public SSTableLister skipTemporary(boolean b)
@@ -609,21 +628,21 @@ public class Directories
 
                 if (snapshotName != null)
                 {
-                    LifecycleTransaction.getFiles(getSnapshotDirectory(location, snapshotName).toPath(), hardFailure, getFilter());
+                    LifecycleTransaction.getFiles(getSnapshotDirectory(location, snapshotName).toPath(), getFilter(), onTxnErr);
                     continue;
                 }
 
                 if (!onlyBackups)
-                    LifecycleTransaction.getFiles(location.toPath(), hardFailure, getFilter());
+                    LifecycleTransaction.getFiles(location.toPath(), getFilter(), onTxnErr);
 
                 if (includeBackups)
-                    LifecycleTransaction.getFiles(getBackupsDirectory(location).toPath(), hardFailure, getFilter());
+                    LifecycleTransaction.getFiles(getBackupsDirectory(location).toPath(), getFilter(), onTxnErr);
             }
 
             filtered = true;
         }
 
-        private BiFunction<File, LifecycleTransaction.FileType, Boolean> getFilter()
+        private BiFunction<File, FileType, Boolean> getFilter()
         {
             // This function always return false since it adds to the components map
             return (file, type) ->
@@ -891,7 +910,7 @@ public class Directories
         {
             super();
             Builder<String> builder = ImmutableSet.builder();
-            for (File file : sstableLister().listFiles())
+            for (File file : sstableLister(Directories.OnTxnErr.THROW).listFiles())
                 builder.add(file.getName());
             alive = builder.build();
         }

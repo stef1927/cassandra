@@ -34,7 +34,6 @@ import org.junit.Test;
 import static junit.framework.Assert.assertNotNull;
 import static junit.framework.Assert.assertNull;
 import static junit.framework.Assert.fail;
-import static org.apache.cassandra.db.lifecycle.LifecycleTransaction.FileType.FINAL;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -346,7 +345,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
         // sstableOld should be only table left
         Directories directories = new Directories(cfs.metadata);
-        Map<Descriptor, Set<Component>> sstables = directories.sstableLister().list();
+        Map<Descriptor, Set<Component>> sstables = directories.sstableLister(Directories.OnTxnErr.THROW).list();
         assertEquals(1, sstables.size());
 
         assertFiles(transactionLog.getDataFolder(), new HashSet<>(sstableOld.getAllFilePaths()));
@@ -387,7 +386,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
         // sstableNew should be only table left
         Directories directories = new Directories(cfs.metadata);
-        Map<Descriptor, Set<Component>> sstables = directories.sstableLister().list();
+        Map<Descriptor, Set<Component>> sstables = directories.sstableLister(Directories.OnTxnErr.THROW).list();
         assertEquals(1, sstables.size());
 
         assertFiles(transactionLog.getDataFolder(), new HashSet<>(sstableNew.getAllFilePaths()));
@@ -418,7 +417,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         SSTableReader sstable2 = sstable(cfs, 1, 128);
         transactionLog.trackNew(sstable2);
 
-        Map<Descriptor, Set<Component>> sstables = directories.sstableLister().list();
+        Map<Descriptor, Set<Component>> sstables = directories.sstableLister(Directories.OnTxnErr.THROW).list();
         assertEquals(2, sstables.size());
 
         // this should contain sstable1, sstable2 and the transaction log file
@@ -437,8 +436,8 @@ public class TransactionLogTest extends AbstractTransactionalTest
         assertTrue(tmpFiles.contains(ssTable2DataFile));
         assertTrue(tmpFiles.contains(ssTable2IndexFile));
 
-        List<File> files = directories.sstableLister().listFiles();
-        List<File> filesNoTmp = directories.sstableLister().skipTemporary(true).listFiles();
+        List<File> files = directories.sstableLister(Directories.OnTxnErr.THROW).listFiles();
+        List<File> filesNoTmp = directories.sstableLister(Directories.OnTxnErr.THROW).skipTemporary(true).listFiles();
         assertNotNull(files);
         assertNotNull(filesNoTmp);
 
@@ -455,7 +454,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         assertNotNull(tmpFiles);
         assertEquals(0, tmpFiles.size());
 
-        filesNoTmp = directories.sstableLister().skipTemporary(true).listFiles();
+        filesNoTmp = directories.sstableLister(Directories.OnTxnErr.THROW).skipTemporary(true).listFiles();
         assertNotNull(filesNoTmp);
         assertTrue(filesNoTmp.contains(ssTable2DataFile));
         assertTrue(filesNoTmp.contains(ssTable2IndexFile));
@@ -601,12 +600,16 @@ public class TransactionLogTest extends AbstractTransactionalTest
           // it should just throw and handle the exception with a log message
 
             //This should not return any files
-            assertEquals(Collections.emptyList(), new TransactionLog.FileLister(dataFolder.toPath(), false, (file, type) -> type != FINAL).list());
+            assertEquals(Collections.emptyList(), new TransactionLog.FileLister(dataFolder.toPath(),
+                                                                                (file, type) -> type != Directories.FileType.FINAL,
+                                                                                Directories.OnTxnErr.IGNORE).list());
 
             try
             {
                 //This should throw a RuntimeException
-                new TransactionLog.FileLister(dataFolder.toPath(), true, (file, type) -> type != FINAL).list();
+                new TransactionLog.FileLister(dataFolder.toPath(),
+                                              (file, type) -> type != Directories.FileType.FINAL,
+                                              Directories.OnTxnErr.THROW).list();
                 fail("Expected exception");
             }
             catch (RuntimeException ex)

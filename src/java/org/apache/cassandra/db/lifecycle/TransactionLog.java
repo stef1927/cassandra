@@ -57,9 +57,8 @@ import org.apache.cassandra.utils.concurrent.Ref;
 import org.apache.cassandra.utils.concurrent.RefCounted;
 import org.apache.cassandra.utils.concurrent.Transactional;
 
-import static org.apache.cassandra.db.lifecycle.LifecycleTransaction.FileType.FINAL;
-import static org.apache.cassandra.db.lifecycle.LifecycleTransaction.FileType.TEMPORARY;
-import static org.apache.cassandra.db.lifecycle.LifecycleTransaction.FileType.TXN_LOG;
+import static org.apache.cassandra.db.Directories.OnTxnErr;
+import static org.apache.cassandra.db.Directories.FileType;
 import static org.apache.cassandra.utils.Throwables.maybeFail;
 import static org.apache.cassandra.utils.Throwables.merge;
 
@@ -1018,22 +1017,21 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         // The folder to scan
         private final Path folder;
 
-        // If true we will throw an exception in case of problems else we ignore txn log
-        // files that cannot be read after the maximum number of attempts
-        private final boolean hardFailure;
-
         // The filter determines which files the client wants returned, we pass to the filter
-        // the file itself as well as the file type
-        private final BiFunction<File, LifecycleTransaction.FileType, Boolean> filter;
+        // the file and its type
+        private final BiFunction<File, FileType, Boolean> filter;
+
+        // This determines the behavior when we fail to read a txn log file after a few times (MAX_ATTEMPTS)
+        private final OnTxnErr onTxnErr;
 
         // Each time we scan the folder we increment this counter, we scan at most for MAX_ATTEMPTS
         private int attempts;
 
-        public FileLister(Path folder, boolean hardFailure, BiFunction<File, LifecycleTransaction.FileType, Boolean> filter)
+        public FileLister(Path folder, BiFunction<File, FileType, Boolean> filter, OnTxnErr onTxnErr)
         {
             this.folder = folder;
-            this.hardFailure = hardFailure;
             this.filter = filter;
+            this.onTxnErr = onTxnErr;
             this.attempts = 0;
         }
 
@@ -1068,7 +1066,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         {
             attempts++;
 
-            Map<File, LifecycleTransaction.FileType> files = new HashMap<>();
+            Map<File, FileType> files = new HashMap<>();
             try (DirectoryStream<Path> in = Files.newDirectoryStream(folder))
             {
                 if (!(in instanceof SecureDirectoryStream))
@@ -1086,13 +1084,13 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
                                    Set<File> tmpFiles = getTemporaryFiles(file);
                                    if (tmpFiles != null)
                                    { // process the txn log file only if we can read it (tmpFiles != null)
-                                       tmpFiles.stream().forEach((f) -> files.put(f, TEMPORARY));
-                                       files.put(file, TXN_LOG);
+                                       tmpFiles.stream().forEach((f) -> files.put(f, FileType.TEMPORARY));
+                                       files.put(file, FileType.TXN_LOG);
                                    }
                                }
                                else
                                {
-                                   files.putIfAbsent(file, FINAL);
+                                   files.putIfAbsent(file, FileType.FINAL);
                                }
                            });
             }
@@ -1112,11 +1110,12 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             }
             catch(Throwable t)
             {
-                // We always fail if the hardFailure flag is set to true or if we haven't
-                // reached the maximum number of attempts yet. If that's not the case
+                // We always fail if the onTxnErr is set to THROW or if we haven't
+                // reached the maximum number of attempts yet. Otherwise
                 // we just log an error and continue as if the txn log file does not exist
-                // clients can choose which behavior they want via the hardFailure flag
-                if (hardFailure || attempts < MAX_ATTEMPTS)
+                // clients can choose which behavior they want via onTxnLogError
+                if (attempts < MAX_ATTEMPTS ||
+                    onTxnErr == OnTxnErr.THROW)
                     throw new RuntimeException(t);
 
                 logger.error("Failed to read temporary files of txn log {}", file, t);
@@ -1133,7 +1132,9 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
         List<File> directories = new Directories(metadata).getCFDirectories();
         directories.add(folder);
         for (File dir : directories)
-            ret.addAll(new FileLister(dir.toPath(), false, (file, type) -> type != FINAL).list());
+            ret.addAll(new FileLister(dir.toPath(),
+                                      (file, type) -> type != FileType.FINAL,
+                                      OnTxnErr.IGNORE).list());
 
         return ret;
     }
