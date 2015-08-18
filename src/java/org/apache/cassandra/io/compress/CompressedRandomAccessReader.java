@@ -91,6 +91,8 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     @Override
     protected void reBufferStandard()
     {
+        limit();
+
         try
         {
             long position = current();

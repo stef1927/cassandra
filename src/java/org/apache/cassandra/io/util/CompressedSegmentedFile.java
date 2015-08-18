@@ -69,7 +69,8 @@ public class CompressedSegmentedFile extends SegmentedFile implements ICompresse
     static TreeMap<Long, MappedByteBuffer> createMappedSegments(ChannelProxy channel, CompressionMetadata metadata)
     {
         if (!useMmap)
-            return null;
+            return new TreeMap<>();
+
         TreeMap<Long, MappedByteBuffer> chunkSegments = new TreeMap<>();
         long offset = 0;
         long lastSegmentOffset = 0;
