@@ -50,6 +50,8 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
     @Override
     protected void reBufferStandard()
     {
+        limit();
+
         long desiredPosition = current();
         // align with buffer size, as checksums were computed in chunks of buffer size each.
         bufferOffset = (desiredPosition / buffer.capacity()) * buffer.capacity();

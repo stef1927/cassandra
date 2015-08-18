@@ -121,18 +121,6 @@ public final class ChannelProxy extends SharedCloseableImpl implements RandomAcc
         return filePath;
     }
 
-    public int read(ByteBuffer buffer)
-    {
-        try
-        {
-            return channel.read(buffer);
-        }
-        catch (IOException e)
-        {
-            throw new FSReadError(e, filePath);
-        }
-    }
-
     public int read(ByteBuffer buffer, long position)
     {
         try
@@ -179,11 +167,6 @@ public final class ChannelProxy extends SharedCloseableImpl implements RandomAcc
         {
             throw new FSReadError(e, filePath);
         }
-    }
-
-    public boolean isOpen()
-    {
-        return channel.isOpen();
     }
 
     public int getFileDescriptor()

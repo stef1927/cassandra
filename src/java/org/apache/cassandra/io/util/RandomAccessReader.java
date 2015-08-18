@@ -120,6 +120,12 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         buffer = null;
     }
 
+    protected void limit()
+    {
+        if (limiter != null)
+            limiter.acquire(buffer.capacity());
+    }
+
     /**
      * Read data from file starting from current currentOffset to populate buffer.
      */
@@ -127,9 +133,6 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     {
         if (isEOF())
             return;
-
-        if (limiter != null)
-            limiter.acquire(buffer.capacity());
 
         if (segments.isEmpty())
             reBufferStandard();
@@ -141,6 +144,8 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
 
     protected void reBufferStandard()
     {
+        limit();
+
         bufferOffset += buffer.position();
         assert bufferOffset < fileLength;
 
