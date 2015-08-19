@@ -49,26 +49,24 @@ public class CompressedRandomAccessReader extends RandomAccessReader
 
     protected CompressedRandomAccessReader(Builder builder)
     {
-        super(builder);
+        super(builder, false);
         this.metadata = builder.metadata;
-        checksum = metadata.checksumType.newInstance();
+        this.checksum = metadata.checksumType.newInstance();
+
+        initializeBuffer();
+    }
+
+    @Override
+    protected void initializeBuffer()
+    {
+        buffer = allocateBuffer(bufferSize);
+        buffer.limit(0);
 
         if (segments.isEmpty())
         {
             compressed = allocateBuffer(metadata.compressor().initialCompressedBufferLength(metadata.chunkLength()));
             checksumBytes = ByteBuffer.wrap(new byte[4]);
         }
-        else
-        {
-            buffer = allocateBuffer(getBufferSize(metadata.chunkLength()));
-            buffer.limit(0);
-        }
-    }
-
-    protected int getBufferSize(int size)
-    {
-        assert Integer.bitCount(size) == 1; //must be a power of two
-        return size;
     }
 
     @Override
@@ -91,8 +89,6 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     @Override
     protected void reBufferStandard()
     {
-        limit();
-
         try
         {
             long position = current();
@@ -264,6 +260,8 @@ public class CompressedRandomAccessReader extends RandomAccessReader
             this.overrideLength = metadata.compressedFileLength;
             this.bufferSize = metadata.chunkLength();
             this.bufferType = metadata.compressor().preferredBufferType();
+
+            assert Integer.bitCount(this.bufferSize) == 1; //must be a power of two
 
             return metadata;
         }
