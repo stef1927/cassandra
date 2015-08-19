@@ -17,19 +17,12 @@
  */
 package org.apache.cassandra.io.util;
 
-import java.io.DataInput;
-import java.io.DataOutput;
 import java.io.File;
-import java.io.IOException;
-import java.nio.MappedByteBuffer;
-import java.util.Iterator;
-import java.util.NoSuchElementException;
 
 import com.google.common.util.concurrent.RateLimiter;
 
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.io.compress.CompressedSequentialWriter;
 import org.apache.cassandra.io.sstable.Component;
 import org.apache.cassandra.io.sstable.Descriptor;
@@ -37,7 +30,6 @@ import org.apache.cassandra.io.sstable.IndexSummary;
 import org.apache.cassandra.io.sstable.IndexSummaryBuilder;
 import org.apache.cassandra.io.sstable.metadata.StatsMetadata;
 import org.apache.cassandra.utils.CLibrary;
-import org.apache.cassandra.utils.Pair;
 import org.apache.cassandra.utils.concurrent.RefCounted;
 import org.apache.cassandra.utils.concurrent.SharedCloseableImpl;
 
@@ -79,7 +71,7 @@ public abstract class SegmentedFile extends SharedCloseableImpl
         this.onDiskLength = onDiskLength;
     }
 
-    public SegmentedFile(SegmentedFile copy)
+    protected SegmentedFile(SegmentedFile copy)
     {
         super(copy);
         channel = copy.channel;
@@ -166,13 +158,6 @@ public abstract class SegmentedFile extends SharedCloseableImpl
         private ChannelProxy channel;
 
         /**
-         * Adds a position that would be a safe place for a segment boundary in the file. For a block/row based file
-         * format, safe boundaries are block/row edges.
-         * @param boundary The absolute position of the potential boundary in the file.
-         */
-        public abstract void addPotentialBoundary(long boundary);
-
-        /**
          * Called after all potential boundaries have been added to apply this Builder to a concrete file on disk.
          * @param channel The channel to the file on disk.
          */
@@ -212,12 +197,12 @@ public abstract class SegmentedFile extends SharedCloseableImpl
             return complete(desc.filenameFor(Component.PRIMARY_INDEX), bufferSize(desc, indexSummary), -1L);
         }
 
-        private int bufferSize(StatsMetadata stats)
+        private static int bufferSize(StatsMetadata stats)
         {
             return bufferSize(stats.estimatedPartitionSize.percentile(DatabaseDescriptor.getDiskOptimizationEstimatePercentile()));
         }
 
-        private int bufferSize(Descriptor desc, IndexSummary indexSummary)
+        private static int bufferSize(Descriptor desc, IndexSummary indexSummary)
         {
             File file = new File(desc.filenameFor(Component.PRIMARY_INDEX));
             return bufferSize(file.length() / indexSummary.size());
@@ -265,17 +250,6 @@ public abstract class SegmentedFile extends SharedCloseableImpl
             return (int)Math.min(size, 1 << 16);
         }
 
-        public void serializeBounds(DataOutput out) throws IOException
-        {
-            out.writeUTF(DatabaseDescriptor.getDiskAccessMode().name());
-        }
-
-        public void deserializeBounds(DataInput in) throws IOException
-        {
-            if (!in.readUTF().equals(DatabaseDescriptor.getDiskAccessMode().name()))
-                throw new IOException("Cannot deserialize SSTable Summary component because the DiskAccessMode was changed!");
-        }
-
         public Throwable close(Throwable accumulate)
         {
             if (channel != null)
@@ -305,8 +279,8 @@ public abstract class SegmentedFile extends SharedCloseableImpl
 
     @Override
     public String toString() {
-        return getClass().getSimpleName() + "(path='" + path() + "'" +
+        return getClass().getSimpleName() + "(path='" + path() + '\'' +
                ", length=" + length +
-               ")";
+               ')';
 }
 }

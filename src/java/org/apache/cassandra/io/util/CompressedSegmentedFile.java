@@ -138,11 +138,6 @@ public class CompressedSegmentedFile extends SegmentedFile implements ICompresse
             this.writer = writer;
         }
 
-        public void addPotentialBoundary(long boundary)
-        {
-            // only one segment in a standard-io file
-        }
-
         protected CompressionMetadata metadata(String path, long overrideLength)
         {
             if (writer == null)
