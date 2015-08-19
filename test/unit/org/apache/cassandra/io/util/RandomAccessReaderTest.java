@@ -1,4 +1,4 @@
-package org.apache.cassandra.io;
+package org.apache.cassandra.io.util;
 
 import java.io.File;
 import java.io.IOException;

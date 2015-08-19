@@ -47,6 +47,7 @@ import org.apache.cassandra.db.rows.SerializationHelper;
 import org.apache.cassandra.db.partitions.PartitionUpdate;
 import org.apache.cassandra.db.lifecycle.SSTableSet;
 import org.apache.cassandra.exceptions.ConfigurationException;
+import org.apache.cassandra.io.util.FileSegmentInputStream;
 import org.apache.cassandra.io.util.RebufferingInputStream;
 import org.apache.cassandra.schema.CompressionParams;
 import org.apache.cassandra.io.compress.ICompressor;
@@ -299,7 +300,7 @@ public class CommitLogReplayer
                     return;
                 if (globalPosition.segment == desc.id)
                     reader.seek(globalPosition.position);
-                replaySyncSection(reader, (int) reader.getPositionLimit(), desc, desc.fileName(), tolerateTruncation);
+                replaySyncSection(reader, (int) reader.length(), desc, desc.fileName(), tolerateTruncation);
                 return;
             }
 
@@ -388,7 +389,7 @@ public class CommitLogReplayer
                         if (uncompressedLength > uncompressedBuffer.length)
                             uncompressedBuffer = new byte[(int) (1.2 * uncompressedLength)];
                         compressedLength = compressor.uncompress(buffer, 0, compressedLength, uncompressedBuffer, 0);
-                        sectionReader = RandomAccessReader.open(ByteBuffer.wrap(uncompressedBuffer), reader.getPath(), replayPos);
+                        sectionReader = new FileSegmentInputStream(ByteBuffer.wrap(uncompressedBuffer), reader.getPath(), replayPos);
                         errorContext = "compressed section at " + start + " in " + errorContext;
                     }
                     catch (IOException | ArrayIndexOutOfBoundsException e)

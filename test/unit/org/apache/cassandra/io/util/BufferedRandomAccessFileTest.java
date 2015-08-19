@@ -25,9 +25,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.ClosedChannelException;
 import java.util.Arrays;
-import java.util.concurrent.Callable;
 
 import static org.apache.cassandra.Util.expectEOF;
 import static org.apache.cassandra.Util.expectException;
@@ -430,7 +428,7 @@ public class BufferedRandomAccessFileTest
 
         r.close(); // closing to test read after close
 
-        expectException(() -> r.read(), AssertionError.class);
+        expectException(() -> r.read(), NullPointerException.class);
 
         //Used to throw ClosedChannelException, but now that it extends BDOSP it just NPEs on the buffer
         //Writing to a BufferedOutputStream that is closed generates no error

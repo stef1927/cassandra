@@ -39,7 +39,7 @@ import org.apache.cassandra.utils.concurrent.SharedCloseableImpl;
  *
  * Tested by RandomAccessReaderTest.
  */
-public final class ChannelProxy extends SharedCloseableImpl implements RandomAccessReader.Channel
+public final class ChannelProxy extends SharedCloseableImpl
 {
     private final String filePath;
     private final FileChannel channel;
@@ -87,7 +87,7 @@ public final class ChannelProxy extends SharedCloseableImpl implements RandomAcc
         final String filePath;
         final FileChannel channel;
 
-        protected Cleanup(String filePath, FileChannel channel)
+        Cleanup(String filePath, FileChannel channel)
         {
             this.filePath = filePath;
             this.channel = channel;

@@ -41,7 +41,7 @@ public abstract class RebufferingInputStream extends InputStream implements Data
     protected ByteBuffer buffer;
 
 
-    public RebufferingInputStream(ByteBuffer buffer)
+    protected RebufferingInputStream(ByteBuffer buffer)
     {
         Preconditions.checkArgument(buffer == null || buffer.order() == ByteOrder.BIG_ENDIAN, "Buffer must have BIG ENDIAN byte ordering");
         this.buffer = buffer;
@@ -74,13 +74,7 @@ public abstract class RebufferingInputStream extends InputStream implements Data
     }
 
     @Override
-    public int read(byte b[], int off, int len) throws IOException {
-
-        if (buffer == null)
-            throw new AssertionError("Attempted to read from closed stream");
-
-        if (b == null)
-            throw new NullPointerException();
+    public int read(byte[] b, int off, int len) throws IOException {
 
         // avoid int overflow
         if (off < 0 || off > b.length || len < 0 || len > b.length - off)
@@ -142,9 +136,6 @@ public abstract class RebufferingInputStream extends InputStream implements Data
     @Override
     public byte readByte() throws IOException
     {
-        if (buffer == null)
-            throw new AssertionError("Attempted to read from closed stream");
-
         if (!buffer.hasRemaining())
         {
             reBuffer();

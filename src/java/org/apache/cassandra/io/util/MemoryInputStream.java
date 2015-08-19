@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.primitives.Ints;
 
 import org.apache.cassandra.utils.memory.MemoryUtil;
@@ -29,33 +30,47 @@ import org.apache.cassandra.utils.memory.MemoryUtil;
 public class MemoryInputStream extends RebufferingInputStream implements DataInput
 {
     private final Memory mem;
+    private final int bufferSize;
     private long offset;
+
 
     public MemoryInputStream(Memory mem)
     {
-        super(getByteBuffer(mem, 0));
+        this(mem, Ints.saturatedCast(mem.size));
+    }
+
+    @VisibleForTesting
+    public MemoryInputStream(Memory mem, int bufferSize)
+    {
+        super(getByteBuffer(mem.peer, bufferSize));
         this.mem = mem;
-        this.offset = 0;
+        this.bufferSize = bufferSize;
+        this.offset = mem.peer + bufferSize;
     }
 
     @Override
     protected void reBuffer() throws IOException
     {
-        offset += buffer.capacity();
-        if ((mem.peer + offset) >= mem.size())
+        if (offset - mem.peer >= mem.size())
             return;
 
-        buffer = getByteBuffer(mem, offset);
-    }
-
-    private static ByteBuffer getByteBuffer(Memory mem, long offset)
-    {
-        return MemoryUtil.getByteBuffer(mem.peer + offset, Ints.checkedCast(mem.size - offset)).order(ByteOrder.BIG_ENDIAN);
+        buffer = getByteBuffer(offset, Math.min(bufferSize, Ints.saturatedCast(memRemaining())));
+        offset += buffer.capacity();
     }
 
     @Override
-    public int available() throws IOException
+    public int available()
     {
-        return buffer.remaining();
+        return buffer.remaining() + Ints.saturatedCast(memRemaining());
+    }
+
+    private long memRemaining()
+    {
+        return mem.size + mem.peer - offset;
+    }
+
+    private static ByteBuffer getByteBuffer(long offset, int length)
+    {
+        return MemoryUtil.getByteBuffer(offset, length).order(ByteOrder.BIG_ENDIAN);
     }
 }
