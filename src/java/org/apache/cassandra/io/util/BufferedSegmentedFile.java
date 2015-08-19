@@ -43,11 +43,6 @@ public class BufferedSegmentedFile extends SegmentedFile
 
     public static class Builder extends SegmentedFile.Builder
     {
-        public void addPotentialBoundary(long boundary)
-        {
-            // only one segment in a standard-io file
-        }
-
         public SegmentedFile complete(ChannelProxy channel, int bufferSize, long overrideLength)
         {
             long length = overrideLength > 0 ? overrideLength : channel.size();

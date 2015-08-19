@@ -29,6 +29,8 @@ import com.google.common.util.concurrent.RateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.datastax.driver.core.DataType;
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.utils.JVMStabilityInspector;
 
 public class MmappedSegmentedFile extends SegmentedFile
@@ -125,47 +127,9 @@ public class MmappedSegmentedFile extends SegmentedFile
      */
     static class Builder extends SegmentedFile.Builder
     {
-        // planned segment boundaries
-        private List<Long> boundaries;
-
-        // offset of the open segment (first segment begins at 0).
-        private long currentStart = 0;
-
-        // current length of the open segment.
-        // used to allow merging multiple too-large-to-mmap segments, into a single buffered segment.
-        private long currentSize = 0;
-
         public Builder()
         {
             super();
-            boundaries = new ArrayList<>();
-            boundaries.add(0L);
-        }
-
-        public void addPotentialBoundary(long boundary)
-        {
-            if (boundary - currentStart <= MAX_SEGMENT_SIZE)
-            {
-                // boundary fits into current segment: expand it
-                currentSize = boundary - currentStart;
-                return;
-            }
-
-            // close the current segment to try and make room for the boundary
-            if (currentSize > 0)
-            {
-                currentStart += currentSize;
-                boundaries.add(currentStart);
-            }
-            currentSize = boundary - currentStart;
-
-            // if we couldn't make room, the boundary needs its own segment
-            if (currentSize > MAX_SEGMENT_SIZE)
-            {
-                currentStart = boundary;
-                boundaries.add(currentStart);
-                currentSize = 0;
-            }
         }
 
         public SegmentedFile complete(ChannelProxy channel, int bufferSize, long overrideLength)
@@ -177,50 +141,17 @@ public class MmappedSegmentedFile extends SegmentedFile
 
         private Map<Long, ByteBuffer> createSegments(ChannelProxy channel, long length)
         {
-            // if we're early finishing a range that doesn't span multiple segments, but the finished file now does,
-            // we remove these from the end (we loop incase somehow this spans multiple segments, but that would
-            // be a loco dataset
-            while (length < boundaries.get(boundaries.size() - 1))
-                boundaries.remove(boundaries.size() -1);
-
-            // add a sentinel value == length
-            List<Long> boundaries = new ArrayList<>(this.boundaries);
-            if (length != boundaries.get(boundaries.size() - 1))
-                boundaries.add(length);
-
-            int segcount = boundaries.size() - 1;
             Map<Long, ByteBuffer> segments = new TreeMap<>();
-            for (int i = 0; i < segcount; i++)
+
+            long pos = 0;
+            while (pos < length)
             {
-                long start = boundaries.get(i);
-                long size = boundaries.get(i + 1) - start;
-                if (size <= MAX_SEGMENT_SIZE)
-                    segments.put(start, channel.map(FileChannel.MapMode.READ_ONLY, start, size));
+                long size = Math.min(MAX_SEGMENT_SIZE, channel.size() - pos);
+                segments.put(pos, channel.map(FileChannel.MapMode.READ_ONLY, pos, size));
+                pos += size;
             }
+
             return segments;
-        }
-
-        @Override
-        public void serializeBounds(DataOutput out) throws IOException
-        {
-            super.serializeBounds(out);
-            out.writeInt(boundaries.size());
-            for (long position: boundaries)
-                out.writeLong(position);
-        }
-
-        @Override
-        public void deserializeBounds(DataInput in) throws IOException
-        {
-            super.deserializeBounds(in);
-
-            int size = in.readInt();
-            List<Long> temp = new ArrayList<>(size);
-            
-            for (int i = 0; i < size; i++)
-                temp.add(in.readLong());
-
-            boundaries = temp;
         }
     }
 }

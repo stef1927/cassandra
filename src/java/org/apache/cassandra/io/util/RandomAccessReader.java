@@ -43,7 +43,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     // optional mmapped buffers for the channel, the key is the channel position
     protected final TreeMap<Long, ByteBuffer> segments;
 
-    // The limiter will throttle the amount of data we read
+    // An optional limiter that will throttle the amount of data we read
     protected final RateLimiter limiter;
 
     // the file length, this can be overridden at construction to a value shorter
@@ -137,7 +137,8 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         else
             reBufferMmap();
 
-        limiter.acquire(buffer.remaining());
+        if (limiter != null)
+            limiter.acquire(buffer.remaining());
 
         assert buffer.order() == ByteOrder.BIG_ENDIAN : "Buffer must have BIG ENDIAN byte ordering";
     }
@@ -418,6 +419,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         return bufferOffset + (buffer == null ? 0 : buffer.position());
     }
 
+
     public static class Builder
     {
         // The NIO file channel or an empty channel
@@ -436,7 +438,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         // The mmap segments for mmap readers
         public TreeMap<Long, ByteBuffer> segments;
 
-        // The limiter will throttle the amount of data we read
+        // An optional limiter that will throttle the amount of data we read
         public RateLimiter limiter;
 
         public Builder(ChannelProxy channel)
@@ -446,7 +448,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
             this.bufferSize = getBufferSize(DEFAULT_BUFFER_SIZE);
             this.bufferType = BufferType.OFF_HEAP;
             this.segments = new TreeMap<>();
-            this.limiter = RateLimiter.create(Double.MAX_VALUE);
+            this.limiter = null;
         }
 
         /** The buffer size is typically already page aligned but if that is not the case
