@@ -20,8 +20,6 @@ package org.apache.cassandra.io.util;
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.Map;
-import java.util.TreeMap;
 
 import com.google.common.primitives.Ints;
 import com.google.common.util.concurrent.RateLimiter;
@@ -40,8 +38,8 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     // ensure that the channel stays open and that it is closed afterwards
     protected final ChannelProxy channel;
 
-    // optional mmapped buffers for the channel, the key is the channel position
-    protected final TreeMap<Long, ByteBuffer> segments;
+    // optional memory mapped regions for the channel
+    protected final MmappedRegions regions;
 
     // An optional limiter that will throttle the amount of data we read
     protected final RateLimiter limiter;
@@ -57,10 +55,6 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     // the buffer type for buffered readers
     private final BufferType bufferType;
 
-    // when this is true a call to releaseBuffer will release the buffer
-    // else we assume the buffer is a mmapped segment
-    private boolean hasAllocatedBuffer;
-
     // offset from the beginning of the file
     protected long bufferOffset;
 
@@ -69,15 +63,10 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
 
     protected RandomAccessReader(Builder builder)
     {
-        this(builder, true);
-    }
-
-    protected RandomAccessReader(Builder builder, boolean initializeBuffer)
-    {
         super((ByteBuffer)null);
 
         this.channel = builder.channel;
-        this.segments = builder.segments;
+        this.regions = builder.regions;
         this.limiter = builder.limiter;
         this.fileLength = builder.overrideLength <= 0 ? builder.channel.size() : builder.overrideLength;
         this.bufferSize = builder.bufferSize;
@@ -86,42 +75,40 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         if (builder.bufferSize <= 0)
             throw new IllegalArgumentException("bufferSize must be positive");
 
-        if (initializeBuffer)
+        if (builder.initializeBuffers)
             initializeBuffer();
     }
 
     protected void initializeBuffer()
     {
-        if (segments.isEmpty())
+        if (regions.isEmpty())
         {
             buffer = allocateBuffer(bufferSize);
             buffer.limit(0);
         }
         else
         {
-            Map.Entry<Long, ByteBuffer> firstSegment = segments.firstEntry();
-            buffer = firstSegment.getValue().slice();
+            MmappedRegions.Region region = regions.floor(0);
+            buffer = region.buffer.duplicate();
 
-            if (firstSegment.getKey() != 0)
+            if (region.bottom() != 0)
                 buffer.limit(0);
         }
     }
 
     protected ByteBuffer allocateBuffer(int size)
     {
-        hasAllocatedBuffer = true;
         return BufferPool.get(size, bufferType).order(ByteOrder.BIG_ENDIAN);
     }
 
     protected void releaseBuffer()
     {
-        if (hasAllocatedBuffer)
+        if (buffer != null)
         {
-            BufferPool.put(buffer);
-            hasAllocatedBuffer = false;
+            if (regions.isEmpty())
+                BufferPool.put(buffer);
+            buffer = null;
         }
-
-        buffer = null;
     }
 
     /**
@@ -132,7 +119,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         if (isEOF())
             return;
 
-        if (segments.isEmpty())
+        if (regions.isEmpty())
             reBufferStandard();
         else
             reBufferMmap();
@@ -176,24 +163,9 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         long position = bufferOffset + buffer.position();
         assert position < fileLength;
 
-        releaseBuffer();
-
-        Map.Entry<Long, ByteBuffer> entry = segments.floorEntry(position);
-        if (entry == null || (position >= (entry.getKey() + entry.getValue().capacity())))
-        {
-            Map.Entry<Long, ByteBuffer> nextEntry = segments.ceilingEntry(position);
-            if (nextEntry != null)
-                buffer = allocateBuffer(Math.min(bufferSize, Ints.saturatedCast(nextEntry.getKey() - position)));
-            else
-                buffer = allocateBuffer(bufferSize);
-
-            bufferOffset = position;
-            reBufferStandard();
-            return;
-        }
-
-        bufferOffset = entry.getKey();
-        buffer = entry.getValue().slice();
+        MmappedRegions.Region region = regions.floor(position);
+        bufferOffset = region.bottom();
+        buffer = region.buffer.duplicate();
         buffer.position(Ints.checkedCast(position - bufferOffset));
     }
 
@@ -440,10 +412,12 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         public BufferType bufferType;
 
         // The mmap segments for mmap readers
-        public TreeMap<Long, ByteBuffer> segments;
+        public MmappedRegions regions;
 
         // An optional limiter that will throttle the amount of data we read
         public RateLimiter limiter;
+
+        public boolean initializeBuffers;
 
         public Builder(ChannelProxy channel)
         {
@@ -451,8 +425,9 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
             this.overrideLength = -1L;
             this.bufferSize = getBufferSize(DEFAULT_BUFFER_SIZE);
             this.bufferType = BufferType.OFF_HEAP;
-            this.segments = new TreeMap<>();
+            this.regions = MmappedRegions.empty(channel);
             this.limiter = null;
+            this.initializeBuffers = true;
         }
 
         /** The buffer size is typically already page aligned but if that is not the case
@@ -491,15 +466,21 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
             return this;
         }
 
-        public Builder segments(Map<Long, ByteBuffer> segments)
+        public Builder regions(MmappedRegions regions)
         {
-            this.segments.putAll(segments);
+            this.regions = regions;
             return this;
         }
 
         public Builder limiter(RateLimiter limiter)
         {
             this.limiter = limiter;
+            return this;
+        }
+
+        public Builder initializeBuffers(boolean initializeBuffers)
+        {
+            this.initializeBuffers = initializeBuffers;
             return this;
         }
 

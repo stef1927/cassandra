@@ -866,6 +866,8 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
                     metadata.params.minIndexInterval, metadata.params.maxIndexInterval);
             first = decorateKey(ByteBufferUtil.readWithLength(iStream));
             last = decorateKey(ByteBufferUtil.readWithLength(iStream));
+            ibuilder.deserializeBounds(iStream, descriptor.version);
+            dbuilder.deserializeBounds(iStream, descriptor.version);
         }
         catch (IOException e)
         {
@@ -964,6 +966,8 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
             IndexSummary.serializer.serialize(summary, oStream, descriptor.version.hasSamplingLevel());
             ByteBufferUtil.writeWithLength(first.getKey(), oStream);
             ByteBufferUtil.writeWithLength(last.getKey(), oStream);
+            ibuilder.serializeBounds(oStream, descriptor.version);
+            dbuilder.serializeBounds(oStream, descriptor.version);
         }
         catch (IOException e)
         {
