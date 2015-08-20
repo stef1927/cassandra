@@ -83,7 +83,7 @@ final class HintsReader implements AutoCloseable, Iterable<HintsReader.Page>
         }
         catch (IOException e)
         {
-            reader.close();
+            FileUtils.closeQuietly(reader);
             throw new FSReadError(e, file);
         }
     }
@@ -219,7 +219,7 @@ final class HintsReader implements AutoCloseable, Iterable<HintsReader.Page>
                             descriptor.hostId,
                             e.cfId,
                             descriptor.fileName());
-                reader.skipBytes(crcInput.bytesRemaining());
+                reader.skipBytes(crcInput.available());
 
                 return null;
             }
