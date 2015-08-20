@@ -40,11 +40,15 @@ public abstract class RebufferingInputStream extends InputStream implements Data
 {
     protected ByteBuffer buffer;
 
-
     protected RebufferingInputStream(ByteBuffer buffer)
     {
         Preconditions.checkArgument(buffer == null || buffer.order() == ByteOrder.BIG_ENDIAN, "Buffer must have BIG ENDIAN byte ordering");
         this.buffer = buffer;
+    }
+
+    protected RebufferingInputStream(RebufferingInputStream source)
+    {
+        this(source.buffer);
     }
 
     /**

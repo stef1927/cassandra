@@ -18,12 +18,17 @@
 package org.apache.cassandra.hints;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.zip.CRC32;
 
-import org.apache.cassandra.io.util.AbstractDataInput;
+import org.apache.cassandra.io.util.FileDataInput;
+import org.apache.cassandra.io.util.FileMark;
+import org.apache.cassandra.io.util.RandomAccessReader;
+import org.apache.cassandra.io.util.RebufferingInputStream;
+import org.apache.cassandra.utils.ByteBufferUtil;
 
 /**
- * An {@link AbstractDataInput} wrapper that calctulates the CRC in place.
+ * An {@link RandomAccessReader} wrapper that calctulates the CRC in place.
  *
  * Useful for {@link org.apache.cassandra.hints.HintsReader}, for example, where we must verify the CRC, yet don't want
  * to allocate an extra byte array just that purpose.
@@ -33,21 +38,22 @@ import org.apache.cassandra.io.util.AbstractDataInput;
  * corrupted sequence by reading a huge corrupted length of bytes via
  * via {@link org.apache.cassandra.utils.ByteBufferUtil#readWithLength(java.io.DataInput)}.
  */
-public final class ChecksummedDataInput extends AbstractDataInput
+public final class ChecksummedDataInput extends RebufferingInputStream implements FileDataInput
 {
     private final CRC32 crc;
-    private final AbstractDataInput source;
+    private final RandomAccessReader source;
     private int limit;
 
-    private ChecksummedDataInput(AbstractDataInput source)
+    private ChecksummedDataInput(RandomAccessReader source)
     {
+        super(source);
         this.source = source;
 
         crc = new CRC32();
         limit = Integer.MAX_VALUE;
     }
 
-    public static ChecksummedDataInput wrap(AbstractDataInput source)
+    public static ChecksummedDataInput wrap(RandomAccessReader source)
     {
         return new ChecksummedDataInput(source);
     }
@@ -67,7 +73,22 @@ public final class ChecksummedDataInput extends AbstractDataInput
         limit = newLimit;
     }
 
-    public int bytesRemaining()
+    public String getPath()
+    {
+        return source.getPath();
+    }
+
+    public boolean isEOF()
+    {
+        return source.isEOF();
+    }
+
+    public long bytesRemaining()
+    {
+        return source.bytesRemaining();
+    }
+
+    public int available()
     {
         return limit;
     }
@@ -77,9 +98,29 @@ public final class ChecksummedDataInput extends AbstractDataInput
         return (int) crc.getValue();
     }
 
-    public void seek(long position) throws IOException
+    public void seek(long position)
     {
         source.seek(position);
+    }
+
+    public FileMark mark()
+    {
+        return source.mark();
+    }
+
+    public void reset(FileMark mark)
+    {
+        source.reset(mark);
+    }
+
+    public long bytesPastMark(FileMark mark)
+    {
+        return source.bytesPastMark(mark);
+    }
+
+    public long getFilePointer()
+    {
+        return source.getFilePointer();
     }
 
     public long getPosition()
@@ -87,28 +128,16 @@ public final class ChecksummedDataInput extends AbstractDataInput
         return source.getPosition();
     }
 
-    public long getPositionLimit()
+    public ByteBuffer readBytes(int length) throws IOException
     {
-        return source.getPositionLimit();
+        return source.readBytes(length);
     }
 
-    public int read() throws IOException
+    protected void reBuffer()
     {
-        int b = source.read();
-        crc.update(b);
-        limit--;
-        return b;
-    }
+        source.reBuffer();
 
-    @Override
-    public int read(byte[] buff, int offset, int length) throws IOException
-    {
-        if (length > limit)
-            throw new IOException("Digest mismatch exception");
-
-        int copied = source.read(buff, offset, length);
-        crc.update(buff, offset, copied);
-        limit -= copied;
-        return copied;
+        crc.update(ByteBufferUtil.getArray(buffer), 0, buffer.remaining());
+        limit -= buffer.remaining();
     }
 }

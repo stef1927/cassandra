@@ -74,7 +74,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
 
     protected RandomAccessReader(Builder builder, boolean initializeBuffer)
     {
-        super(null);
+        super((ByteBuffer)null);
 
         this.channel = builder.channel;
         this.segments = builder.segments;
@@ -127,7 +127,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     /**
      * Read data from file starting from current currentOffset to populate buffer.
      */
-    protected void reBuffer()
+    public void reBuffer()
     {
         if (isEOF())
             return;
@@ -211,6 +211,11 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     public String getPath()
     {
         return channel.filePath();
+    }
+
+    public ChannelProxy getChannel()
+    {
+        return channel;
     }
 
     @Override
@@ -416,9 +421,8 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
 
     public long getPosition()
     {
-        return bufferOffset + (buffer == null ? 0 : buffer.position());
+        return current();
     }
-
 
     public static class Builder
     {
