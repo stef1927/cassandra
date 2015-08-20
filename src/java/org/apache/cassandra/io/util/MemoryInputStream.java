@@ -61,7 +61,7 @@ public class MemoryInputStream extends RebufferingInputStream implements DataInp
     @Override
     public int available()
     {
-        return buffer.remaining() + Ints.saturatedCast(memRemaining());
+        return Ints.saturatedCast(buffer.remaining() + memRemaining());
     }
 
     private long memRemaining()

@@ -17,7 +17,10 @@
  */
 package org.apache.cassandra.io.util;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.File;
+import java.io.IOException;
 
 import com.google.common.util.concurrent.RateLimiter;
 
@@ -28,6 +31,7 @@ import org.apache.cassandra.io.sstable.Component;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.IndexSummary;
 import org.apache.cassandra.io.sstable.IndexSummaryBuilder;
+import org.apache.cassandra.io.sstable.format.Version;
 import org.apache.cassandra.io.sstable.metadata.StatsMetadata;
 import org.apache.cassandra.utils.CLibrary;
 import org.apache.cassandra.utils.concurrent.RefCounted;
@@ -85,7 +89,7 @@ public abstract class SegmentedFile extends SharedCloseableImpl
         return channel.filePath();
     }
 
-    protected static abstract class Cleanup implements RefCounted.Tidy
+    protected static class Cleanup implements RefCounted.Tidy
     {
         final ChannelProxy channel;
         protected Cleanup(ChannelProxy channel)
@@ -248,6 +252,23 @@ public abstract class SegmentedFile extends SharedCloseableImpl
 
             size = (size + 4095) & ~4095;
             return (int)Math.min(size, 1 << 16);
+        }
+
+        public void serializeBounds(DataOutput out, Version version) throws IOException
+        {
+            if (!version.hasBoundaries())
+                return;
+
+            out.writeUTF(DatabaseDescriptor.getDiskAccessMode().name());
+        }
+
+        public void deserializeBounds(DataInput in, Version version) throws IOException
+        {
+            if (!version.hasBoundaries())
+                return;
+
+            if (!in.readUTF().equals(DatabaseDescriptor.getDiskAccessMode().name()))
+                throw new IOException("Cannot deserialize SSTable Summary component because the DiskAccessMode was changed!");
         }
 
         public Throwable close(Throwable accumulate)

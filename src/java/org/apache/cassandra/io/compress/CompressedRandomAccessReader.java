@@ -19,7 +19,6 @@ package org.apache.cassandra.io.compress;
 
 import java.io.*;
 import java.nio.ByteBuffer;
-import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.zip.Checksum;
 
@@ -49,7 +48,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
 
     protected CompressedRandomAccessReader(Builder builder)
     {
-        super(builder, false);
+        super(builder.initializeBuffers(false));
         this.metadata = builder.metadata;
         this.checksum = metadata.checksumType.newInstance();
 
@@ -62,7 +61,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
         buffer = allocateBuffer(bufferSize);
         buffer.limit(0);
 
-        if (segments.isEmpty())
+        if (regions.isEmpty())
         {
             compressed = allocateBuffer(metadata.compressor().initialCompressedBufferLength(metadata.chunkLength()));
             checksumBytes = ByteBuffer.wrap(new byte[4]);
@@ -70,11 +69,15 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     }
 
     @Override
-    public void close() throws IOException
+    protected void releaseBuffer()
     {
         try
         {
-            super.close();
+            if (buffer != null)
+            {
+                BufferPool.put(buffer);
+                buffer = null;
+            }
         }
         finally
         {
@@ -97,13 +100,19 @@ public class CompressedRandomAccessReader extends RandomAccessReader
             CompressionMetadata.Chunk chunk = metadata.chunkFor(position);
 
             if (compressed.capacity() < chunk.length)
+            {
+                BufferPool.put(compressed);
                 compressed = allocateBuffer(chunk.length);
+            }
             else
+            {
                 compressed.clear();
-            compressed.limit(chunk.length);
+            }
 
+            compressed.limit(chunk.length);
             if (channel.read(compressed, chunk.offset) != chunk.length)
                 throw new CorruptBlockException(getPath(), chunk);
+
             compressed.flip();
             buffer.clear();
 
@@ -160,10 +169,10 @@ public class CompressedRandomAccessReader extends RandomAccessReader
 
             CompressionMetadata.Chunk chunk = metadata.chunkFor(position);
 
-            Map.Entry<Long, ByteBuffer> entry = segments.floorEntry(chunk.offset);
-            long segmentOffset = entry.getKey();
+            MmappedRegions.Region region = regions.floor(chunk.offset);
+            long segmentOffset = region.bottom();
             int chunkOffset = Ints.checkedCast(chunk.offset - segmentOffset);
-            ByteBuffer compressedChunk = entry.getValue().duplicate(); // TODO: change to slice(chunkOffset) when we upgrade LZ4-java
+            ByteBuffer compressedChunk = region.buffer.duplicate(); // TODO: change to slice(chunkOffset) when we upgrade LZ4-java
 
             compressedChunk.position(chunkOffset).limit(chunkOffset + chunk.length);
 
@@ -246,7 +255,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
         {
             super(file.channel());
             this.metadata = applyMetadata(file.getMetadata());
-            this.segments.putAll(file.chunkSegments());
+            this.regions = file.regions();
         }
 
         public Builder(ChannelProxy channel, CompressionMetadata metadata)

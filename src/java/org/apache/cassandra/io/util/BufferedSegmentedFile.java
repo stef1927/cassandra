@@ -29,18 +29,6 @@ public class BufferedSegmentedFile extends SegmentedFile
         super(copy);
     }
 
-    private static class Cleanup extends SegmentedFile.Cleanup
-    {
-        protected Cleanup(ChannelProxy channel)
-        {
-            super(channel);
-        }
-        public void tidy()
-        {
-            super.tidy();
-        }
-    }
-
     public static class Builder extends SegmentedFile.Builder
     {
         public SegmentedFile complete(ChannelProxy channel, int bufferSize, long overrideLength)

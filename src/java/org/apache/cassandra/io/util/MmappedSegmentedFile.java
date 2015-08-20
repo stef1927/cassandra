@@ -18,45 +18,30 @@
 package org.apache.cassandra.io.util;
 
 import java.io.*;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
 
 import com.google.common.util.concurrent.RateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.datastax.driver.core.DataType;
 import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.utils.JVMStabilityInspector;
+import org.apache.cassandra.io.sstable.format.Version;
 
 public class MmappedSegmentedFile extends SegmentedFile
 {
     private static final Logger logger = LoggerFactory.getLogger(MmappedSegmentedFile.class);
 
-    // in a perfect world, MAX_SEGMENT_SIZE would be final, but we need to test with a smaller size to stay sane.
-    public static long MAX_SEGMENT_SIZE = Integer.MAX_VALUE;
+    private final MmappedRegions regions;
 
-    /**
-     * Sorted map of segment offsets and MappedByteBuffers for segments. If mmap is completely disabled, or if the
-     * segment would be too long to mmap, the value for an offset will be null, indicating that we need to fall back
-     * to a RandomAccessFile.
-     */
-    private final Map<Long, ByteBuffer> segments;
-
-    public MmappedSegmentedFile(ChannelProxy channel, int bufferSize, long length, Map<Long, ByteBuffer> segments)
+    public MmappedSegmentedFile(ChannelProxy channel, int bufferSize, long length, MmappedRegions regions)
     {
-        super(new Cleanup(channel, segments), channel, bufferSize, length);
-        this.segments = segments;
+        super(new Cleanup(channel), channel, bufferSize, length);
+        this.regions = regions;
     }
 
     private MmappedSegmentedFile(MmappedSegmentedFile copy)
     {
         super(copy);
-        this.segments = copy.segments;
+        this.regions = copy.regions;
     }
 
     public MmappedSegmentedFile sharedCopy()
@@ -68,7 +53,7 @@ public class MmappedSegmentedFile extends SegmentedFile
     {
         return new RandomAccessReader.Builder(channel)
                .overrideLength(length)
-               .segments(segments)
+               .regions(regions)
                .build();
     }
 
@@ -77,49 +62,9 @@ public class MmappedSegmentedFile extends SegmentedFile
         return new RandomAccessReader.Builder(channel)
                .overrideLength(length)
                .bufferSize(bufferSize)
-               .segments(segments)
+               .regions(regions)
                .limiter(limiter)
                .build();
-    }
-
-    private static final class Cleanup extends SegmentedFile.Cleanup
-    {
-        private final Map<Long, ByteBuffer> segments;
-        protected Cleanup(ChannelProxy channel, Map<Long, ByteBuffer> segments)
-        {
-            super(channel);
-            this.segments = segments;
-        }
-
-        public void tidy()
-        {
-            super.tidy();
-
-            if (!FileUtils.isCleanerAvailable())
-                return;
-
-        /*
-         * Try forcing the unmapping of segments using undocumented unsafe sun APIs.
-         * If this fails (non Sun JVM), we'll have to wait for the GC to finalize the mapping.
-         * If this works and a thread tries to access any segment, hell will unleash on earth.
-         */
-            try
-            {
-                for (ByteBuffer segment : segments.values())
-                {
-                    if (segment == null)
-                        continue;
-                    FileUtils.clean(segment);
-                }
-                logger.debug("All segments have been unmapped successfully");
-            }
-            catch (Exception e)
-            {
-                JVMStabilityInspector.inspectThrowable(e);
-                // This is not supposed to happen
-                logger.error("Error while unmapping segments", e);
-            }
-        }
     }
 
     /**
@@ -127,7 +72,9 @@ public class MmappedSegmentedFile extends SegmentedFile
      */
     static class Builder extends SegmentedFile.Builder
     {
-        public Builder()
+        private MmappedRegions regions;
+
+        Builder()
         {
             super();
         }
@@ -135,23 +82,54 @@ public class MmappedSegmentedFile extends SegmentedFile
         public SegmentedFile complete(ChannelProxy channel, int bufferSize, long overrideLength)
         {
             long length = overrideLength > 0 ? overrideLength : channel.size();
-            // create the segments
-            return new MmappedSegmentedFile(channel, bufferSize, length, createSegments(channel, length));
+
+            updateRegions(channel);
+            regions.extend(length);
+
+            return new MmappedSegmentedFile(channel, bufferSize, length, regions);
         }
 
-        private Map<Long, ByteBuffer> createSegments(ChannelProxy channel, long length)
+        private void updateRegions(ChannelProxy channel)
         {
-            Map<Long, ByteBuffer> segments = new TreeMap<>();
-
-            long pos = 0;
-            while (pos < length)
+            if (regions != null && !regions.isSame(channel))
             {
-                long size = Math.min(MAX_SEGMENT_SIZE, channel.size() - pos);
-                segments.put(pos, channel.map(FileChannel.MapMode.READ_ONLY, pos, size));
-                pos += size;
+                Throwable err = regions.close(null);
+                if (err != null)
+                    logger.error("Failed to close mapped regions", err);
+
+                regions = null;
             }
 
-            return segments;
+            if (regions == null)
+                regions = MmappedRegions.empty(channel);
+        }
+
+        @Override
+        public void serializeBounds(DataOutput out, Version version) throws IOException
+        {
+            if (!version.hasBoundaries())
+                return;
+
+            super.serializeBounds(out, version);
+            out.writeInt(0);
+        }
+
+        @Override
+        public void deserializeBounds(DataInput in, Version version) throws IOException
+        {
+            if (!version.hasBoundaries())
+                return;
+
+            super.deserializeBounds(in, version);
+            in.skipBytes(in.readInt() * TypeSizes.sizeof(0L));
+        }
+
+        @Override
+        public Throwable close(Throwable accumulate)
+        {
+            return super.close(regions == null
+                               ? accumulate
+                               : regions.close(accumulate));
         }
     }
 }

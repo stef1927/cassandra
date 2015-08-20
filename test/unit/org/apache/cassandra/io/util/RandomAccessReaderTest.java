@@ -4,14 +4,9 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
 import java.util.Random;
-import java.util.TreeMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -21,11 +16,6 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 import org.apache.cassandra.io.compress.BufferType;
-import org.apache.cassandra.io.util.ChannelProxy;
-import org.apache.cassandra.io.util.FileMark;
-import org.apache.cassandra.io.util.FileUtils;
-import org.apache.cassandra.io.util.RandomAccessReader;
-import org.apache.cassandra.io.util.SequentialWriter;
 
 public class RandomAccessReaderTest
 {
@@ -34,22 +24,22 @@ public class RandomAccessReaderTest
         public final long fileLength;
         public final int bufferSize;
 
-        public List<Long> boundaries;
         public BufferType bufferType;
         public int maxSegmentSize;
+        public boolean mmappedRegions;
 
         public Parameters(long fileLength, int bufferSize)
         {
             this.fileLength = fileLength;
             this.bufferSize = bufferSize;
-            this.boundaries = new ArrayList<>();
             this.bufferType = BufferType.OFF_HEAP;
-            this.maxSegmentSize = Integer.MAX_VALUE;
+            this.maxSegmentSize = MmappedRegions.MAX_SEGMENT_SIZE;
+            this.mmappedRegions = false;
         }
 
-        public Parameters boundaries(List<Long> boundaries)
+        public Parameters mmappedRegions(boolean mmappedRegions)
         {
-            this.boundaries.addAll(boundaries);
+            this.mmappedRegions = mmappedRegions;
             return this;
         }
 
@@ -93,31 +83,13 @@ public class RandomAccessReaderTest
     @Test
     public void testOneSegment() throws IOException
     {
-        testReadFully(new Parameters(8192, 4096).boundaries(Arrays.asList(0L)));
+        testReadFully(new Parameters(8192, 4096).mmappedRegions(true));
     }
 
     @Test
     public void testMultipleSegments() throws IOException
     {
-        testReadFully(new Parameters(4096, 4096).boundaries(Arrays.asList(0L, 1024L, 2048L, 3072L)));
-    }
-
-    @Test
-    public void testMissingInitialSegment() throws IOException
-    {
-        testReadFully(new Parameters(4096, 4096).boundaries(Arrays.asList(1024L, 2048L, 3072L)).maxSegmentSize(1024));
-    }
-
-    @Test
-    public void testMissingMiddleSegments() throws IOException
-    {
-        testReadFully(new Parameters(5120, 4096).boundaries(Arrays.asList(0L, 2048L, 4096L)).maxSegmentSize(1024));
-    }
-
-    @Test
-    public void testMissingFinalSegment() throws IOException
-    {
-        testReadFully(new Parameters(4096, 4096).boundaries(Arrays.asList(0L, 1024L, 2048L)).maxSegmentSize(1024));
+        testReadFully(new Parameters(8192, 4096).mmappedRegions(true).maxSegmentSize(1024));
     }
 
     private void testReadFully(Parameters params) throws IOException
@@ -138,22 +110,13 @@ public class RandomAccessReaderTest
         assert f.length() >= params.fileLength;
 
         ChannelProxy channel = new ChannelProxy(f);
-        Map<Long, ByteBuffer> segments = new TreeMap<>();
-        for (int i = 0; i < params.boundaries.size(); i++)
-        {
-            long start = params.boundaries.get(i);
-            long end = (i == params.boundaries.size() - 1 ? params.fileLength : params.boundaries.get(i + 1));
-            long realend = (i == params.boundaries.size() - 1 ? f.length() : params.boundaries.get(i + 1));
+        RandomAccessReader.Builder builder = new RandomAccessReader.Builder(channel)
+                                             .bufferType(params.bufferType)
+                                             .bufferSize(params.bufferSize);
+        if (params.mmappedRegions)
+            builder.regions(MmappedRegions.empty(channel).extend(f.length()));
 
-            if ((end - start) <= params.maxSegmentSize)
-                segments.put(start, channel.map(FileChannel.MapMode.READ_ONLY, start, realend - start));
-        }
-
-        RandomAccessReader reader = new RandomAccessReader.Builder(channel)
-                                    .segments(segments)
-                                    .bufferType(params.bufferType)
-                                    .bufferSize(params.bufferSize)
-                                    .build();
+        RandomAccessReader reader = builder.build();
         assertEquals(f.getAbsolutePath(), reader.getPath());
         assertEquals(f.length(), reader.length());
 
@@ -172,7 +135,7 @@ public class RandomAccessReaderTest
         reader.close();
         reader.close(); // should be idem-potent
 
-        segments.values().forEach(FileUtils::clean);
+        assertNull(builder.regions.close(null));
         channel.close();
     }
 
