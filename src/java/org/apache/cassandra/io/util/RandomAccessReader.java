@@ -81,19 +81,12 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
 
     protected void initializeBuffer()
     {
-        if (regions.isEmpty())
-        {
+        if (regions == null)
             buffer = allocateBuffer(bufferSize);
-            buffer.limit(0);
-        }
         else
-        {
-            MmappedRegions.Region region = regions.floor(0);
-            buffer = region.buffer.duplicate();
+            buffer = regions.floor(0).buffer.duplicate();
 
-            if (region.bottom() != 0)
-                buffer.limit(0);
-        }
+        buffer.limit(0);
     }
 
     protected ByteBuffer allocateBuffer(int size)
@@ -105,7 +98,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     {
         if (buffer != null)
         {
-            if (regions.isEmpty())
+            if (regions == null)
                 BufferPool.put(buffer);
             buffer = null;
         }
@@ -119,7 +112,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         if (isEOF())
             return;
 
-        if (regions.isEmpty())
+        if (regions == null)
             reBufferStandard();
         else
             reBufferMmap();
@@ -167,6 +160,8 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         bufferOffset = region.bottom();
         buffer = region.buffer.duplicate();
         buffer.position(Ints.checkedCast(position - bufferOffset));
+        if (bufferSize < buffer.remaining())
+            buffer.limit(buffer.position() + bufferSize);
     }
 
     @Override
@@ -425,7 +420,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
             this.overrideLength = -1L;
             this.bufferSize = getBufferSize(DEFAULT_BUFFER_SIZE);
             this.bufferType = BufferType.OFF_HEAP;
-            this.regions = MmappedRegions.empty(channel);
+            this.regions = null;
             this.limiter = null;
             this.initializeBuffers = true;
         }

@@ -34,10 +34,12 @@ import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.schema.CompressionParams;
 import org.apache.cassandra.utils.ChecksumType;
 
+import static junit.framework.Assert.assertNull;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class MmappedRegionsTest
 {
@@ -77,7 +79,7 @@ public class MmappedRegionsTest
             MmappedRegions regions = MmappedRegions.empty(channel))
         {
             assertTrue(regions.isEmpty());
-            assertTrue(regions.isSame(channel));
+            assertTrue(regions.isValid(channel));
         }
     }
 
@@ -174,6 +176,80 @@ public class MmappedRegionsTest
     }
 
     @Test
+    public void testSnapshot() throws Exception
+    {
+        ByteBuffer buffer = allocateBuffer(128 * 1024);
+
+        MmappedRegions snapshot;
+        ChannelProxy channelCopy;
+
+        try(ChannelProxy channel = new ChannelProxy(writeFile("testSnapshot", buffer));
+            MmappedRegions regions = MmappedRegions.empty(channel))
+        {
+            // create 4 segments, one per quater capacity
+            regions.extend(buffer.capacity() / 4);
+            regions.extend(buffer.capacity() / 2);
+            regions.extend(3 * buffer.capacity() / 4);
+            regions.extend(buffer.capacity());
+
+            // make a snapshot
+            snapshot = regions.snapshot();
+
+            // keep the channel open
+            channelCopy = channel.sharedCopy();
+        }
+
+        assertFalse(snapshot.isCleanedUp());
+
+        final int SIZE = buffer.capacity() / 4;
+        for (int i = 0; i < buffer.capacity(); i++)
+        {
+            MmappedRegions.Region region = snapshot.floor(i);
+            assertNotNull(region);
+            assertEquals(SIZE * (i / SIZE), region.bottom());
+            assertEquals(SIZE + (SIZE * (i / SIZE)), region.top());
+
+            // check we can access the buffer
+            assertNotNull(region.buffer.duplicate().getInt());
+        }
+
+        assertNull(snapshot.close(null));
+        assertNull(channelCopy.close(null));
+        assertTrue(snapshot.isCleanedUp());
+    }
+
+    @Test(expected = AssertionError.class)
+    public void testSnapshotCannotExtend() throws Exception
+    {
+        ByteBuffer buffer = allocateBuffer(128 * 1024);
+
+        MmappedRegions snapshot;
+        ChannelProxy channelCopy;
+
+        try(ChannelProxy channel = new ChannelProxy(writeFile("testSnapshotCannotExtend", buffer));
+            MmappedRegions regions = MmappedRegions.empty(channel))
+        {
+            regions.extend(buffer.capacity() / 2);
+
+            // make a snapshot
+            snapshot = regions.snapshot();
+
+            // keep the channel open
+            channelCopy = channel.sharedCopy();
+        }
+
+        try
+        {
+            snapshot.extend(buffer.capacity());
+        }
+        finally
+        {
+            assertNull(snapshot.close(null));
+            assertNull(channelCopy.close(null));
+        }
+    }
+
+    @Test
     public void testExtendOutOfOrder() throws Exception
     {
         ByteBuffer buffer = allocateBuffer(4096);
@@ -214,12 +290,14 @@ public class MmappedRegionsTest
         ByteBuffer buffer = allocateBuffer(128 * 1024);
         File f = File.createTempFile("testMapForCompressionMetadata", "1");
         f.deleteOnExit();
-        String filename = f.getName();
+
+        File cf = File.createTempFile(f.getName() + ".metadata", "1");
+        cf.deleteOnExit();
 
         MetadataCollector sstableMetadataCollector = new MetadataCollector(new ClusteringComparator(BytesType.instance))
                                                      .replayPosition(null);
         try(SequentialWriter writer = new CompressedSequentialWriter(f,
-                                                                     filename + ".metadata",
+                                                                     cf.getAbsolutePath(),
                                                                      CompressionParams.snappy(),
                                                                      sstableMetadataCollector))
         {
@@ -227,7 +305,7 @@ public class MmappedRegionsTest
             writer.finish();
         }
 
-        CompressionMetadata metadata = new CompressionMetadata(filename + ".metadata", f.length(), ChecksumType.CRC32);
+        CompressionMetadata metadata = new CompressionMetadata(cf.getAbsolutePath(), f.length(), ChecksumType.CRC32);
         try(ChannelProxy channel = new ChannelProxy(f);
             MmappedRegions regions = MmappedRegions.map(channel, metadata))
         {
@@ -254,6 +332,7 @@ public class MmappedRegionsTest
         finally
         {
             MmappedRegions.MAX_SEGMENT_SIZE = OLD_MAX_SEGMENT_SIZE;
+            metadata.close();
         }
     }
 }

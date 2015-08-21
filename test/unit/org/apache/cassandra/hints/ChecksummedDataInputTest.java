@@ -54,6 +54,8 @@ public class ChecksummedDataInputTest
             out.writeLong(Long.MAX_VALUE);
             out.writeShort(Short.MIN_VALUE);
             out.writeUTF("utf");
+            out.writeVInt(67L);
+            out.writeUnsignedVInt(88L);
 
             length = out.getLength();
             buffer = out.buffer();
@@ -95,6 +97,8 @@ public class ChecksummedDataInputTest
             assertEquals(Long.MAX_VALUE, crcInput.readLong());
             assertEquals(Short.MIN_VALUE, crcInput.readShort());
             assertEquals("utf", crcInput.readUTF());
+            assertEquals(67L, crcInput.readVInt());
+            assertEquals(88L, crcInput.readUnsignedVInt());
 
             // assert that the crc matches, and that we've read exactly as many bytes as expected
             assertEquals(0, crcInput.bytesRemaining());

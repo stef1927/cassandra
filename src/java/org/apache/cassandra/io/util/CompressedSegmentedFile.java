@@ -19,18 +19,24 @@ package org.apache.cassandra.io.util;
 
 import com.google.common.util.concurrent.RateLimiter;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.io.compress.CompressedRandomAccessReader;
 import org.apache.cassandra.io.compress.CompressedSequentialWriter;
 import org.apache.cassandra.io.compress.CompressionMetadata;
+import org.apache.cassandra.utils.JVMStabilityInspector;
 import org.apache.cassandra.utils.Throwables;
 import org.apache.cassandra.utils.concurrent.Ref;
 
 public class CompressedSegmentedFile extends SegmentedFile implements ICompressedFile
 {
-    public final CompressionMetadata metadata;
+    private static final Logger logger = LoggerFactory.getLogger(CompressedSegmentedFile.class);
     private static final boolean useMmap = DatabaseDescriptor.getDiskAccessMode() == Config.DiskAccessMode.mmap;
+
+    public final CompressionMetadata metadata;
     private final MmappedRegions regions;
 
     public CompressedSegmentedFile(ChannelProxy channel, int bufferSize, CompressionMetadata metadata)
@@ -40,7 +46,7 @@ public class CompressedSegmentedFile extends SegmentedFile implements ICompresse
              metadata,
              useMmap
              ? MmappedRegions.map(channel, metadata)
-             : MmappedRegions.empty(channel));
+             : null);
     }
 
     public CompressedSegmentedFile(ChannelProxy channel, int bufferSize, CompressionMetadata metadata, MmappedRegions regions)
@@ -67,12 +73,11 @@ public class CompressedSegmentedFile extends SegmentedFile implements ICompresse
         return regions;
     }
 
-
-
     private static final class Cleanup extends SegmentedFile.Cleanup
     {
         final CompressionMetadata metadata;
         private final MmappedRegions regions;
+
         protected Cleanup(ChannelProxy channel, CompressionMetadata metadata, MmappedRegions regions)
         {
             super(channel);
@@ -81,9 +86,18 @@ public class CompressedSegmentedFile extends SegmentedFile implements ICompresse
         }
         public void tidy()
         {
-            super.tidy();
+            Throwable err = regions == null ? null : regions.close(null);
+            if (err != null)
+            {
+                JVMStabilityInspector.inspectThrowable(err);
+
+                // This is not supposed to happen
+                logger.error("Error while closing mmapped regions", err);
+            }
+
             metadata.close();
-            Throwables.maybeFail(regions.close(null));
+
+            super.tidy();
         }
     }
 

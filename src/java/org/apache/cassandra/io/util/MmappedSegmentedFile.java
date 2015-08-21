@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.sstable.format.Version;
+import org.apache.cassandra.utils.JVMStabilityInspector;
 
 public class MmappedSegmentedFile extends SegmentedFile
 {
@@ -34,7 +35,7 @@ public class MmappedSegmentedFile extends SegmentedFile
 
     public MmappedSegmentedFile(ChannelProxy channel, int bufferSize, long length, MmappedRegions regions)
     {
-        super(new Cleanup(channel), channel, bufferSize, length);
+        super(new Cleanup(channel, regions), channel, bufferSize, length);
         this.regions = regions;
     }
 
@@ -67,6 +68,31 @@ public class MmappedSegmentedFile extends SegmentedFile
                .build();
     }
 
+    private static final class Cleanup extends SegmentedFile.Cleanup
+    {
+        private final MmappedRegions regions;
+
+        Cleanup(ChannelProxy channel, MmappedRegions regions)
+        {
+            super(channel);
+            this.regions = regions;
+        }
+
+        public void tidy()
+        {
+            Throwable err = regions.close(null);
+            if (err != null)
+            {
+                JVMStabilityInspector.inspectThrowable(err);
+
+                // This is not supposed to happen
+                logger.error("Error while closing mmapped regions", err);
+            }
+
+            super.tidy();
+        }
+    }
+
     /**
      * Overrides the default behaviour to create segments of a maximum size.
      */
@@ -82,16 +108,14 @@ public class MmappedSegmentedFile extends SegmentedFile
         public SegmentedFile complete(ChannelProxy channel, int bufferSize, long overrideLength)
         {
             long length = overrideLength > 0 ? overrideLength : channel.size();
+            updateRegions(channel, length);
 
-            updateRegions(channel);
-            regions.extend(length);
-
-            return new MmappedSegmentedFile(channel, bufferSize, length, regions);
+            return new MmappedSegmentedFile(channel, bufferSize, length, regions.snapshot());
         }
 
-        private void updateRegions(ChannelProxy channel)
+        private void updateRegions(ChannelProxy channel, long length)
         {
-            if (regions != null && !regions.isSame(channel))
+            if (regions != null && !regions.isValid(channel))
             {
                 Throwable err = regions.close(null);
                 if (err != null)
@@ -101,7 +125,11 @@ public class MmappedSegmentedFile extends SegmentedFile
             }
 
             if (regions == null)
+            {
                 regions = MmappedRegions.empty(channel);
+            }
+
+            regions.extend(length);
         }
 
         @Override
