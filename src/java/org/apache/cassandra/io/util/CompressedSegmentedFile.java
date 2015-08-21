@@ -28,7 +28,6 @@ import org.apache.cassandra.io.compress.CompressedRandomAccessReader;
 import org.apache.cassandra.io.compress.CompressedSequentialWriter;
 import org.apache.cassandra.io.compress.CompressionMetadata;
 import org.apache.cassandra.utils.JVMStabilityInspector;
-import org.apache.cassandra.utils.Throwables;
 import org.apache.cassandra.utils.concurrent.Ref;
 
 public class CompressedSegmentedFile extends SegmentedFile implements ICompressedFile
@@ -114,7 +113,7 @@ public class CompressedSegmentedFile extends SegmentedFile implements ICompresse
 
     public static class Builder extends SegmentedFile.Builder
     {
-        protected final CompressedSequentialWriter writer;
+        final CompressedSequentialWriter writer;
         public Builder(CompressedSequentialWriter writer)
         {
             this.writer = writer;
