@@ -25,7 +25,6 @@ import org.apache.cassandra.io.util.FileDataInput;
 import org.apache.cassandra.io.util.FileMark;
 import org.apache.cassandra.io.util.RandomAccessReader;
 import org.apache.cassandra.io.util.RebufferingInputStream;
-import org.apache.cassandra.utils.ByteBufferUtil;
 
 /**
  * An {@link RandomAccessReader} wrapper that calctulates the CRC in place.
@@ -85,7 +84,7 @@ public final class ChecksummedDataInput extends RebufferingInputStream implement
 
     public long bytesRemaining()
     {
-        return source.bytesRemaining();
+        return limit;
     }
 
     public int available()
@@ -130,14 +129,34 @@ public final class ChecksummedDataInput extends RebufferingInputStream implement
 
     public ByteBuffer readBytes(int length) throws IOException
     {
-        return source.readBytes(length);
+        ByteBuffer ret = ByteBuffer.allocate(length);
+        read(ret.array(), 0, length);
+        return ret;
     }
 
     protected void reBuffer()
     {
         source.reBuffer();
+    }
 
-        crc.update(ByteBufferUtil.getArray(buffer), 0, buffer.remaining());
-        limit -= buffer.remaining();
+    @Override
+    public byte readByte() throws IOException
+    {
+        byte b = source.readByte();
+        crc.update(b);
+        limit--;
+        return b;
+    }
+
+    @Override
+    public int read(byte[] buff, int offset, int length) throws IOException
+    {
+        if (length > limit)
+            throw new IOException("Digest mismatch exception");
+
+        int copied = source.read(buff, offset, length);
+        crc.update(buff, offset, copied);
+        limit -= copied;
+        return copied;
     }
 }

@@ -135,7 +135,8 @@ public class RandomAccessReaderTest
         reader.close();
         reader.close(); // should be idem-potent
 
-        assertNull(builder.regions.close(null));
+        if (builder.regions != null)
+            assertNull(builder.regions.close(null));
         channel.close();
     }
 

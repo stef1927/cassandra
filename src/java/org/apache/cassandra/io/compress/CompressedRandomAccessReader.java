@@ -61,7 +61,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
         buffer = allocateBuffer(bufferSize);
         buffer.limit(0);
 
-        if (regions.isEmpty())
+        if (regions == null)
         {
             compressed = allocateBuffer(metadata.compressor().initialCompressedBufferLength(metadata.chunkLength()));
             checksumBytes = ByteBuffer.wrap(new byte[4]);

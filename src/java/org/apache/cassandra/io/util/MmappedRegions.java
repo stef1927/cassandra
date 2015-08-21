@@ -25,12 +25,14 @@ import java.util.Arrays;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.io.compress.CompressionMetadata;
 import org.apache.cassandra.utils.JVMStabilityInspector;
 import org.apache.cassandra.utils.Throwables;
+import org.apache.cassandra.utils.concurrent.RefCounted;
+import org.apache.cassandra.utils.concurrent.SharedCloseableImpl;
 
-//TODO - add documentation and ref counting
-public class MmappedRegions implements AutoCloseable
+public class MmappedRegions extends SharedCloseableImpl
 {
     private static final Logger logger = LoggerFactory.getLogger(MmappedRegions.class);
 
@@ -39,26 +41,25 @@ public class MmappedRegions implements AutoCloseable
 
     // when we need to grow the allow the add this number of regions
     static final int REGION_ALLOC_SIZE = 15;
-    private static final Region EMPTY_REGION = new Region(0, ByteBuffer.allocate(0));
 
-    /** The file channel */
-    private final ChannelProxy channel;
-
-    /** An array of sorted mapped regions */
-    private Region[] regions;
-
-    /** The maximum file length we have mapped */
-    private long length;
-
-    /** The index to the last region added */
-    private int last;
+    /** The state is shared with the tidier and it contains all the regions and does the actual mapping */
+    private final State state;
 
     private MmappedRegions(ChannelProxy channel)
     {
-        this.channel = channel;
-        this.regions = allocRegions(null);
-        this.length = 0;
-        this.last = -1;
+        this(new State(channel));
+    }
+
+    private MmappedRegions(State state)
+    {
+        super(new Tidier(state));
+        this.state = state;
+    }
+
+    private MmappedRegions(MmappedRegions copy)
+    {
+        super(copy);
+        this.state = new State(copy.state);
     }
 
     public static MmappedRegions empty(ChannelProxy channel)
@@ -73,20 +74,30 @@ public class MmappedRegions implements AutoCloseable
         return ret;
     }
 
+    public MmappedRegions sharedCopy()
+    {
+        return new MmappedRegions(this);
+    }
+
+    public MmappedRegions snapshot()
+    {
+        return sharedCopy();
+    }
+
     public MmappedRegions extend(long length)
     {
         if (length < 0)
             throw new IllegalArgumentException("Length must not be negative");
 
-        if (length <= this.length)
+        if (length <= state.length)
             return this;
 
-        this.length = length;
-        long pos = lastRegion().top();
+        state.length = length;
+        long pos = state.getPosition();
         while (pos < length)
         {
             long size = Math.min(MAX_SEGMENT_SIZE, length - pos);
-            addRegion(pos, channel.map(FileChannel.MapMode.READ_ONLY, pos, size));
+            state.add(pos, size);
             pos += size;
         }
 
@@ -110,7 +121,7 @@ public class MmappedRegions implements AutoCloseable
             {
                 if (segmentSize > 0)
                 {
-                    addRegion(lastSegmentOffset, channel.map(FileChannel.MapMode.READ_ONLY, lastSegmentOffset, segmentSize));
+                    state.add(lastSegmentOffset, segmentSize);
                     lastSegmentOffset += segmentSize;
                     segmentSize = 0;
                 }
@@ -121,95 +132,28 @@ public class MmappedRegions implements AutoCloseable
         }
 
         if (segmentSize > 0)
-            addRegion(lastSegmentOffset, channel.map(FileChannel.MapMode.READ_ONLY, lastSegmentOffset, segmentSize));
+            state.add(lastSegmentOffset, segmentSize);
 
-        this.length = lastSegmentOffset + segmentSize;
+        state.length = lastSegmentOffset + segmentSize;
     }
 
-    public boolean isSame(ChannelProxy channel)
+    public boolean isValid(ChannelProxy channel)
     {
-        return this.channel.filePath().equals(channel.filePath());
+        return state.isValid(channel);
     }
 
     public boolean isEmpty()
     {
-        return lastRegion() == EMPTY_REGION;
+        return state.isEmpty();
     }
 
     public Region floor(long position)
     {
-        assert 0 <= position && position < length : String.format("%d >= %d", position, length);
-
-        int idx = Arrays.binarySearch(regions, 0, last +1, new Region(position, null));
-        assert idx != -1 : String.format("Bad position %d for regions %s", position, Arrays.toString(regions));
-        if (idx < 0)
-            idx = -(idx + 2); // round down to entry at insertion point
-
-        return regions[idx];
+        assert !isCleanedUp() : "Attempted to use closed region";
+        return state.floor(position);
     }
 
-    public Throwable close(Throwable accumulate)
-    {
-        if (!FileUtils.isCleanerAvailable())
-            return accumulate;
-
-        /*
-         * Try forcing the unmapping of segments using undocumented unsafe sun APIs.
-         * If this fails (non Sun JVM), we'll have to wait for the GC to finalize the mapping.
-         * If this works and a thread tries to access any segment, hell will unleash on earth.
-         */
-        try
-        {
-            for (Region region : regions)
-                FileUtils.clean(region.buffer);
-
-            //TODO - this can be removed once we use ref counting
-            last = -1;
-            regions = null;
-
-            logger.debug("All segments have been unmapped successfully");
-            return accumulate;
-        }
-        catch (Throwable t)
-        {
-            JVMStabilityInspector.inspectThrowable(t);
-            // This is not supposed to happen
-            logger.error("Error while unmapping segments", t);
-            return Throwables.merge(accumulate, t);
-        }
-    }
-
-    public void close() throws Exception
-    {
-        Throwables.maybeFail(close(null));
-    }
-
-    private Region lastRegion()
-    {
-        return last >= 0 ? regions[last] : EMPTY_REGION;
-    }
-
-    private void addRegion(long pos, ByteBuffer buffer)
-    {
-        if (++last == regions.length)
-            regions = allocRegions(regions);
-
-        regions[last] = new Region(pos, buffer);
-    }
-
-    private static Region[] allocRegions(Region[] existing)
-    {
-        Region[] ret;
-        if (existing != null)
-            ret = Arrays.copyOf(existing, existing.length + REGION_ALLOC_SIZE);
-        else
-            ret = new Region[REGION_ALLOC_SIZE];
-
-        Arrays.fill(ret, existing == null ? 0 : existing.length, ret.length, EMPTY_REGION);
-        return ret;
-    }
-
-    public static final class Region implements Comparable<Region>
+    public static final class Region
     {
         public final long offset;
         public final ByteBuffer buffer;
@@ -220,11 +164,6 @@ public class MmappedRegions implements AutoCloseable
             this.buffer = buffer;
         }
 
-        public final int compareTo(Region that)
-        {
-            return (int) Math.signum(this.offset - that.offset);
-        }
-
         public long bottom()
         {
             return offset;
@@ -233,6 +172,159 @@ public class MmappedRegions implements AutoCloseable
         public long top()
         {
             return offset + buffer.capacity();
+        }
+    }
+
+
+    private static final class State
+    {
+        /** The file channel */
+        private final ChannelProxy channel;
+
+        /** An array of region buffers, synchronized with offsets */
+        private ByteBuffer[] buffers;
+
+        /** An array of region offsets, synchronized with buffers */
+        private long[] offsets;
+
+        /** The maximum file length we have mapped */
+        private long length;
+
+        /** The index to the last region added */
+        private int last;
+
+        /** This is true when we are a copy of another state. In this case we can use existing regions but
+         * we cannot modify them or create new regions or close them.
+         */
+        private final boolean isCopy;
+
+        private State(ChannelProxy channel)
+        {
+            this.channel = channel.sharedCopy();
+            this.buffers = new ByteBuffer[REGION_ALLOC_SIZE];
+            this.offsets = new long[REGION_ALLOC_SIZE];
+            this.length = 0;
+            this.last = -1;
+            this.isCopy = false;
+        }
+
+        private State(State copy)
+        {
+            this.channel = copy.channel;
+            this.buffers = Arrays.copyOf(copy.buffers, copy.buffers.length);
+            this.offsets = Arrays.copyOf(copy.offsets, copy.offsets.length);
+            this.length = copy.length;
+            this.last = copy.last;
+            this.isCopy = true;
+        }
+
+        private boolean isEmpty()
+        {
+            return last < 0;
+        }
+
+        private boolean isValid(ChannelProxy channel)
+        {
+            return this.channel.filePath().equals(channel.filePath());
+        }
+
+        private Region floor(long position)
+        {
+            assert 0 <= position && position < length : String.format("%d >= %d", position, length);
+
+            int idx = Arrays.binarySearch(offsets, 0, last +1, position);
+            assert idx != -1 : String.format("Bad position %d for regions %s, last %d in %s", position, Arrays.toString(offsets), last, channel);
+            if (idx < 0)
+                idx = -(idx + 2); // round down to entry at insertion point
+
+            return new Region(offsets[idx], buffers[idx]);
+        }
+
+        private long getPosition()
+        {
+            return last < 0 ? 0 : offsets[last] + buffers[last].capacity();
+        }
+
+        private void add(long pos, long size)
+        {
+            assert !isCopy : String.format("Cannot add a region to a copy (%s)", channel);
+
+            ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, pos, size);
+
+            ++last;
+
+            if (last == offsets.length)
+            {
+                offsets = Arrays.copyOf(offsets, offsets.length + REGION_ALLOC_SIZE);
+                buffers = Arrays.copyOf(buffers, buffers.length + REGION_ALLOC_SIZE);
+            }
+
+            offsets[last] = pos;
+            buffers[last] = buffer;
+        }
+
+        private Throwable close(Throwable accumulate)
+        {
+            assert !isCopy : String.format("Cannot close a copy (%s)", channel);
+
+            if (!FileUtils.isCleanerAvailable())
+                return accumulate;
+
+            /*
+             * Try forcing the unmapping of segments using undocumented unsafe sun APIs.
+             * If this fails (non Sun JVM), we'll have to wait for the GC to finalize the mapping.
+             * If this works and a thread tries to access any segment, hell will unleash on earth.
+             */
+            try
+            {
+                for (ByteBuffer buffer : buffers)
+                {
+                    if (buffer != null)
+                    { // we could break when we encounter null,
+                      // this is just a little bit of extra defensiveness
+                        FileUtils.clean(buffer);
+                    }
+                }
+
+                logger.debug("All segments have been unmapped successfully");
+
+                channel.close();
+                return accumulate;
+            }
+            catch (Throwable t)
+            {
+                JVMStabilityInspector.inspectThrowable(t);
+                // This is not supposed to happen
+                logger.error("Error while unmapping segments", t);
+                return Throwables.merge(accumulate, t);
+            }
+        }
+    }
+
+    public static final class Tidier implements RefCounted.Tidy
+    {
+        final State state;
+
+        Tidier(State state)
+        {
+            this.state = state;
+        }
+
+        public String name()
+        {
+            return state.channel.filePath();
+        }
+
+        public void tidy()
+        {
+            try
+            {
+                Throwables.maybeFail(state.close(null));
+            }
+            catch (Exception e)
+            {
+                throw new FSReadError(e, state.channel.filePath());
+            }
         }
     }
 
