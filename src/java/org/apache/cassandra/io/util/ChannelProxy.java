@@ -63,7 +63,7 @@ public final class ChannelProxy extends SharedCloseableImpl
 
     public ChannelProxy(File file)
     {
-        this(file.getAbsolutePath(), openChannel(file));
+        this(file.getPath(), openChannel(file));
     }
 
     public ChannelProxy(String filePath, FileChannel channel)

@@ -101,8 +101,6 @@ public class MmappedRegions extends SharedCloseableImpl
             pos += size;
         }
 
-        //TODO - should we compact regions?
-
         return this;
     }
 
