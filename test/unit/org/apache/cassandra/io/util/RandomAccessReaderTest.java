@@ -4,6 +4,11 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.ReadableByteChannel;
+import java.nio.channels.WritableByteChannel;
 import java.nio.charset.Charset;
 import java.util.Arrays;
 import java.util.Random;
@@ -11,11 +16,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import com.google.common.primitives.Ints;
 import org.junit.Test;
 
 import static org.junit.Assert.*;
 
 import org.apache.cassandra.io.compress.BufferType;
+import org.apache.cassandra.utils.ByteBufferUtil;
 
 public class RandomAccessReaderTest
 {
@@ -27,6 +34,7 @@ public class RandomAccessReaderTest
         public BufferType bufferType;
         public int maxSegmentSize;
         public boolean mmappedRegions;
+        public byte[] expected;
 
         public Parameters(long fileLength, int bufferSize)
         {
@@ -35,6 +43,7 @@ public class RandomAccessReaderTest
             this.bufferType = BufferType.OFF_HEAP;
             this.maxSegmentSize = MmappedRegions.MAX_SEGMENT_SIZE;
             this.mmappedRegions = false;
+            this.expected = "The quick brown fox jumps over the lazy dog".getBytes(FileUtils.CHARSET);
         }
 
         public Parameters mmappedRegions(boolean mmappedRegions)
@@ -52,6 +61,12 @@ public class RandomAccessReaderTest
         public Parameters maxSegmentSize(int maxSegmentSize)
         {
             this.maxSegmentSize = maxSegmentSize;
+            return this;
+        }
+
+        public Parameters expected(byte[] expected)
+        {
+            this.expected = expected;
             return this;
         }
     }
@@ -92,52 +107,191 @@ public class RandomAccessReaderTest
         testReadFully(new Parameters(8192, 4096).mmappedRegions(true).maxSegmentSize(1024));
     }
 
-    private void testReadFully(Parameters params) throws IOException
+    @Test
+    public void testVeryLarge() throws IOException
+    {
+        final long SIZE = 1L << 32; // 2GB
+        Parameters params = new Parameters(SIZE, 1 << 20); // 1MB
+
+        try(ChannelProxy channel = new ChannelProxy("abc", new FakeFileChannel(SIZE)))
+        {
+            RandomAccessReader.Builder builder = new RandomAccessReader.Builder(channel)
+                                                 .bufferType(params.bufferType)
+                                                 .bufferSize(params.bufferSize);
+
+            try(RandomAccessReader reader = builder.build())
+            {
+                assertEquals(channel.size(), reader.length());
+                assertEquals(channel.size(), reader.bytesRemaining());
+                assertEquals(Integer.MAX_VALUE, reader.available());
+
+                reader.skip(channel.size());
+
+                assertTrue(reader.isEOF());
+                assertEquals(0, reader.bytesRemaining());
+            }
+        }
+    }
+
+    /** A fake file channel that simply increments the position and doesn't
+     * actually read anything. We use it to simulate very large files, > 2G.
+     */
+    private static final class FakeFileChannel extends FileChannel
+    {
+        private final long size;
+        private long position;
+
+        public FakeFileChannel(long size)
+        {
+            this.size = size;
+        }
+
+        public int read(ByteBuffer dst)
+        {
+            int ret = dst.remaining();
+            position += ret;
+            dst.position(dst.limit());
+            return ret;
+        }
+
+        public long read(ByteBuffer[] dsts, int offset, int length)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public int write(ByteBuffer src)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public long write(ByteBuffer[] srcs, int offset, int length)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public long position()
+        {
+            return position;
+        }
+
+        public FileChannel position(long newPosition)
+        {
+            position = newPosition;
+            return this;
+        }
+
+        public long size()
+        {
+            return size;
+        }
+
+        public FileChannel truncate(long size)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public void force(boolean metaData)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public long transferTo(long position, long count, WritableByteChannel target)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public long transferFrom(ReadableByteChannel src, long position, long count)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public int read(ByteBuffer dst, long position)
+        {
+            int ret = dst.remaining();
+            this.position = position + ret;
+            dst.position(dst.limit());
+            return ret;
+        }
+
+        public int write(ByteBuffer src, long position)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public MappedByteBuffer map(MapMode mode, long position, long size)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public FileLock lock(long position, long size, boolean shared)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        public FileLock tryLock(long position, long size, boolean shared)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        protected void implCloseChannel()
+        {
+
+        }
+    }
+
+    private File writeFile(Parameters params) throws IOException
     {
         final File f = File.createTempFile("testReadFully", "1");
-        final String expected = "The quick brown fox jumps over the lazy dog";
+        f.deleteOnExit();
 
         SequentialWriter writer = SequentialWriter.open(f);
-        int numWritten = 0;
+        long numWritten = 0;
         while (numWritten < params.fileLength)
         {
-            writer.write(expected.getBytes());
-            numWritten += expected.length();
+            writer.write(params.expected);
+            numWritten += params.expected.length;
         }
 
         writer.finish();
         assert f.exists();
         assert f.length() >= params.fileLength;
+        return f;
+    }
 
-        ChannelProxy channel = new ChannelProxy(f);
-        RandomAccessReader.Builder builder = new RandomAccessReader.Builder(channel)
-                                             .bufferType(params.bufferType)
-                                             .bufferSize(params.bufferSize);
-        if (params.mmappedRegions)
-            builder.regions(MmappedRegions.empty(channel).extend(f.length()));
-
-        RandomAccessReader reader = builder.build();
-        assertEquals(f.getAbsolutePath(), reader.getPath());
-        assertEquals(f.length(), reader.length());
-
-        byte[] b = new byte[expected.length()];
-        long numRead = 0;
-        while (numRead < params.fileLength)
+    private void testReadFully(Parameters params) throws IOException
+    {
+        final File f = writeFile(params);
+        try(ChannelProxy channel = new ChannelProxy(f))
         {
-            reader.readFully(b);
-            assertEquals(expected, new String(b));
-            numRead += b.length;
+            RandomAccessReader.Builder builder = new RandomAccessReader.Builder(channel)
+                                                 .bufferType(params.bufferType)
+                                                 .bufferSize(params.bufferSize);
+            if (params.mmappedRegions)
+                builder.regions(MmappedRegions.empty(channel).extend(f.length()));
+
+            try(RandomAccessReader reader = builder.build())
+            {
+                assertEquals(f.getAbsolutePath(), reader.getPath());
+                assertEquals(f.length(), reader.length());
+                assertEquals(f.length(), reader.bytesRemaining());
+                assertEquals(Math.min(Integer.MAX_VALUE, f.length()), reader.available());
+
+                byte[] b = new byte[params.expected.length];
+                long numRead = 0;
+                while (numRead < params.fileLength)
+                {
+                    reader.readFully(b);
+                    assertTrue(Arrays.equals(params.expected, b));
+                    numRead += b.length;
+                }
+
+                assertTrue(reader.isEOF());
+                assertEquals(0, reader.bytesRemaining());
+            }
+
+            if (builder.regions != null)
+                assertNull(builder.regions.close(null));
         }
-
-        assertTrue(reader.isEOF());
-        assertEquals(0, reader.bytesRemaining());
-
-        reader.close();
-        reader.close(); // should be idem-potent
-
-        if (builder.regions != null)
-            assertNull(builder.regions.close(null));
-        channel.close();
     }
 
     @Test
