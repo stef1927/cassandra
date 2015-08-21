@@ -275,6 +275,7 @@ public abstract class SegmentedFile extends SharedCloseableImpl
         {
             if (channel != null)
                 return channel.close(accumulate);
+
             return accumulate;
         }
 
@@ -287,6 +288,10 @@ public abstract class SegmentedFile extends SharedCloseableImpl
         {
             if (channel != null)
             {
+                // This is really fragile, both path and channel.filePath()
+                // must agree, i.e. they both must be absolute or both relative
+                // eventually we should really pass the filePath to the builder
+                // constructor and remove this
                 if (channel.filePath().equals(path))
                     return channel.sharedCopy();
                 else
