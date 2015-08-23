@@ -56,10 +56,11 @@ public class MmappedRegions extends SharedCloseableImpl
         this.state = state;
     }
 
-    private MmappedRegions(MmappedRegions copy)
+    /** See comment in State(State original) */
+    private MmappedRegions(MmappedRegions original)
     {
-        super(copy);
-        this.state = new State(copy.state);
+        super(original);
+        this.state = new State(original.state);
     }
 
     public static MmappedRegions empty(ChannelProxy channel)
@@ -74,11 +75,13 @@ public class MmappedRegions extends SharedCloseableImpl
         return ret;
     }
 
+    /** See comment in State(State original) */
     public MmappedRegions sharedCopy()
     {
         return new MmappedRegions(this);
     }
 
+    /** See comment in State(State original) */
     public MmappedRegions snapshot()
     {
         return sharedCopy();
@@ -206,13 +209,22 @@ public class MmappedRegions extends SharedCloseableImpl
             this.isCopy = false;
         }
 
-        private State(State copy)
+        /** We create a deep copy of the arrays for thread safety reasons.
+         * We also store a flag indicating if we are a copy (isCopy). Copies
+         * can only access existing regions, they cannot create new ones.
+         * This is because MmappedRegions is reference counted, only the original
+         * will be cleaned-up, therefore only the original can create new mapped
+         * regions.
+         *
+         * @param original - the original state we are a copy of
+         */
+        private State(State original)
         {
-            this.channel = copy.channel;
-            this.buffers = Arrays.copyOf(copy.buffers, copy.buffers.length);
-            this.offsets = Arrays.copyOf(copy.offsets, copy.offsets.length);
-            this.length = copy.length;
-            this.last = copy.last;
+            this.channel = original.channel;
+            this.buffers = Arrays.copyOf(original.buffers, original.buffers.length);
+            this.offsets = Arrays.copyOf(original.offsets, original.offsets.length);
+            this.length = original.length;
+            this.last = original.last;
             this.isCopy = true;
         }
 

@@ -38,23 +38,16 @@ import com.google.common.base.Preconditions;
  */
 public abstract class RebufferingInputStream extends InputStream implements DataInputPlus, Closeable
 {
-    private final boolean forceSlowPath;
     protected ByteBuffer buffer;
-
-    protected RebufferingInputStream(ByteBuffer buffer)
-    {
-        this(false, buffer);
-    }
 
     protected RebufferingInputStream(RebufferingInputStream source)
     {
-        this(true, source.buffer);
+        this(source.buffer);
     }
 
-    protected RebufferingInputStream(boolean forceSlowPath, ByteBuffer buffer)
+    protected RebufferingInputStream(ByteBuffer buffer)
     {
         Preconditions.checkArgument(buffer == null || buffer.order() == ByteOrder.BIG_ENDIAN, "Buffer must have BIG ENDIAN byte ordering");
-        this.forceSlowPath = forceSlowPath;
         this.buffer = buffer;
     }
 
@@ -166,7 +159,7 @@ public abstract class RebufferingInputStream extends InputStream implements Data
     @Override
     public short readShort() throws IOException
     {
-        if (!forceSlowPath && buffer.remaining() >= 2)
+        if (buffer.remaining() >= 2)
             return buffer.getShort();
         else
             return (short) readPrimitiveSlowly(2);
@@ -181,7 +174,7 @@ public abstract class RebufferingInputStream extends InputStream implements Data
     @Override
     public char readChar() throws IOException
     {
-        if (!forceSlowPath && buffer.remaining() >= 2)
+        if (buffer.remaining() >= 2)
             return buffer.getChar();
         else
             return (char) readPrimitiveSlowly(2);
@@ -190,7 +183,7 @@ public abstract class RebufferingInputStream extends InputStream implements Data
     @Override
     public int readInt() throws IOException
     {
-        if (!forceSlowPath && buffer.remaining() >= 4)
+        if (buffer.remaining() >= 4)
             return buffer.getInt();
         else
             return (int) readPrimitiveSlowly(4);
@@ -199,7 +192,7 @@ public abstract class RebufferingInputStream extends InputStream implements Data
     @Override
     public long readLong() throws IOException
     {
-        if (!forceSlowPath && buffer.remaining() >= 8)
+        if (buffer.remaining() >= 8)
             return buffer.getLong();
         else
             return readPrimitiveSlowly(8);
@@ -213,7 +206,7 @@ public abstract class RebufferingInputStream extends InputStream implements Data
     public long readUnsignedVInt() throws IOException
     {
         //If 9 bytes aren't available use the slow path in VIntCoding
-        if (forceSlowPath || buffer.remaining() < 9)
+        if (buffer.remaining() < 9)
             return VIntCoding.readUnsignedVInt(this);
 
         byte firstByte = buffer.get();
@@ -244,7 +237,7 @@ public abstract class RebufferingInputStream extends InputStream implements Data
     @Override
     public float readFloat() throws IOException
     {
-        if (!forceSlowPath && buffer.remaining() >= 4)
+        if (buffer.remaining() >= 4)
             return buffer.getFloat();
         else
             return Float.intBitsToFloat((int)readPrimitiveSlowly(4));
@@ -253,7 +246,7 @@ public abstract class RebufferingInputStream extends InputStream implements Data
     @Override
     public double readDouble() throws IOException
     {
-        if (!forceSlowPath && buffer.remaining() >= 8)
+        if (buffer.remaining() >= 8)
             return buffer.getDouble();
         else
             return Double.longBitsToDouble(readPrimitiveSlowly(8));
