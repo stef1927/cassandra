@@ -309,7 +309,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         assert current() == newPosition;
     }
 
-    public ByteBuffer readBytes(int length) throws EOFException
+    public ByteBuffer readBytes(int length) throws IOException
     {
         assert length >= 0 : "buffer length should not be negative: " + length;
 

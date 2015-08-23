@@ -38,13 +38,19 @@ public class ChecksummedDataInputTest
     @Test
     public void testThatItWorks() throws IOException
     {
+        // Make sure this array is bigger than the reader buffer size
+        // so we test updating the crc across buffer boundaries
+        byte[] b = new byte[RandomAccessReader.DEFAULT_BUFFER_SIZE * 2];
+        for (int i = 0; i < b.length; i++)
+            b[i] = (byte)i;
+
         ByteBuffer buffer;
-        int length;
+
         // fill a bytebuffer with some input
         try (DataOutputBuffer out = new DataOutputBuffer())
         {
             out.write(127);
-            out.write(new byte[]{ 0, 1, 2, 3, 4, 5, 6 });
+            out.write(b);
             out.writeBoolean(false);
             out.writeByte(10);
             out.writeChar('t');
@@ -57,9 +63,12 @@ public class ChecksummedDataInputTest
             out.writeVInt(67L);
             out.writeUnsignedVInt(88L);
 
-            length = out.getLength();
             buffer = out.buffer();
         }
+
+        // calculate expected CRC
+        CRC32 crc = new CRC32();
+        FBUtilities.updateChecksum(crc, buffer);
 
         // save the buffer to file to create a RAR
         File file = File.createTempFile("testThatItWorks", "1");
@@ -67,42 +76,39 @@ public class ChecksummedDataInputTest
         try (SequentialWriter writer = SequentialWriter.open(file))
         {
             writer.write(buffer);
+            writer.writeInt((int) crc.getValue());
             writer.finish();
         }
 
         assertTrue(file.exists());
-        assertEquals(length, file.length());
+        assertEquals(buffer.remaining() + 4, file.length());
 
-        // calculate resulting CRC
-        CRC32 crc = new CRC32();
-        FBUtilities.updateChecksum(crc, buffer);
-        int expectedCRC = (int) crc.getValue();
-
-        try (RandomAccessReader rar = RandomAccessReader.open(file);
-             ChecksummedDataInput crcInput = ChecksummedDataInput.wrap(rar))
+        try (ChecksummedDataInput reader = ChecksummedDataInput.open(file))
         {
-            crcInput.limit(buffer.remaining());
+            reader.limit(buffer.remaining() + 4);
 
             // assert that we read all the right values back
-            assertEquals(127, crcInput.read());
-            byte[] bytes = new byte[7];
-            crcInput.readFully(bytes);
-            assertTrue(Arrays.equals(new byte[]{ 0, 1, 2, 3, 4, 5, 6 }, bytes));
-            assertEquals(false, crcInput.readBoolean());
-            assertEquals(10, crcInput.readByte());
-            assertEquals('t', crcInput.readChar());
-            assertEquals(3.3, crcInput.readDouble());
-            assertEquals(2.2f, crcInput.readFloat());
-            assertEquals(42, crcInput.readInt());
-            assertEquals(Long.MAX_VALUE, crcInput.readLong());
-            assertEquals(Short.MIN_VALUE, crcInput.readShort());
-            assertEquals("utf", crcInput.readUTF());
-            assertEquals(67L, crcInput.readVInt());
-            assertEquals(88L, crcInput.readUnsignedVInt());
+            assertEquals(127, reader.read());
+            byte[] bytes = new byte[b.length];
+            reader.readFully(bytes);
+            assertTrue(Arrays.equals(bytes, b));
+            assertEquals(false, reader.readBoolean());
+            assertEquals(10, reader.readByte());
+            assertEquals('t', reader.readChar());
+            assertEquals(3.3, reader.readDouble());
+            assertEquals(2.2f, reader.readFloat());
+            assertEquals(42, reader.readInt());
+            assertEquals(Long.MAX_VALUE, reader.readLong());
+            assertEquals(Short.MIN_VALUE, reader.readShort());
+            assertEquals("utf", reader.readUTF());
+            assertEquals(67L, reader.readVInt());
+            assertEquals(88L, reader.readUnsignedVInt());
 
             // assert that the crc matches, and that we've read exactly as many bytes as expected
-            assertEquals(0, crcInput.bytesRemaining());
-            assertEquals(expectedCRC, crcInput.getCrc());
+            assertTrue(reader.checkCrc());
+            assertEquals(0, reader.bytesRemaining());
+
+            reader.checkLimit(0);
         }
     }
 }
