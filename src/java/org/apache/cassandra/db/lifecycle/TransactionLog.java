@@ -241,7 +241,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
             // Paranoid sanity checks: we create another record by looking at the files as they are
             // on disk right now and make sure the information still matches
             Record currentRecord = Record.makeOld(files, relativeFilePath);
-            if (updateTime != currentRecord.updateTime)
+            if (updateTime != currentRecord.updateTime && currentRecord.numFiles > 0)
             {
                 logger.error("Possible disk corruption detected for sstable [{}], record [{}]: last update time [{}] should have been [{}]",
                              relativeFilePath,
@@ -1005,7 +1005,7 @@ public class TransactionLog extends Transactional.AbstractTransactional implemen
     static final class FileLister
     {
         // The maximum number of attempts for scanning the folder
-        private static final int MAX_ATTEMPTS = 5;
+        private static final int MAX_ATTEMPTS = 10;
 
         // The delay between each attempt
         private static final int REATTEMPT_DELAY_MILLIS = 5;
