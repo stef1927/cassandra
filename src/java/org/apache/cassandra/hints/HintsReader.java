@@ -24,6 +24,7 @@ import java.util.Iterator;
 
 import javax.annotation.Nullable;
 
+import com.google.common.primitives.Ints;
 import com.google.common.util.concurrent.RateLimiter;
 
 import org.slf4j.Logger;
@@ -217,7 +218,7 @@ final class HintsReader implements AutoCloseable, Iterable<HintsReader.Page>
                             descriptor.hostId,
                             e.cfId,
                             descriptor.fileName());
-                input.skipBytes(size - input.bytesPastLimit());
+                input.skipBytes(Ints.checkedCast(size - input.bytesPastLimit()));
 
                 return null;
             }
