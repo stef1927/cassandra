@@ -16,13 +16,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import com.google.common.primitives.Ints;
 import org.junit.Test;
 
 import static org.junit.Assert.*;
 
 import org.apache.cassandra.io.compress.BufferType;
-import org.apache.cassandra.utils.ByteBufferUtil;
 
 public class RandomAccessReaderTest
 {
@@ -36,7 +34,7 @@ public class RandomAccessReaderTest
         public boolean mmappedRegions;
         public byte[] expected;
 
-        public Parameters(long fileLength, int bufferSize)
+        Parameters(long fileLength, int bufferSize)
         {
             this.fileLength = fileLength;
             this.bufferSize = bufferSize;
@@ -125,7 +123,7 @@ public class RandomAccessReaderTest
                 assertEquals(channel.size(), reader.bytesRemaining());
                 assertEquals(Integer.MAX_VALUE, reader.available());
 
-                reader.skip(channel.size());
+                assertEquals(channel.size(), reader.skip(channel.size()));
 
                 assertTrue(reader.isEOF());
                 assertEquals(0, reader.bytesRemaining());
@@ -141,7 +139,7 @@ public class RandomAccessReaderTest
         private final long size;
         private long position;
 
-        public FakeFileChannel(long size)
+        FakeFileChannel(long size)
         {
             this.size = size;
         }
@@ -239,26 +237,29 @@ public class RandomAccessReaderTest
         }
     }
 
-    private File writeFile(Parameters params) throws IOException
+    private static File writeFile(Parameters params) throws IOException
     {
         final File f = File.createTempFile("testReadFully", "1");
         f.deleteOnExit();
 
-        SequentialWriter writer = SequentialWriter.open(f);
-        long numWritten = 0;
-        while (numWritten < params.fileLength)
+        try(SequentialWriter writer = SequentialWriter.open(f))
         {
-            writer.write(params.expected);
-            numWritten += params.expected.length;
+            long numWritten = 0;
+            while (numWritten < params.fileLength)
+            {
+                writer.write(params.expected);
+                numWritten += params.expected.length;
+            }
+
+            writer.finish();
         }
 
-        writer.finish();
         assert f.exists();
         assert f.length() >= params.fileLength;
         return f;
     }
 
-    private void testReadFully(Parameters params) throws IOException
+    private static void testReadFully(Parameters params) throws IOException
     {
         final File f = writeFile(params);
         try(ChannelProxy channel = new ChannelProxy(f))
@@ -300,25 +301,26 @@ public class RandomAccessReaderTest
         File f = File.createTempFile("testReadBytes", "1");
         final String expected = "The quick brown fox jumps over the lazy dog";
 
-        SequentialWriter writer = SequentialWriter.open(f);
-        writer.write(expected.getBytes());
-        writer.finish();
+        try(SequentialWriter writer = SequentialWriter.open(f))
+        {
+            writer.write(expected.getBytes());
+            writer.finish();
+        }
 
         assert f.exists();
 
-        ChannelProxy channel = new ChannelProxy(f);
-        RandomAccessReader reader = new RandomAccessReader.Builder(channel).build();
-        assertEquals(f.getAbsolutePath(), reader.getPath());
-        assertEquals(expected.length(), reader.length());
+        try(ChannelProxy channel = new ChannelProxy(f);
+            RandomAccessReader reader = new RandomAccessReader.Builder(channel).build())
+        {
+            assertEquals(f.getAbsolutePath(), reader.getPath());
+            assertEquals(expected.length(), reader.length());
 
-        ByteBuffer b = reader.readBytes(expected.length());
-        assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
+            ByteBuffer b = reader.readBytes(expected.length());
+            assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
 
-        assertTrue(reader.isEOF());
-        assertEquals(0, reader.bytesRemaining());
-
-        reader.close();
-        channel.close();
+            assertTrue(reader.isEOF());
+            assertEquals(0, reader.bytesRemaining());
+        }
     }
 
     @Test
@@ -328,59 +330,61 @@ public class RandomAccessReaderTest
         final String expected = "The quick brown fox jumps over the lazy dog";
         final int numIterations = 10;
 
-        SequentialWriter writer = SequentialWriter.open(f);
-        for (int i = 0; i < numIterations; i++)
-            writer.write(expected.getBytes());
-        writer.finish();
+        try(SequentialWriter writer = SequentialWriter.open(f))
+        {
+            for (int i = 0; i < numIterations; i++)
+                writer.write(expected.getBytes());
+            writer.finish();
+        }
 
         assert f.exists();
 
-        ChannelProxy channel = new ChannelProxy(f);
-        RandomAccessReader reader = new RandomAccessReader.Builder(channel).build();
-        assertEquals(expected.length() * numIterations, reader.length());
-
-        ByteBuffer b = reader.readBytes(expected.length());
-        assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
-
-        assertFalse(reader.isEOF());
-        assertEquals((numIterations - 1) * expected.length(), reader.bytesRemaining());
-
-        FileMark mark = reader.mark();
-        assertEquals(0, reader.bytesPastMark());
-        assertEquals(0, reader.bytesPastMark(mark));
-
-        for (int i = 0; i < (numIterations - 1); i++)
+        try(ChannelProxy channel = new ChannelProxy(f);
+        RandomAccessReader reader = new RandomAccessReader.Builder(channel).build())
         {
-            b = reader.readBytes(expected.length());
-            assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
-        }
-        assertTrue(reader.isEOF());
-        assertEquals(expected.length() * (numIterations -1), reader.bytesPastMark());
-        assertEquals(expected.length() * (numIterations - 1), reader.bytesPastMark(mark));
+            assertEquals(expected.length() * numIterations, reader.length());
 
-        reader.reset(mark);
-        assertEquals(0, reader.bytesPastMark());
-        assertEquals(0, reader.bytesPastMark(mark));
-        assertFalse(reader.isEOF());
-        for (int i = 0; i < (numIterations - 1); i++)
-        {
-            b = reader.readBytes(expected.length());
+            ByteBuffer b = reader.readBytes(expected.length());
             assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
-        }
 
-        reader.reset();
-        assertEquals(0, reader.bytesPastMark());
-        assertEquals(0, reader.bytesPastMark(mark));
-        assertFalse(reader.isEOF());
-        for (int i = 0; i < (numIterations - 1); i++)
-        {
-            b = reader.readBytes(expected.length());
-            assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
-        }
+            assertFalse(reader.isEOF());
+            assertEquals((numIterations - 1) * expected.length(), reader.bytesRemaining());
 
-        assertTrue(reader.isEOF());
-        reader.close();
-        channel.close();
+            FileMark mark = reader.mark();
+            assertEquals(0, reader.bytesPastMark());
+            assertEquals(0, reader.bytesPastMark(mark));
+
+            for (int i = 0; i < (numIterations - 1); i++)
+            {
+                b = reader.readBytes(expected.length());
+                assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
+            }
+            assertTrue(reader.isEOF());
+            assertEquals(expected.length() * (numIterations - 1), reader.bytesPastMark());
+            assertEquals(expected.length() * (numIterations - 1), reader.bytesPastMark(mark));
+
+            reader.reset(mark);
+            assertEquals(0, reader.bytesPastMark());
+            assertEquals(0, reader.bytesPastMark(mark));
+            assertFalse(reader.isEOF());
+            for (int i = 0; i < (numIterations - 1); i++)
+            {
+                b = reader.readBytes(expected.length());
+                assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
+            }
+
+            reader.reset();
+            assertEquals(0, reader.bytesPastMark());
+            assertEquals(0, reader.bytesPastMark(mark));
+            assertFalse(reader.isEOF());
+            for (int i = 0; i < (numIterations - 1); i++)
+            {
+                b = reader.readBytes(expected.length());
+                assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
+            }
+
+            assertTrue(reader.isEOF());
+        }
     }
 
     @Test
@@ -395,7 +399,7 @@ public class RandomAccessReaderTest
         testSeek(10);
     }
 
-    private void testSeek(int numThreads) throws IOException, InterruptedException
+    private static void testSeek(int numThreads) throws IOException, InterruptedException
     {
         final File f = File.createTempFile("testMark", "1");
         final byte[] expected = new byte[1 << 16];
@@ -406,69 +410,68 @@ public class RandomAccessReaderTest
         Random r = new Random(seed);
         r.nextBytes(expected);
 
-        SequentialWriter writer = SequentialWriter.open(f);
-        writer.write(expected);
-        writer.finish();
+        try(SequentialWriter writer = SequentialWriter.open(f))
+        {
+            writer.write(expected);
+            writer.finish();
+        }
 
         assert f.exists();
 
-        final ChannelProxy channel = new ChannelProxy(f);
-
-        final Runnable worker = () ->
+        try(final ChannelProxy channel = new ChannelProxy(f))
         {
-            try
+            final Runnable worker = () ->
             {
-                RandomAccessReader reader = new RandomAccessReader.Builder(channel).build();
-                assertEquals(expected.length, reader.length());
-
-                ByteBuffer b = reader.readBytes(expected.length);
-                assertTrue(Arrays.equals(expected, b.array()));
-                assertTrue(reader.isEOF());
-                assertEquals(0, reader.bytesRemaining());
-
-                reader.seek(0);
-                b = reader.readBytes(expected.length);
-                assertTrue(Arrays.equals(expected, b.array()));
-                assertTrue(reader.isEOF());
-                assertEquals(0, reader.bytesRemaining());
-
-                for (int i = 0; i < 10; i++)
+                try(RandomAccessReader reader = new RandomAccessReader.Builder(channel).build())
                 {
-                    int pos = r.nextInt(expected.length);
-                    reader.seek(pos);
-                    assertEquals(pos, reader.getPosition());
+                    assertEquals(expected.length, reader.length());
 
-                    ByteBuffer buf = ByteBuffer.wrap(expected, pos, expected.length - pos)
-                                               .order(ByteOrder.BIG_ENDIAN);
+                    ByteBuffer b = reader.readBytes(expected.length);
+                    assertTrue(Arrays.equals(expected, b.array()));
+                    assertTrue(reader.isEOF());
+                    assertEquals(0, reader.bytesRemaining());
 
-                    while(reader.bytesRemaining() > 4)
-                        assertEquals(buf.getInt(), reader.readInt());
+                    reader.seek(0);
+                    b = reader.readBytes(expected.length);
+                    assertTrue(Arrays.equals(expected, b.array()));
+                    assertTrue(reader.isEOF());
+                    assertEquals(0, reader.bytesRemaining());
 
+                    for (int i = 0; i < 10; i++)
+                    {
+                        int pos = r.nextInt(expected.length);
+                        reader.seek(pos);
+                        assertEquals(pos, reader.getPosition());
+
+                        ByteBuffer buf = ByteBuffer.wrap(expected, pos, expected.length - pos)
+                                                   .order(ByteOrder.BIG_ENDIAN);
+
+                        while (reader.bytesRemaining() > 4)
+                            assertEquals(buf.getInt(), reader.readInt());
+                    }
+
+                    reader.close();
                 }
+                catch (Exception ex)
+                {
+                    ex.printStackTrace();
+                    fail(ex.getMessage());
+                }
+            };
 
-                reader.close();
-            }
-            catch (Exception ex)
+            if (numThreads == 1)
             {
-                ex.printStackTrace();
-                fail(ex.getMessage());
+                worker.run();
             }
-        };
+            else
+            {
+                ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+                for (int i = 0; i < numThreads; i++)
+                    executor.submit(worker);
 
-        if(numThreads == 1)
-        {
-            worker.run();
+                executor.shutdown();
+                executor.awaitTermination(1, TimeUnit.MINUTES);
+            }
         }
-        else
-        {
-            ExecutorService executor = Executors.newFixedThreadPool(numThreads);
-            for (int i = 0; i < numThreads; i++)
-                executor.submit(worker);
-
-            executor.shutdown();
-            executor.awaitTermination(1, TimeUnit.MINUTES);
-        }
-
-        channel.close();
     }
 }

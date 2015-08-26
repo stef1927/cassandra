@@ -31,7 +31,12 @@ import org.apache.cassandra.utils.memory.BufferPool;
 
 public class RandomAccessReader extends RebufferingInputStream implements FileDataInput
 {
+    // The default buffer size when the client doesn't specify it
     public static final int DEFAULT_BUFFER_SIZE = 4096;
+
+    // The maximum buffer size when the limiter is not null, i.e. when throttling
+    // is enabled. This is required to avoid aquiring permits that are too large.
+    public static final int MAX_THROTTLED_BUFFER_SIZE = 1 << 16; // 64k
 
     // the IO channel to the file, we do not own a reference to this due to
     // performance reasons (CASSANDRA-9379) so it's up to the owner of the RAR to
@@ -63,13 +68,13 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
 
     protected RandomAccessReader(Builder builder)
     {
-        super((ByteBuffer)null);
+        super(null);
 
         this.channel = builder.channel;
         this.regions = builder.regions;
         this.limiter = builder.limiter;
         this.fileLength = builder.overrideLength <= 0 ? builder.channel.size() : builder.overrideLength;
-        this.bufferSize = builder.bufferSize;
+        this.bufferSize = getBufferSize(builder);
         this.bufferType = builder.bufferType;
 
         if (builder.bufferSize <= 0)
@@ -77,6 +82,15 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
 
         if (builder.initializeBuffers)
             initializeBuffer();
+    }
+
+    protected int getBufferSize(Builder builder)
+    {
+        if (builder.limiter == null)
+            return builder.bufferSize;
+
+        // limit to ensure more accurate throttling
+        return Math.min(MAX_THROTTLED_BUFFER_SIZE, builder.bufferSize);
     }
 
     protected void initializeBuffer()
@@ -160,8 +174,11 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         bufferOffset = region.bottom();
         buffer = region.buffer.duplicate();
         buffer.position(Ints.checkedCast(position - bufferOffset));
-        if (bufferSize < buffer.remaining())
+
+        if (limiter != null && bufferSize < buffer.remaining())
+        { // ensure accurate throttling
             buffer.limit(buffer.position() + bufferSize);
+        }
     }
 
     @Override
