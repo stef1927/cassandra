@@ -45,46 +45,75 @@ public class MmappedRegions extends SharedCloseableImpl
     /** The state is shared with the tidier and it contains all the regions and does the actual mapping */
     private final State state;
 
-    private MmappedRegions(ChannelProxy channel)
+    /** A copy of the latest state. We update this each time the state is updated and we share this with other
+     * copies, for thread safety. If we are a copy, then this is null.
+     */
+    private State copy;
+
+    private MmappedRegions(ChannelProxy channel, CompressionMetadata metadata, long length)
     {
-        this(new State(channel));
+        this(new State(channel), metadata, length);
     }
 
-    private MmappedRegions(State state)
+    private MmappedRegions(State state, CompressionMetadata metadata, long length)
     {
         super(new Tidier(state));
+
         this.state = state;
+
+        if (metadata != null)
+        {
+            assert length == 0 : "expected no length with metadata";
+            updateState(metadata);
+        }
+        else if (length > 0)
+        {
+            updateState(length);
+        }
+
+        this.copy = new State(state);
     }
 
-    /** See comment in State(State original) */
     private MmappedRegions(MmappedRegions original)
     {
         super(original);
-        this.state = new State(original.state);
+        this.state = original.copy;
     }
 
     public static MmappedRegions empty(ChannelProxy channel)
     {
-        return new MmappedRegions(channel);
+        return new MmappedRegions(channel, null, 0);
     }
 
     public static MmappedRegions map(ChannelProxy channel, CompressionMetadata metadata)
     {
-        MmappedRegions ret = new MmappedRegions(channel);
-        ret.create(metadata);
-        return ret;
+        if (metadata == null)
+            throw new IllegalArgumentException("metadata cannot be null");
+
+        return new MmappedRegions(channel, metadata, 0);
     }
 
-    /** See comment in State(State original) */
+    public static MmappedRegions map(ChannelProxy channel, long length)
+    {
+        if (length <= 0)
+            throw new IllegalArgumentException("Length must be positive");
+
+        return new MmappedRegions(channel, null, length);
+    }
+
     public MmappedRegions sharedCopy()
     {
         return new MmappedRegions(this);
     }
 
-    /** See comment in State(State original) */
     public MmappedRegions snapshot()
     {
         return sharedCopy();
+    }
+
+    private boolean isCopy()
+    {
+        return copy == null;
     }
 
     public MmappedRegions extend(long length)
@@ -92,9 +121,19 @@ public class MmappedRegions extends SharedCloseableImpl
         if (length < 0)
             throw new IllegalArgumentException("Length must not be negative");
 
+        assert !isCopy() : "Copies cannot be extended";
+
         if (length <= state.length)
             return this;
 
+        updateState(length);
+        copy = new State(state);
+
+        return this;
+    }
+
+    private void updateState(long length)
+    {
         state.length = length;
         long pos = state.getPosition();
         while (pos < length)
@@ -103,11 +142,9 @@ public class MmappedRegions extends SharedCloseableImpl
             state.add(pos, size);
             pos += size;
         }
-
-        return this;
     }
 
-    private void create(CompressionMetadata metadata)
+    private void updateState(CompressionMetadata metadata)
     {
         long offset = 0;
         long lastSegmentOffset = 0;
@@ -194,11 +231,6 @@ public class MmappedRegions extends SharedCloseableImpl
         /** The index to the last region added */
         private int last;
 
-        /** This is true when we are a copy of another state. In this case we can use existing regions but
-         * we cannot modify them or create new regions or close them.
-         */
-        private final boolean isCopy;
-
         private State(ChannelProxy channel)
         {
             this.channel = channel.sharedCopy();
@@ -206,10 +238,10 @@ public class MmappedRegions extends SharedCloseableImpl
             this.offsets = new long[REGION_ALLOC_SIZE];
             this.length = 0;
             this.last = -1;
-            this.isCopy = false;
         }
 
-        /** We create a deep copy of the arrays for thread safety reasons.
+        /**
+         * We create a deep copy of the arrays for thread safety reasons.
          * We also store a flag indicating if we are a copy (isCopy). Copies
          * can only access existing regions, they cannot create new ones.
          * This is because MmappedRegions is reference counted, only the original
@@ -225,7 +257,6 @@ public class MmappedRegions extends SharedCloseableImpl
             this.offsets = Arrays.copyOf(original.offsets, original.offsets.length);
             this.length = original.length;
             this.last = original.last;
-            this.isCopy = true;
         }
 
         private boolean isEmpty()
@@ -257,8 +288,6 @@ public class MmappedRegions extends SharedCloseableImpl
 
         private void add(long pos, long size)
         {
-            assert !isCopy : String.format("Cannot add a region to a copy (%s)", channel);
-
             ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, pos, size);
 
             ++last;
@@ -275,8 +304,6 @@ public class MmappedRegions extends SharedCloseableImpl
 
         private Throwable close(Throwable accumulate)
         {
-            assert !isCopy : String.format("Cannot close a copy (%s)", channel);
-
             if (!FileUtils.isCleanerAvailable())
                 return accumulate;
 

@@ -183,10 +183,9 @@ public class MmappedRegionsTest
         ChannelProxy channelCopy;
 
         try(ChannelProxy channel = new ChannelProxy(writeFile("testSnapshot", buffer));
-            MmappedRegions regions = MmappedRegions.empty(channel))
+            MmappedRegions regions = MmappedRegions.map(channel, buffer.capacity() / 4))
         {
-            // create 4 segments, one per quater capacity
-            regions.extend(buffer.capacity() / 4);
+            // create 3 more segments, one per quater capacity
             regions.extend(buffer.capacity() / 2);
             regions.extend(3 * buffer.capacity() / 4);
             regions.extend(buffer.capacity());
@@ -334,4 +333,38 @@ public class MmappedRegionsTest
             metadata.close();
         }
     }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testIllegalArgForMap1() throws Exception
+    {
+        ByteBuffer buffer = allocateBuffer(1024);
+        try(ChannelProxy channel = new ChannelProxy(writeFile("testIllegalArgForMap1", buffer));
+            MmappedRegions regions = MmappedRegions.map(channel, 0))
+        {
+            assertTrue(regions.isEmpty());
+        }
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testIllegalArgForMap2() throws Exception
+    {
+        ByteBuffer buffer = allocateBuffer(1024);
+        try(ChannelProxy channel = new ChannelProxy(writeFile("testIllegalArgForMap2", buffer));
+            MmappedRegions regions = MmappedRegions.map(channel, -1L))
+        {
+            assertTrue(regions.isEmpty());
+        }
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testIllegalArgForMap3() throws Exception
+    {
+        ByteBuffer buffer = allocateBuffer(1024);
+        try(ChannelProxy channel = new ChannelProxy(writeFile("testIllegalArgForMap3", buffer));
+            MmappedRegions regions = MmappedRegions.map(channel, null))
+        {
+            assertTrue(regions.isEmpty());
+        }
+    }
+
 }
