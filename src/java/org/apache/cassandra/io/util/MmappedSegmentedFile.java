@@ -125,11 +125,9 @@ public class MmappedSegmentedFile extends SegmentedFile
             }
 
             if (regions == null)
-            {
-                regions = MmappedRegions.empty(channel);
-            }
-
-            regions.extend(length);
+                regions = MmappedRegions.map(channel, length);
+            else
+                regions.extend(length);
         }
 
         @Override
