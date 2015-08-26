@@ -56,6 +56,13 @@ public class CompressedRandomAccessReader extends RandomAccessReader
     }
 
     @Override
+    protected int getBufferSize(RandomAccessReader.Builder builder)
+    {
+        // this is the chunk data length, throttling is OK with this
+        return builder.bufferSize;
+    }
+
+    @Override
     protected void initializeBuffer()
     {
         buffer = allocateBuffer(bufferSize);
