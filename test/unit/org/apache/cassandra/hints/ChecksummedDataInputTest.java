@@ -20,6 +20,7 @@ package org.apache.cassandra.hints;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.zip.CRC32;
 
@@ -32,11 +33,12 @@ import org.apache.cassandra.utils.FBUtilities;
 
 import static junit.framework.Assert.assertEquals;
 import static junit.framework.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 
 public class ChecksummedDataInputTest
 {
     @Test
-    public void testThatItWorks() throws IOException
+    public void testReadMethods() throws IOException
     {
         // Make sure this array is bigger than the reader buffer size
         // so we test updating the crc across buffer boundaries
@@ -62,6 +64,7 @@ public class ChecksummedDataInputTest
             out.writeUTF("utf");
             out.writeVInt(67L);
             out.writeUnsignedVInt(88L);
+            out.writeBytes("abcdefghi");
 
             buffer = out.buffer();
         }
@@ -71,7 +74,7 @@ public class ChecksummedDataInputTest
         FBUtilities.updateChecksum(crc, buffer);
 
         // save the buffer to file to create a RAR
-        File file = File.createTempFile("testThatItWorks", "1");
+        File file = File.createTempFile("testReadMethods", "1");
         file.deleteOnExit();
         try (SequentialWriter writer = SequentialWriter.open(file))
         {
@@ -103,12 +106,127 @@ public class ChecksummedDataInputTest
             assertEquals("utf", reader.readUTF());
             assertEquals(67L, reader.readVInt());
             assertEquals(88L, reader.readUnsignedVInt());
+            assertEquals("abcdefghi", new String(reader.readBytes(9).array(), StandardCharsets.UTF_8));
 
             // assert that the crc matches, and that we've read exactly as many bytes as expected
             assertTrue(reader.checkCrc());
             assertEquals(0, reader.bytesRemaining());
 
             reader.checkLimit(0);
+        }
+    }
+
+    @Test
+    public void testResetCrc() throws IOException
+    {
+        CRC32 crc = new CRC32();
+        ByteBuffer buffer;
+
+        // fill a bytebuffer with some input
+        try (DataOutputBuffer out = new DataOutputBuffer())
+        {
+            out.write(127);
+            out.writeBoolean(false);
+            out.writeByte(10);
+            out.writeChar('t');
+
+            buffer = out.buffer();
+            FBUtilities.updateChecksum(crc, buffer);
+            out.writeInt((int) crc.getValue());
+
+            int bufferPos = out.getLength();
+            out.writeDouble(3.3);
+            out.writeFloat(2.2f);
+            out.writeInt(42);
+
+            buffer = out.buffer();
+            buffer.position(bufferPos);
+            crc.reset();
+            FBUtilities.updateChecksum(crc, buffer);
+
+            out.writeInt((int) crc.getValue());
+            buffer = out.buffer();
+        }
+
+        // save the buffer to file to create a RAR
+        File file = File.createTempFile("testResetCrc", "1");
+        file.deleteOnExit();
+        try (SequentialWriter writer = SequentialWriter.open(file))
+        {
+            writer.write(buffer);
+            writer.finish();
+        }
+
+        assertTrue(file.exists());
+        assertEquals(buffer.remaining(), file.length());
+
+        try (ChecksummedDataInput reader = ChecksummedDataInput.open(file))
+        {
+            reader.limit(buffer.remaining());
+
+            // assert that we read all the right values back
+            assertEquals(127, reader.read());
+            assertEquals(false, reader.readBoolean());
+            assertEquals(10, reader.readByte());
+            assertEquals('t', reader.readChar());
+            assertTrue(reader.checkCrc());
+
+            reader.resetCrc();
+            assertEquals(3.3, reader.readDouble());
+            assertEquals(2.2f, reader.readFloat());
+            assertEquals(42, reader.readInt());
+            assertTrue(reader.checkCrc());
+            assertEquals(0, reader.bytesRemaining());
+        }
+    }
+
+    @Test
+    public void testFailedCrc() throws IOException
+    {
+        CRC32 crc = new CRC32();
+        ByteBuffer buffer;
+
+        // fill a bytebuffer with some input
+        try (DataOutputBuffer out = new DataOutputBuffer())
+        {
+            out.write(127);
+            out.writeBoolean(false);
+            out.writeByte(10);
+            out.writeChar('t');
+
+            buffer = out.buffer();
+            FBUtilities.updateChecksum(crc, buffer);
+
+            // update twice so it won't match
+            FBUtilities.updateChecksum(crc, buffer);
+            out.writeInt((int) crc.getValue());
+
+            buffer = out.buffer();
+        }
+
+        // save the buffer to file to create a RAR
+        File file = File.createTempFile("testFailedCrc", "1");
+        file.deleteOnExit();
+        try (SequentialWriter writer = SequentialWriter.open(file))
+        {
+            writer.write(buffer);
+            writer.finish();
+        }
+
+        assertTrue(file.exists());
+        assertEquals(buffer.remaining(), file.length());
+
+        try (ChecksummedDataInput reader = ChecksummedDataInput.open(file))
+        {
+            reader.limit(buffer.remaining());
+
+            // assert that we read all the right values back
+            assertEquals(127, reader.read());
+            assertEquals(false, reader.readBoolean());
+            assertEquals(10, reader.readByte());
+            assertEquals('t', reader.readChar());
+            assertFalse(reader.checkCrc());
+            assertEquals(0, reader.bytesRemaining());
         }
     }
 }
