@@ -21,7 +21,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 
 /**
- * Input stream around a fixed ByteBuffer.
+ * Input stream around a single ByteBuffer.
  */
 public class DataInputBuffer extends RebufferingInputStream
 {

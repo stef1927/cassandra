@@ -22,8 +22,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.zip.CRC32;
 
-import com.google.common.primitives.Ints;
-
 import org.apache.cassandra.io.util.ChannelProxy;
 import org.apache.cassandra.io.util.FileMark;
 import org.apache.cassandra.io.util.RandomAccessReader;
@@ -45,7 +43,7 @@ public final class ChecksummedDataInput extends RandomAccessReader
     private int crcPosition;
     private boolean crcUpdateDisabled;
 
-    private int limit;
+    private long limit;
     private FileMark limitMark;
 
     private ChecksummedDataInput(Builder builder)
@@ -70,7 +68,7 @@ public final class ChecksummedDataInput extends RandomAccessReader
         crcPosition = buffer.position();
     }
 
-    public void limit(int newLimit)
+    public void limit(long newLimit)
     {
         limit = newLimit;
         limitMark = mark();
@@ -78,7 +76,7 @@ public final class ChecksummedDataInput extends RandomAccessReader
 
     public void resetLimit()
     {
-        limit = Integer.MAX_VALUE;
+        limit = Long.MAX_VALUE;
         limitMark = null;
     }
 
@@ -91,10 +89,10 @@ public final class ChecksummedDataInput extends RandomAccessReader
             throw new IOException("Digest mismatch exception");
     }
 
-    public int bytesPastLimit()
+    public long bytesPastLimit()
     {
         assert limitMark != null;
-        return Ints.checkedCast(bytesPastMark(limitMark));
+        return bytesPastMark(limitMark);
     }
 
     public boolean checkCrc() throws IOException
