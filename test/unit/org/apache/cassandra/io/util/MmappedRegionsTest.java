@@ -26,6 +26,9 @@ import java.util.Random;
 import com.google.common.primitives.Ints;
 import org.junit.Test;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.apache.cassandra.db.ClusteringComparator;
 import org.apache.cassandra.db.marshal.BytesType;
 import org.apache.cassandra.io.compress.CompressedSequentialWriter;
@@ -42,12 +45,14 @@ import static org.junit.Assert.assertTrue;
 
 public class MmappedRegionsTest
 {
+    private static final Logger logger = LoggerFactory.getLogger(MmappedRegionsTest.class);
+
     private static ByteBuffer allocateBuffer(int size)
     {
         ByteBuffer ret = ByteBuffer.allocate(Ints.checkedCast(size));
         long seed = System.nanoTime();
         //seed = 365238103404423L;
-        System.out.println("Seed " + seed);
+        logger.info("Seed {}", seed);
 
         new Random(seed).nextBytes(ret.array());
         return ret;
