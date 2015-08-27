@@ -334,8 +334,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         transactionLog.trackNew(sstableNew);
         TransactionLog.SSTableTidier tidier = transactionLog.obsoleted(sstableOld);
 
-        Set<File> tmpFiles = Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths().stream().map(File::new).collect(Collectors.toList()),
-                                                              Collections.singleton(transactionLog.getData().getLogFile().file)));
+        Set<File> tmpFiles = Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths().stream().map(File::new).collect(Collectors.toList())));
 
         sstableNew.selfRef().release();
         sstableOld.selfRef().release();
@@ -354,7 +353,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
         tidier.run();
 
-        // complete the transaction to avoid LEAK errors
+        // complete the transaction before releasing files
         transactionLog.close();
     }
 
@@ -375,8 +374,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         //Fake a commit
         transactionLog.getData().getLogFile().commit();
 
-        Set<File> tmpFiles = Sets.newHashSet(Iterables.concat(sstableOld.getAllFilePaths().stream().map(p -> new File(p)).collect(Collectors.toList()),
-                                                              Collections.singleton(transactionLog.getData().getLogFile().file)));
+        Set<File> tmpFiles = Sets.newHashSet(Iterables.concat(sstableOld.getAllFilePaths().stream().map(File::new).collect(Collectors.toList())));
 
         sstableNew.selfRef().release();
         sstableOld.selfRef().release();
@@ -430,7 +428,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
         tmpFiles = TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder);
         assertNotNull(tmpFiles);
-        assertEquals(numNewFiles, tmpFiles.size());
+        assertEquals(numNewFiles - 1, tmpFiles.size());
 
         File ssTable2DataFile = new File(sstable2.descriptor.filenameFor(Component.DATA));
         File ssTable2IndexFile = new File(sstable2.descriptor.filenameFor(Component.PRIMARY_INDEX));
@@ -505,7 +503,8 @@ public class TransactionLogTest extends AbstractTransactionalTest
                               {
                                   if (filePath.endsWith("Data.db"))
                                   {
-                                      FileUtils.delete(filePath);
+                                      assertTrue(FileUtils.delete(filePath));
+                                      t.getData().sync();
                                       break;
                                   }
                               }
@@ -575,7 +574,7 @@ public class TransactionLogTest extends AbstractTransactionalTest
         transactionLog.trackNew(sstableNew);
         transactionLog.obsoleted(sstableOld);
 
-        //Modify the transaction log in some way
+        // Modify the transaction log or disk state for sstableOld
         modifier.accept(transactionLog, sstableOld);
 
         String txnFilePath = transactionLog.getData().getLogFile().file.getPath();
@@ -585,12 +584,12 @@ public class TransactionLogTest extends AbstractTransactionalTest
         sstableOld.selfRef().release();
         sstableNew.selfRef().release();
 
+        //This should filter as completed but make sure to exclude files that were deleted by the modifier
+        assertFiles(Iterables.concat(sstableOld.getAllFilePaths().stream().filter(p -> new File(p).exists()).collect(Collectors.toList())),
+                    TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder));
+
         if (isRecoverable)
         { // the corruption is recoverable, we assume there is a commit record
-
-            //This should return the old files and the tx log
-            assertFiles(Iterables.concat(sstableOld.getAllFilePaths(), Collections.singleton(txnFilePath)),
-                        TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder));
 
             //This should remove old files
             TransactionLog.removeUnfinishedLeftovers(cfs.metadata);
@@ -600,11 +599,6 @@ public class TransactionLogTest extends AbstractTransactionalTest
         else
         { // if an intermediate line was modified, we cannot tell,
           // it should just throw and handle the exception with a log message
-
-            //This should not return any files
-            assertEquals(Collections.emptyList(), new TransactionLog.FileLister(dataFolder.toPath(),
-                                                                                (file, type) -> type != Directories.FileType.FINAL,
-                                                                                Directories.OnTxnErr.IGNORE).list());
 
             try
             {
@@ -684,18 +678,18 @@ public class TransactionLogTest extends AbstractTransactionalTest
     }
 
     @Test
-    public void testGetTemporaryFilesSafeAfterObsoletion_1() throws Throwable
-    {
-        testGetTemporaryFilesSafeAfterObsoletion(true);
-    }
-
-    @Test
-    public void testGetTemporaryFilesSafeAfterObsoletion_2() throws Throwable
+    public void testGetTemporaryFilesSafeAfterObsoletion_MaybeAtomicListing() throws Throwable
     {
         testGetTemporaryFilesSafeAfterObsoletion(false);
     }
 
-    private void testGetTemporaryFilesSafeAfterObsoletion(boolean finishBefore) throws Throwable
+    @Test
+    public void testGetTemporaryFilesSafeAfterObsoletion_NonAtomicListing() throws Throwable
+    {
+        testGetTemporaryFilesSafeAfterObsoletion(true);
+    }
+
+    private void testGetTemporaryFilesSafeAfterObsoletion(boolean forceNonAtomicListing) throws Throwable
     {
         ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
         SSTableReader sstable = sstable(cfs, 0, 128);
@@ -706,21 +700,49 @@ public class TransactionLogTest extends AbstractTransactionalTest
 
         TransactionLog.SSTableTidier tidier = transactionLogs.obsoleted(sstable);
 
-        if (finishBefore)
-            transactionLogs.finish();
+        transactionLogs.finish();
 
         sstable.markObsolete(tidier);
         sstable.selfRef().release();
 
-        for (int i = 0; i < 100; i++)
+        // This should race with the asynchronous deletion of txn log files
+        // It doesn't matter what it returns but it should not throw because the txn
+        // was completed before deleting files (i.e. releasing sstables)
+        for (int i = 0; i < 200; i++)
+            TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder, forceNonAtomicListing);
+    }
+
+    @Test
+    public void testGetTemporaryFilesThrowsIfCompletingAfterObsoletion() throws Throwable
+    {
+        ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
+        SSTableReader sstable = sstable(cfs, 0, 128);
+        File dataFolder = sstable.descriptor.directory;
+
+        TransactionLog transactionLogs = new TransactionLog(OperationType.COMPACTION, cfs.metadata);
+        assertNotNull(transactionLogs);
+
+        TransactionLog.SSTableTidier tidier = transactionLogs.obsoleted(sstable);
+
+        sstable.markObsolete(tidier);
+        sstable.selfRef().release();
+
+        TransactionLog.waitForDeletions();
+
+        try
         {
             // This should race with the asynchronous deletion of txn log files
-            // It doesn't matter what it returns but it should not throw
+            // it should throw because we are violating the requirement that a transaction must
+            // finish before deleting files (i.e. releasing sstables)
             TransactionLog.getTemporaryFiles(cfs.metadata, dataFolder);
+            fail("Expected runtime exception");
+        }
+        catch(RuntimeException e)
+        {
+            //pass
         }
 
-        if (!finishBefore)
-            transactionLogs.finish();
+        transactionLogs.finish();
     }
 
     private static SSTableReader sstable(ColumnFamilyStore cfs, int generation, int size) throws IOException
@@ -798,15 +820,24 @@ public class TransactionLogTest extends AbstractTransactionalTest
         assertTrue(expectedFiles.toString(), expectedFiles.isEmpty());
     }
 
-    private static void assertFiles(Iterable<String> filePaths, Set<File> expectedFiles)
+    // Check either that a temporary file is expected to exist (in the existingFiles) or that
+    // it does not exist any longer (on Windows we need to check File.exists() because a list
+    // might return a file as existing even if it does not)
+    private static void assertFiles(Iterable<String> existingFiles, Set<File> temporaryFiles)
     {
-        for (String filePath : filePaths)
+        for (String filePath : existingFiles)
         {
             File file = new File(filePath);
-            assertTrue(filePath, expectedFiles.contains(file));
-            expectedFiles.remove(file);
+            assertTrue(filePath, temporaryFiles.contains(file));
+            temporaryFiles.remove(file);
         }
 
-        assertTrue(expectedFiles.isEmpty());
+        for (File file : temporaryFiles)
+        {
+            if (!file.exists())
+                temporaryFiles.remove(file);
+        }
+
+        assertTrue(temporaryFiles.toString(), temporaryFiles.isEmpty());
     }
 }

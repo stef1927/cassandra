@@ -565,6 +565,24 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         return new TransactionLog.FileLister(folder, filter, onTxnErr).list();
     }
 
+    /**
+     * Retry all deletions that failed the first time around (presumably b/c the sstable was still mmap'd.)
+     * Useful because there are times when we know GC has been invoked; also exposed as an mbean.
+     */
+    public static void rescheduleFailedDeletions()
+    {
+        TransactionLog.rescheduleFailedDeletions();
+    }
+
+    /**
+     * Deletions run on the nonPeriodicTasks executor, (both failedDeletions or global tidiers in SSTableReader)
+     * so by scheduling a new empty task and waiting for it we ensure any prior deletion has completed.
+     */
+    public static void waitForDeletions()
+    {
+        TransactionLog.waitForDeletions();
+    }
+
     // a class representing the current state of the reader within this transaction, encoding the actions both logged
     // and pending, and the reader instances that are visible now, and will be after the next checkpoint (with null
     // indicating either obsolescence, or that the reader does not occur in the transaction; which is defined
