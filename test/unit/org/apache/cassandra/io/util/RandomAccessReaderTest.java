@@ -18,12 +18,17 @@ import java.util.concurrent.TimeUnit;
 
 import org.junit.Test;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import static org.junit.Assert.*;
 
 import org.apache.cassandra.io.compress.BufferType;
 
 public class RandomAccessReaderTest
 {
+    private static final Logger logger = LoggerFactory.getLogger(RandomAccessReaderTest.class);
+
     private static final class Parameters
     {
         public final long fileLength;
@@ -268,7 +273,7 @@ public class RandomAccessReaderTest
                                                  .bufferType(params.bufferType)
                                                  .bufferSize(params.bufferSize);
             if (params.mmappedRegions)
-                builder.regions(MmappedRegions.empty(channel).extend(f.length()));
+                builder.regions(MmappedRegions.map(channel, f.length()));
 
             try(RandomAccessReader reader = builder.build())
             {
@@ -406,7 +411,7 @@ public class RandomAccessReaderTest
 
         long seed = System.nanoTime();
         //seed = 365238103404423L;
-        System.out.println("Seed " + seed);
+        logger.info("Seed {}", seed);
         Random r = new Random(seed);
         r.nextBytes(expected);
 
