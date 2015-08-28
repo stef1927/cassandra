@@ -107,14 +107,13 @@ public class MmappedRegions extends SharedCloseableImpl
         return new MmappedRegions(channel, null, length);
     }
 
+    /**
+     * @return a snapshot of the memory mapped regions. The snapshot can
+     * only use existing regions, it cannot create new ones.
+     */
     public MmappedRegions sharedCopy()
     {
         return new MmappedRegions(this);
-    }
-
-    public MmappedRegions snapshot()
-    {
-        return sharedCopy();
     }
 
     private boolean isCopy()
