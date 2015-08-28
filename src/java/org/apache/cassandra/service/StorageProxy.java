@@ -827,41 +827,38 @@ public class StorageProxy implements StorageProxyMBean
     private static void syncWriteToBatchlog(Collection<Mutation> mutations, BatchlogEndpoints endpoints, UUID uuid)
     throws WriteTimeoutException, WriteFailureException
     {
-        BatchCallback callback = null;
-        AbstractWriteResponseHandler<?> legacyCallback = null;
+        WriteResponseHandler<?> handler = new WriteResponseHandler<>(endpoints.all,
+                                                                     Collections.<InetAddress>emptyList(),
+                                                                     endpoints.all.size() == 1 ? ConsistencyLevel.ONE : ConsistencyLevel.TWO,
+                                                                     Keyspace.open(SystemKeyspace.NAME),
+                                                                     null,
+                                                                     WriteType.BATCH_LOG);
+
+        Batch batch = Batch.createLocal(uuid, FBUtilities.timestampMicros(), mutations);
 
         if (!endpoints.current.isEmpty())
-            callback = syncWriteToBatchlog(mutations, endpoints.current, uuid);
+            syncWriteToBatchlog(handler, batch, endpoints.current);
 
         if (!endpoints.legacy.isEmpty())
-            legacyCallback = LegacyBatchlogMigrator.syncWriteToBatchlog(mutations, endpoints.legacy, uuid);
+            LegacyBatchlogMigrator.syncWriteToBatchlog(handler, batch, endpoints.legacy);
 
-        // wait for at least one callback
-        if (callback != null)
-            callback.await();
-        else if (legacyCallback != null)
-            legacyCallback.get();
+        handler.get();
     }
 
-    private static BatchCallback syncWriteToBatchlog(Collection<Mutation> mutations, Collection<InetAddress> endpoints, UUID uuid)
+    private static void syncWriteToBatchlog(WriteResponseHandler<?> handler, Batch batch, Collection<InetAddress> endpoints)
     throws WriteTimeoutException, WriteFailureException
     {
-        BatchCallback callback = new BatchCallback();
-        Batch batch = Batch.createLocal(uuid, FBUtilities.timestampMicros(), mutations);
         MessageOut<Batch> message = new MessageOut<>(MessagingService.Verb.BATCH_STORE, batch, Batch.serializer);
 
         for (InetAddress target : endpoints)
         {
-            if (logger.isDebugEnabled())
-                logger.debug("Sending batchlog store request {} to {} for {} mutations", uuid, target, mutations.size());
+            logger.debug("Sending batchlog store request {} to {} for {} mutations", batch.id, target, batch.size());
 
             if (canDoLocalRequest(target))
-                performLocally(Stage.MUTATION, () -> BatchlogManager.store(batch), callback);
+                performLocally(Stage.MUTATION, () -> BatchlogManager.store(batch), handler);
             else
-                MessagingService.instance().sendRR(message, target, callback);
+                MessagingService.instance().sendRR(message, target, handler);
         }
-
-        return callback;
     }
 
     private static void asyncRemoveFromBatchlog(BatchlogEndpoints endpoints, UUID uuid)
@@ -1010,24 +1007,26 @@ public class StorageProxy implements StorageProxyMBean
     }
 
     /*
-        A class to filter batchlog endpoints into legacy endpoints (version < 3.0) or not.
+     * A class to filter batchlog endpoints into legacy endpoints (version < 3.0) or not.
      */
-    private final static class BatchlogEndpoints
+    private static final class BatchlogEndpoints
     {
+        public final Collection<InetAddress> all;
         public final Collection<InetAddress> current;
         public final Collection<InetAddress> legacy;
 
-        public BatchlogEndpoints(Collection<InetAddress> endpoints)
+        BatchlogEndpoints(Collection<InetAddress> endpoints)
         {
-            this.current = new ArrayList<>(endpoints.size());
-            this.legacy = new ArrayList<>();
+            all = endpoints;
+            current = new ArrayList<>(2);
+            legacy = new ArrayList<>(2);
 
             for (InetAddress ep : endpoints)
             {
                 if (MessagingService.instance().getVersion(ep) >= MessagingService.VERSION_30)
-                    this.current.add(ep);
+                    current.add(ep);
                 else
-                    this.legacy.add(ep);
+                    legacy.add(ep);
             }
         }
     }

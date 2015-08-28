@@ -39,6 +39,7 @@ public final class Batch
     public final UUID id;
     public final long creationTime; // time of batch creation (in microseconds)
 
+    // one of these will always be empty
     final Collection<Mutation> decodedMutations;
     final Collection<ByteBuffer> encodedMutations;
 
@@ -67,6 +68,14 @@ public final class Batch
     public static Batch createRemote(UUID id, long creationTime, Collection<ByteBuffer> mutations)
     {
         return new Batch(id, creationTime, Collections.<Mutation>emptyList(), mutations);
+    }
+
+    /**
+     * Count of the mutations in the batch.
+     */
+    public int size()
+    {
+        return decodedMutations.size() + encodedMutations.size();
     }
 
     static final class Serializer implements IVersionedSerializer<Batch>

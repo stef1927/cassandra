@@ -20,26 +20,15 @@ package org.apache.cassandra.batchlog;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Date;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.cql3.QueryProcessor;
 import org.apache.cassandra.cql3.UntypedResultSet;
-import org.apache.cassandra.db.ColumnFamilyStore;
-import org.apache.cassandra.db.ConsistencyLevel;
-import org.apache.cassandra.db.IMutation;
-import org.apache.cassandra.db.Keyspace;
-import org.apache.cassandra.db.Mutation;
-import org.apache.cassandra.db.RowUpdateBuilder;
-import org.apache.cassandra.db.SystemKeyspace;
-import org.apache.cassandra.db.WriteType;
+import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.marshal.UUIDType;
 import org.apache.cassandra.db.partitions.PartitionUpdate;
 import org.apache.cassandra.exceptions.WriteFailureException;
@@ -64,18 +53,25 @@ public final class LegacyBatchlogMigrator
     @SuppressWarnings("deprecation")
     public static void migrate()
     {
+        ColumnFamilyStore store = Keyspace.open(SystemKeyspace.NAME).getColumnFamilyStore(SystemKeyspace.LEGACY_BATCHLOG);
+
+        // nothing to migrate
+        if (store.isEmpty())
+            return;
+
+        logger.info("Migrating legacy batchlog to new storage");
+
         int convertedBatches = 0;
         String query = String.format("SELECT id, data, written_at, version FROM %s.%s",
                                      SystemKeyspace.NAME,
                                      SystemKeyspace.LEGACY_BATCHLOG);
 
-        ColumnFamilyStore store = Keyspace.open(SystemKeyspace.NAME).getColumnFamilyStore(SystemKeyspace.LEGACY_BATCHLOG);
         int pageSize = BatchlogManager.calculatePageSize(store);
 
         UntypedResultSet rows = QueryProcessor.executeInternalWithPaging(query, pageSize);
         for (UntypedResultSet.Row row : rows)
         {
-            if (apply(row, convertedBatches, true))
+            if (apply(row, convertedBatches))
                 convertedBatches++;
         }
 
@@ -95,31 +91,28 @@ public final class LegacyBatchlogMigrator
     {
         PartitionUpdate update = mutation.getPartitionUpdate(SystemKeyspace.LegacyBatchlog.cfId);
         logger.debug("Applying legacy batchlog mutation {}", update);
-        update.forEach(row -> apply(UntypedResultSet.Row.fromInternalRow(update.metadata(), update.partitionKey(), row), -1, false));
+        update.forEach(row -> apply(UntypedResultSet.Row.fromInternalRow(update.metadata(), update.partitionKey(), row), -1));
     }
 
-    private static boolean apply(UntypedResultSet.Row row, long counter, boolean migrating)
+    private static boolean apply(UntypedResultSet.Row row, long counter)
     {
         UUID id = row.getUUID("id");
         long timestamp = id.version() == 1 ? UUIDGen.unixTimestamp(id) : row.getLong("written_at");
         int version = row.has("version") ? row.getInt("version") : MessagingService.VERSION_12;
 
-        if (migrating)
-            logger.info("Converting mutation at {}", timestamp);
-        else
-            logger.debug("Converting mutation at {}", timestamp);
+        if (id.version() != 1)
+            id = UUIDGen.getTimeUUID(timestamp, counter);
+
+        logger.debug("Converting mutation at {}", timestamp);
 
         try (DataInputBuffer in = new DataInputBuffer(row.getBytes("data"), false))
         {
-            if (id.version() != 1)
-                id = UUIDGen.getTimeUUID(timestamp, counter >= 0 ? counter : nanoSince(id, timestamp));
-
             int numMutations = in.readInt();
             List<Mutation> mutations = new ArrayList<>(numMutations);
             for (int i = 0; i < numMutations; i++)
                 mutations.add(Mutation.serializer.deserialize(in, version));
 
-            BatchlogManager.store(Batch.createLocal(id, timestamp * 1000, mutations));
+            BatchlogManager.store(Batch.createLocal(id, TimeUnit.MILLISECONDS.toMicros(timestamp), mutations));
             return true;
         }
         catch (Throwable t)
@@ -129,48 +122,19 @@ public final class LegacyBatchlogMigrator
         }
     }
 
-    private static synchronized long nanoSince(UUID id, long timestamp)
-    {
-        String query = String.format("SELECT id FROM %s.%s WHERE id = ?", SystemKeyspace.NAME, SystemKeyspace.BATCHES);
-        long nanos = 0;
-        while (nanos < 10000)
-        {
-            UntypedResultSet rows = QueryProcessor.executeOnceInternal(query, UUIDGen.getTimeUUID(timestamp, nanos));
-            if (rows == null || rows.isEmpty())
-                return nanos;
-
-            nanos++;
-        }
-
-        logger.error("Failed to find an empty id for legacy mutation {} with timestamp {}", id, timestamp);
-        return 0;
-    }
-
-    public static AbstractWriteResponseHandler<?> syncWriteToBatchlog(Collection<Mutation> mutations, Collection<InetAddress> endpoints, UUID uuid)
+    public static void syncWriteToBatchlog(WriteResponseHandler<?> handler, Batch batch, Collection<InetAddress> endpoints)
     throws WriteTimeoutException, WriteFailureException
     {
-        AbstractWriteResponseHandler<IMutation> handler = new WriteResponseHandler<>(endpoints,
-                                                                                     Collections.<InetAddress>emptyList(),
-                                                                                     ConsistencyLevel.ONE,
-                                                                                     Keyspace.open(SystemKeyspace.NAME),
-                                                                                     null,
-                                                                                     WriteType.BATCH_LOG);
-
-        Batch batch = Batch.createLocal(uuid, FBUtilities.timestampMicros(), mutations);
-
         for (InetAddress target : endpoints)
         {
-            logger.debug("Sending legacy batchlog store request {} to {} for {} mutations", uuid, target, mutations.size());
+            logger.debug("Sending legacy batchlog store request {} to {} for {} mutations", batch.id, target, batch.size());
 
             int targetVersion = MessagingService.instance().getVersion(target);
             MessagingService.instance().sendRR(getStoreMutation(batch, targetVersion).createMessage(MessagingService.Verb.MUTATION),
                                                target,
                                                handler,
                                                false);
-
         }
-
-        return handler;
     }
 
     public static void asyncRemoveFromBatchlog(Collection<InetAddress> endpoints, UUID uuid)
