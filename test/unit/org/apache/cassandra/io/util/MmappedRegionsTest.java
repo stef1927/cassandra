@@ -180,7 +180,7 @@ public class MmappedRegionsTest
     }
 
     @Test
-    public void testSnapshot() throws Exception
+    public void testCopy() throws Exception
     {
         ByteBuffer buffer = allocateBuffer(128 * 1024);
 
@@ -196,7 +196,7 @@ public class MmappedRegionsTest
             regions.extend(buffer.capacity());
 
             // make a snapshot
-            snapshot = regions.snapshot();
+            snapshot = regions.sharedCopy();
 
             // keep the channel open
             channelCopy = channel.sharedCopy();
@@ -222,7 +222,7 @@ public class MmappedRegionsTest
     }
 
     @Test(expected = AssertionError.class)
-    public void testSnapshotCannotExtend() throws Exception
+    public void testCopyCannotExtend() throws Exception
     {
         ByteBuffer buffer = allocateBuffer(128 * 1024);
 
@@ -235,7 +235,7 @@ public class MmappedRegionsTest
             regions.extend(buffer.capacity() / 2);
 
             // make a snapshot
-            snapshot = regions.snapshot();
+            snapshot = regions.sharedCopy();
 
             // keep the channel open
             channelCopy = channel.sharedCopy();

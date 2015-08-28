@@ -110,7 +110,7 @@ public class MmappedSegmentedFile extends SegmentedFile
             long length = overrideLength > 0 ? overrideLength : channel.size();
             updateRegions(channel, length);
 
-            return new MmappedSegmentedFile(channel, bufferSize, length, regions.snapshot());
+            return new MmappedSegmentedFile(channel, bufferSize, length, regions.sharedCopy());
         }
 
         private void updateRegions(ChannelProxy channel, long length)
