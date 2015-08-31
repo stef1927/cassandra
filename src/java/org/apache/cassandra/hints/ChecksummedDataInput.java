@@ -37,7 +37,7 @@ import org.apache.cassandra.io.util.RandomAccessReader;
  * corrupted sequence by reading a huge corrupted length of bytes via
  * via {@link org.apache.cassandra.utils.ByteBufferUtil#readWithLength(java.io.DataInput)}.
  */
-public final class ChecksummedDataInput extends RandomAccessReader
+public final class ChecksummedDataInput extends RandomAccessReader.RandomAccessReaderWithOwnChannel
 {
     private final CRC32 crc;
     private int crcPosition;
@@ -113,12 +113,6 @@ public final class ChecksummedDataInput extends RandomAccessReader
         }
     }
 
-    public ByteBuffer readBytes(int length) throws IOException
-    {
-        checkLimit(length);
-        return super.readBytes(length);
-    }
-
     @Override
     public void readFully(byte[] b) throws IOException
     {
@@ -153,19 +147,6 @@ public final class ChecksummedDataInput extends RandomAccessReader
                    .limit(buffer.position());
 
         crc.update(unprocessed);
-    }
-
-    @Override
-    public void close() throws IOException
-    {
-        try
-        {
-            super.close();
-        }
-        finally
-        {
-            channel.close();
-        }
     }
 
     public final static class Builder extends RandomAccessReader.Builder

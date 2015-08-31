@@ -21,7 +21,6 @@ import java.io.DataInput;
 import java.io.File;
 import java.io.IOException;
 
-import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.AbstractIterator;
 
 import org.apache.cassandra.config.CFMetaData;
@@ -29,7 +28,6 @@ import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.RowIndexEntry;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.io.util.RandomAccessReader;
-import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.CloseableIterator;
 
@@ -65,7 +63,8 @@ public class KeyIterator extends AbstractIterator<DecoratedKey> implements Close
 
         public void close()
         {
-            FileUtils.closeQuietly(in);
+            if (in != null)
+                in.close();
         }
 
         public long getFilePointer()

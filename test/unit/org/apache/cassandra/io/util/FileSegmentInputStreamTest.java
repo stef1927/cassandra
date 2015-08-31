@@ -27,6 +27,8 @@ import java.util.Random;
 import com.google.common.primitives.Ints;
 import org.junit.Test;
 
+import org.apache.cassandra.utils.ByteBufferUtil;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -72,7 +74,7 @@ public class FileSegmentInputStreamTest
             assertEquals(remaining, reader.bytesRemaining());
             byte[] expected = new byte[buffer.remaining()];
             buffer.get(expected);
-            assertTrue(Arrays.equals(expected, reader.readBytes(remaining).array()));
+            assertTrue(Arrays.equals(expected, ByteBufferUtil.read(reader, remaining).array()));
 
             assertTrue(reader.isEOF());
             assertEquals(0, reader.bytesRemaining());
@@ -83,7 +85,7 @@ public class FileSegmentInputStreamTest
         reader.close();
     }
 
-    @Test(expected = AssertionError.class)
+    @Test(expected = UnsupportedOperationException.class)
     public void testMarkNotSupported() throws Exception
     {
         FileSegmentInputStream reader = new FileSegmentInputStream(allocateBuffer(1024), "", 0);
@@ -92,7 +94,7 @@ public class FileSegmentInputStreamTest
         reader.mark();
     }
 
-    @Test(expected = AssertionError.class)
+    @Test(expected = UnsupportedOperationException.class)
     public void testResetNotSupported() throws Exception
     {
         FileSegmentInputStream reader = new FileSegmentInputStream(allocateBuffer(1024), "", 0);
@@ -124,6 +126,6 @@ public class FileSegmentInputStreamTest
     public void testReadBytesTooMany() throws Exception
     {
         FileSegmentInputStream reader = new FileSegmentInputStream(allocateBuffer(1024), "", 1024);
-        reader.readBytes(2049);
+        ByteBufferUtil.read(reader, 2049);
     }
 }

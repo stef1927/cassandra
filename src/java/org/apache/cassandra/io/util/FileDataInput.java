@@ -38,12 +38,4 @@ public interface FileDataInput extends DataInputPlus, Closeable
     long bytesPastMark(FileMark mark);
 
     long getFilePointer();
-
-    /**
-     * Read length bytes from current file position
-     * @param length length of the bytes to read
-     * @return buffer with bytes read
-     * @throws IOException if any I/O operation failed
-     */
-    ByteBuffer readBytes(int length) throws IOException;
 }

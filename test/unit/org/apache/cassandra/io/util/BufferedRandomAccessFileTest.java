@@ -94,7 +94,7 @@ public class BufferedRandomAccessFileTest
 
         // test readBytes(int) method
         r.seek(0);
-        ByteBuffer fileContent = r.readBytes((int) w.length());
+        ByteBuffer fileContent = ByteBufferUtil.read(r, (int) w.length());
         assertEquals(fileContent.limit(), w.length());
         assert ByteBufferUtil.string(fileContent).equals("Hello" + new String(bigData));
 
@@ -202,19 +202,19 @@ public class BufferedRandomAccessFileTest
         final ChannelProxy channel = new ChannelProxy(w.getPath());
         final RandomAccessReader r = RandomAccessReader.open(channel);
 
-        ByteBuffer content = r.readBytes((int) r.length());
+        ByteBuffer content = ByteBufferUtil.read(r, (int) r.length());
 
         // after reading whole file we should be at EOF
         assertEquals(0, ByteBufferUtil.compare(content, data));
         assert r.bytesRemaining() == 0 && r.isEOF();
 
         r.seek(0);
-        content = r.readBytes(10); // reading first 10 bytes
+        content = ByteBufferUtil.read(r, 10); // reading first 10 bytes
         assertEquals(ByteBufferUtil.compare(content, "cccccccccc".getBytes()), 0);
         assertEquals(r.bytesRemaining(), r.length() - content.limit());
 
         // trying to read more than file has right now
-        expectEOF(() -> r.readBytes((int) r.length() + 10));
+        expectEOF(() -> ByteBufferUtil.read(r, (int) r.length() + 10));
 
         w.finish();
         r.close();
@@ -438,7 +438,7 @@ public class BufferedRandomAccessFileTest
 
         try (RandomAccessReader copy = RandomAccessReader.open(new File(r.getPath())))
         {
-            ByteBuffer contents = copy.readBytes((int) copy.length());
+            ByteBuffer contents = ByteBufferUtil.read(copy, (int) copy.length());
 
             assertEquals(contents.limit(), data.length);
             assertEquals(ByteBufferUtil.compare(contents, data), 0);
@@ -531,7 +531,7 @@ public class BufferedRandomAccessFileTest
         assertTrue(!copy.isEOF());
 
         copy.seek(0);
-        ByteBuffer contents = copy.readBytes((int) copy.length());
+        ByteBuffer contents = ByteBufferUtil.read(copy, (int) copy.length());
 
         assertEquals(contents.limit(), copy.length());
         assertTrue(ByteBufferUtil.compare(contents, data) == 0);

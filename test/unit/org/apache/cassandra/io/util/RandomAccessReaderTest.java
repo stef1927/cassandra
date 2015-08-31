@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import static org.junit.Assert.*;
 
 import org.apache.cassandra.io.compress.BufferType;
+import org.apache.cassandra.utils.ByteBufferUtil;
 
 public class RandomAccessReaderTest
 {
@@ -320,7 +321,7 @@ public class RandomAccessReaderTest
             assertEquals(f.getAbsolutePath(), reader.getPath());
             assertEquals(expected.length(), reader.length());
 
-            ByteBuffer b = reader.readBytes(expected.length());
+            ByteBuffer b = ByteBufferUtil.read(reader, expected.length());
             assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
 
             assertTrue(reader.isEOF());
@@ -349,7 +350,7 @@ public class RandomAccessReaderTest
         {
             assertEquals(expected.length() * numIterations, reader.length());
 
-            ByteBuffer b = reader.readBytes(expected.length());
+            ByteBuffer b = ByteBufferUtil.read(reader, expected.length());
             assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
 
             assertFalse(reader.isEOF());
@@ -361,7 +362,7 @@ public class RandomAccessReaderTest
 
             for (int i = 0; i < (numIterations - 1); i++)
             {
-                b = reader.readBytes(expected.length());
+                b = ByteBufferUtil.read(reader, expected.length());
                 assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
             }
             assertTrue(reader.isEOF());
@@ -374,7 +375,7 @@ public class RandomAccessReaderTest
             assertFalse(reader.isEOF());
             for (int i = 0; i < (numIterations - 1); i++)
             {
-                b = reader.readBytes(expected.length());
+                b = ByteBufferUtil.read(reader, expected.length());
                 assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
             }
 
@@ -384,7 +385,7 @@ public class RandomAccessReaderTest
             assertFalse(reader.isEOF());
             for (int i = 0; i < (numIterations - 1); i++)
             {
-                b = reader.readBytes(expected.length());
+                b = ByteBufferUtil.read(reader, expected.length());
                 assertEquals(expected, new String(b.array(), Charset.forName("UTF-8")));
             }
 
@@ -431,13 +432,13 @@ public class RandomAccessReaderTest
                 {
                     assertEquals(expected.length, reader.length());
 
-                    ByteBuffer b = reader.readBytes(expected.length);
+                    ByteBuffer b = ByteBufferUtil.read(reader, expected.length);
                     assertTrue(Arrays.equals(expected, b.array()));
                     assertTrue(reader.isEOF());
                     assertEquals(0, reader.bytesRemaining());
 
                     reader.seek(0);
-                    b = reader.readBytes(expected.length);
+                    b = ByteBufferUtil.read(reader, expected.length);
                     assertTrue(Arrays.equals(expected, b.array()));
                     assertTrue(reader.isEOF());
                     assertEquals(0, reader.bytesRemaining());

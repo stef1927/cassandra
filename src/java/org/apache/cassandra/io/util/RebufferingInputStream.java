@@ -62,14 +62,9 @@ public abstract class RebufferingInputStream extends InputStream implements Data
     @Override
     public void readFully(byte[] b, int off, int len) throws IOException
     {
-        int copied = 0;
-        while (copied < len)
-        {
-            int read = read(b, off + copied, len - copied);
-            if (read < 0)
-                throw new EOFException();
-            copied += read;
-        }
+        int read = read(b, off, len);
+        if (read < len)
+            throw new EOFException();
     }
 
     @Override

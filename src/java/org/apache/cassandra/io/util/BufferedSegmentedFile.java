@@ -38,16 +38,6 @@ public class BufferedSegmentedFile extends SegmentedFile
         }
     }
 
-    @Override
-    public FileDataInput createReader(long position)
-    { //TODO - is this override necessary at all??
-        RandomAccessReader reader = new RandomAccessReader.Builder(channel)
-                                    .bufferSize(bufferSize)
-                                    .build();
-        reader.seek(position);
-        return reader;
-    }
-
     public BufferedSegmentedFile sharedCopy()
     {
         return new BufferedSegmentedFile(this);

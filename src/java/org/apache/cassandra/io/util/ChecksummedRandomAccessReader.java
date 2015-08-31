@@ -23,6 +23,7 @@ import java.util.zip.CRC32;
 
 import org.apache.cassandra.io.compress.BufferType;
 import org.apache.cassandra.utils.ByteBufferUtil;
+import org.apache.cassandra.utils.Throwables;
 
 public class ChecksummedRandomAccessReader extends RandomAccessReader
 {
@@ -93,17 +94,12 @@ public class ChecksummedRandomAccessReader extends RandomAccessReader
     }
 
     @Override
-    public void close() throws IOException
+    public void close()
     {
-        try
-        {
-            super.close();
-        }
-        finally
-        {
-            channel.close();
-            validator.close();
-        }
+        Throwables.perform(channel.filePath(), Throwables.FileOpType.READ,
+                           super::close,
+                           validator::close,
+                           channel::close);
     }
 
     public static final class Builder extends RandomAccessReader.Builder

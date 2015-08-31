@@ -26,7 +26,6 @@ import com.google.common.util.concurrent.RateLimiter;
 
 import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.io.compress.BufferType;
-import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.memory.BufferPool;
 
 public class RandomAccessReader extends RebufferingInputStream implements FileDataInput
@@ -246,7 +245,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
      */
     public boolean isEOF()
     {
-        return getFilePointer() == length();
+        return current() == length();
     }
 
     public long bytesRemaining()
@@ -261,7 +260,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     }
 
     @Override
-    public void close() throws IOException
+    public void close()
     {
 	    //make idempotent
         if (buffer == null)
@@ -272,8 +271,6 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
 
         //For performance reasons we don't keep a reference to the file
         //channel so we don't close it
-
-        super.close();
     }
 
     @Override
@@ -326,59 +323,34 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         assert current() == newPosition;
     }
 
-    public ByteBuffer readBytes(int length) throws IOException
-    {
-        assert length >= 0 : "buffer length should not be negative: " + length;
-
-        try
-        {
-            ByteBuffer result = ByteBuffer.allocate(length);
-            while (result.hasRemaining())
-            {
-                if (isEOF())
-                    throw new EOFException();
-                if (!buffer.hasRemaining())
-                    reBuffer();
-                ByteBufferUtil.put(buffer, result);
-            }
-            result.flip();
-            return result;
-        }
-        catch (EOFException e)
-        {
-            throw e;
-        }
-        catch (Exception e)
-        {
-            throw new FSReadError(e, channel.toString());
-        }
-    }
-
     /**
      * Reads a line of text form the current position in this file. A line is
      * represented by zero or more characters followed by {@code '\n'}, {@code
      * '\r'}, {@code "\r\n"} or the end of file marker. The string does not
      * include the line terminating sequence.
-     * <p>
+     * <p/>
      * Blocks until a line terminating sequence has been read, the end of the
      * file is reached or an exception is thrown.
      *
      * @return the contents of the line or {@code null} if no characters have
-     *         been read before the end of the file has been reached.
-     * @throws IOException
-     *             if this file is closed or another I/O error occurs.
+     * been read before the end of the file has been reached.
+     * @throws IOException if this file is closed or another I/O error occurs.
      */
-    public final String readLine() throws IOException {
+    public final String readLine() throws IOException
+    {
         StringBuilder line = new StringBuilder(80); // Typical line length
         boolean foundTerminator = false;
         long unreadPosition = -1;
-        while (true) {
+        while (true)
+        {
             int nextByte = read();
-            switch (nextByte) {
+            switch (nextByte)
+            {
                 case -1:
                     return line.length() != 0 ? line.toString() : null;
                 case (byte) '\r':
-                    if (foundTerminator) {
+                    if (foundTerminator)
+                    {
                         seek(unreadPosition);
                         return line.toString();
                     }
@@ -389,7 +361,8 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
                 case (byte) '\n':
                     return line.toString();
                 default:
-                    if (foundTerminator) {
+                    if (foundTerminator)
+                    {
                         seek(unreadPosition);
                         return line.toString();
                     }
@@ -503,7 +476,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
 
         public RandomAccessReader buildWithChannel()
         {
-            return new RandomAccessReaderWithChannel(this);
+            return new RandomAccessReaderWithOwnChannel(this);
         }
     }
 
@@ -512,15 +485,15 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     // a channel but assumes the owner will keep it open and close it,
     // see CASSANDRA-9379, this thin class is just for those cases where we do
     // not have a shared channel.
-    private static class RandomAccessReaderWithChannel extends RandomAccessReader
+    public static class RandomAccessReaderWithOwnChannel extends RandomAccessReader
     {
-        RandomAccessReaderWithChannel(Builder builder)
+        protected RandomAccessReaderWithOwnChannel(Builder builder)
         {
             super(builder);
         }
 
         @Override
-        public void close() throws IOException
+        public void close()
         {
             try
             {

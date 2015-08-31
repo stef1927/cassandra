@@ -1614,7 +1614,6 @@ public abstract class SSTableReader extends SSTable implements SelfRefCounted<SS
             throw new CorruptSSTableException(e, path);
         }
 
-
         return null;
     }
 

@@ -29,6 +29,7 @@ import org.junit.Test;
 import org.apache.cassandra.io.util.DataOutputBuffer;
 import org.apache.cassandra.io.util.RandomAccessReader;
 import org.apache.cassandra.io.util.SequentialWriter;
+import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
 
 import static junit.framework.Assert.assertEquals;
@@ -106,7 +107,7 @@ public class ChecksummedDataInputTest
             assertEquals("utf", reader.readUTF());
             assertEquals(67L, reader.readVInt());
             assertEquals(88L, reader.readUnsignedVInt());
-            assertEquals("abcdefghi", new String(reader.readBytes(9).array(), StandardCharsets.UTF_8));
+            assertEquals("abcdefghi", new String(ByteBufferUtil.read(reader, 9).array(), StandardCharsets.UTF_8));
 
             // assert that the crc matches, and that we've read exactly as many bytes as expected
             assertTrue(reader.checkCrc());

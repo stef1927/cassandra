@@ -88,6 +88,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
         }
         finally
         {
+            // this will always be null if using mmap access mode (unlike in parent, where buffer is set to a region)
             if (compressed != null)
             {
                 BufferPool.put(compressed);
@@ -234,12 +235,6 @@ public class CompressedRandomAccessReader extends RandomAccessReader
         if (channel.read(checksumBytes, position) != checksumBytes.capacity())
             throw new CorruptBlockException(getPath(), chunk);
         return checksumBytes.getInt(0);
-    }
-
-    @Override
-    public boolean isEOF()
-    {
-        return current() == metadata.dataLength;
     }
 
     @Override

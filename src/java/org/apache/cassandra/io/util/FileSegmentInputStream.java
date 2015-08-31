@@ -18,11 +18,7 @@
 
 package org.apache.cassandra.io.util;
 
-import java.io.EOFException;
-import java.io.IOException;
 import java.nio.ByteBuffer;
-
-import org.apache.cassandra.utils.ByteBufferUtil;
 
 /**
  * This is the same as DataInputBuffer, i.e. a stream for a fixed byte buffer,
@@ -50,17 +46,17 @@ public class FileSegmentInputStream extends DataInputBuffer implements FileDataI
         return offset + buffer.capacity();
     }
 
-    public boolean isEOF() throws IOException
+    public boolean isEOF()
     {
         return !buffer.hasRemaining();
     }
 
-    public long bytesRemaining() throws IOException
+    public long bytesRemaining()
     {
         return buffer.remaining();
     }
 
-    public void seek(long pos) throws IOException
+    public void seek(long pos)
     {
         if (pos < 0 || pos > size())
             throw new IllegalArgumentException(String.format("Unable to seek to position %d in %s (%d bytes) in partial mode",
@@ -80,12 +76,12 @@ public class FileSegmentInputStream extends DataInputBuffer implements FileDataI
 
     public FileMark mark()
     {
-        throw new AssertionError("Mark is not supported");
+        throw new UnsupportedOperationException();
     }
 
-    public void reset(FileMark mark) throws IOException
+    public void reset(FileMark mark)
     {
-        throw new AssertionError("Mark is not supported");
+        throw new UnsupportedOperationException();
     }
 
     public long bytesPastMark(FileMark mark)
@@ -96,18 +92,5 @@ public class FileSegmentInputStream extends DataInputBuffer implements FileDataI
     public long getFilePointer()
     {
         return offset + buffer.position();
-    }
-
-    public ByteBuffer readBytes(int length) throws IOException
-    {
-        ByteBuffer result = ByteBuffer.allocate(length);
-        while (result.hasRemaining())
-        {
-            if (!buffer.hasRemaining())
-                throw new EOFException();
-
-            ByteBufferUtil.put(buffer, result);
-        }
-        return result;
     }
 }

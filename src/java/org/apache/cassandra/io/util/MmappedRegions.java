@@ -22,20 +22,17 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.Arrays;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.io.compress.CompressionMetadata;
-import org.apache.cassandra.utils.JVMStabilityInspector;
 import org.apache.cassandra.utils.Throwables;
 import org.apache.cassandra.utils.concurrent.RefCounted;
 import org.apache.cassandra.utils.concurrent.SharedCloseableImpl;
 
+import static java.util.stream.Stream.of;
+import static org.apache.cassandra.utils.Throwables.perform;
+
 public class MmappedRegions extends SharedCloseableImpl
 {
-    private static final Logger logger = LoggerFactory.getLogger(MmappedRegions.class);
-
     /** In a perfect world, MAX_SEGMENT_SIZE would be final, but we need to test with a smaller size */
     public static int MAX_SEGMENT_SIZE = Integer.MAX_VALUE;
 
@@ -296,37 +293,24 @@ public class MmappedRegions extends SharedCloseableImpl
 
         private Throwable close(Throwable accumulate)
         {
-            if (!FileUtils.isCleanerAvailable())
-                return accumulate;
+            accumulate = channel.close(accumulate);
 
             /*
              * Try forcing the unmapping of segments using undocumented unsafe sun APIs.
              * If this fails (non Sun JVM), we'll have to wait for the GC to finalize the mapping.
              * If this works and a thread tries to access any segment, hell will unleash on earth.
              */
-            try
-            {
-                for (ByteBuffer buffer : buffers)
-                {
-                    if (buffer != null)
-                    { // we could break when we encounter null,
-                      // this is just a little bit of extra defensiveness
-                        FileUtils.clean(buffer);
-                    }
-                }
-
-                logger.debug("All segments have been unmapped successfully");
-
-                channel.close();
+            if (!FileUtils.isCleanerAvailable())
                 return accumulate;
-            }
-            catch (Throwable t)
-            {
-                JVMStabilityInspector.inspectThrowable(t);
-                // This is not supposed to happen
-                logger.error("Error while unmapping segments", t);
-                return Throwables.merge(accumulate, t);
-            }
+
+            return perform(accumulate, channel.filePath(), Throwables.FileOpType.READ,
+                           of(buffers)
+                           .map((buffer) ->
+                                () ->
+                                {
+                                    if (buffer != null)
+                                        FileUtils.clean(buffer);
+                                }));
         }
     }
 
