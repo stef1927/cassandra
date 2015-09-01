@@ -43,7 +43,6 @@ public class NIODataInputStream extends RebufferingInputStream
 
     private static ByteBuffer makeBuffer(int bufferSize)
     {
-        Preconditions.checkArgument(bufferSize >= 9, "Buffer size must be large enough to accomadate a varint");
         ByteBuffer buffer = ByteBuffer.allocateDirect(bufferSize);
         buffer.position(0);
         buffer.limit(0);

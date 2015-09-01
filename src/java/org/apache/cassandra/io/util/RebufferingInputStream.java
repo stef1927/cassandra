@@ -26,6 +26,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 import net.nicoulaj.compilecommand.annotations.DontInline;
+import net.nicoulaj.compilecommand.annotations.Print;
+import org.apache.cassandra.utils.FastByteOperations;
 import org.apache.cassandra.utils.vint.VIntCoding;
 
 import com.google.common.base.Preconditions;
@@ -67,6 +69,7 @@ public abstract class RebufferingInputStream extends InputStream implements Data
             throw new EOFException();
     }
 
+    @Print
     @Override
     public int read(byte[] b, int off, int len) throws IOException {
 
@@ -80,18 +83,20 @@ public abstract class RebufferingInputStream extends InputStream implements Data
         int copied = 0;
         while (copied < len)
         {
-            if (buffer.hasRemaining())
-            {
-                int toCopy = Math.min(len - copied, buffer.remaining());
-                buffer.get(b, off + copied, toCopy);
-                copied += toCopy;
-            }
-            else
+            int position = buffer.position();
+            int remaining = buffer.limit() - position;
+            if (remaining == 0)
             {
                 reBuffer();
-                if (!buffer.hasRemaining())
+                remaining = buffer.limit();
+                if (remaining == 0)
                     return copied == 0 ? -1 : copied;
+                position = 0;
             }
+            int toCopy = Math.min(len - copied, remaining);
+            FastByteOperations.copy(buffer, position, b, off + copied, toCopy);
+            buffer.position(position + toCopy);
+            copied += toCopy;
         }
 
         return copied;
