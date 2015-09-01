@@ -179,24 +179,10 @@ public class NIODataInputStreamTest
     }
 
     @SuppressWarnings("resource")
-    @Test(expected = IllegalArgumentException.class)
-    public void testTooSmallBufferSize() throws Exception
-    {
-        new NIODataInputStream(new FakeChannel(), 4);
-    }
-
-    @SuppressWarnings("resource")
     @Test(expected = NullPointerException.class)
     public void testNullRBC() throws Exception
     {
         new NIODataInputStream(null, 9);
-    }
-
-    @SuppressWarnings("resource")
-    @Test(expected = IllegalArgumentException.class)
-    public void testSmallBufferSize() throws Exception
-    {
-        new NIODataInputStream(new FakeChannel(), 8);
     }
 
     @SuppressWarnings("resource")
