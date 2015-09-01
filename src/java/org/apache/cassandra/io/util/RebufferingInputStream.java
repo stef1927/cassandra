@@ -88,10 +88,10 @@ public abstract class RebufferingInputStream extends InputStream implements Data
             if (remaining == 0)
             {
                 reBuffer();
-                remaining = buffer.limit();
+                position = buffer.position();
+                remaining = buffer.limit() - position;
                 if (remaining == 0)
                     return copied == 0 ? -1 : copied;
-                position = 0;
             }
             int toCopy = Math.min(len - copied, remaining);
             FastByteOperations.copy(buffer, position, b, off + copied, toCopy);
