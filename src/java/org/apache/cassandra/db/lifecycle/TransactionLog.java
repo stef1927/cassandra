@@ -23,7 +23,6 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.nio.file.SecureDirectoryStream;
 import java.util.*;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -32,10 +31,13 @@ import java.util.function.BiFunction;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 import java.util.zip.CRC32;
 import java.util.zip.Checksum;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.Runnables;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
@@ -135,6 +137,11 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
         {
             return this == RecordType.ADD || this == RecordType.REMOVE;
         }
+
+        public boolean matches(Record record)
+        {
+            return this == record.type;
+        }
     }
 
     /**
@@ -160,35 +167,16 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
             try
             {
                 Matcher matcher = REGEX.matcher(record);
-                if (!matcher.matches() || matcher.groupCount() != 4)
-                {
-                    logger.error("Failed to parse '{}', invalid record", record);
-                    return new Record(RecordType.UNKNOWN, "", 0, 0, record).error(String.format("Failed to parse '%s'", record));
-                }
+                if (!matcher.matches())
+                    throw new IllegalStateException("Corrupted record; does not match expected pattern " + REGEX_STR)
 
                 RecordType type = RecordType.fromPrefix(matcher.group(1));
                 return new Record(type, matcher.group(2), Long.valueOf(matcher.group(3)), Integer.valueOf(matcher.group(4)), record);
             }
             catch (Throwable t)
             {
-                logger.error("Failed to create record {}", record, t);
-
-                int pos = record.indexOf(':');
-                if (pos <= 0)
-                    return new Record(RecordType.UNKNOWN, "", 0, 0, record).error(t);
-
-                RecordType recordType;
-                try
-                {
-                    recordType = RecordType.fromPrefix(record.substring(0, pos));
-                }
-                catch (Throwable tt)
-                {
-                    logger.error("Failed to parse record type {}", record.substring(0, pos), tt);
-                    return new Record(RecordType.UNKNOWN, "", 0, 0, record).error(t);
-                }
-
-                return new Record(recordType, "", 0, 0, record).error(t);
+                logger.debug("Failed to create record {}", record, t);
+                return new Record(RecordType.UNKNOWN, "", 0, 0, record).error(t);
             }
         }
 
@@ -205,16 +193,14 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
         public static Record make(RecordType type, String parentFolder, SSTable table)
         {
             String relativePath = FileUtils.getRelativePath(parentFolder, table.descriptor.baseFilename());
-            List<File> files = getExistingFiles(parentFolder, relativePath);
-            long lastModified = files.stream().map(File::lastModified).reduce(0L, Long::max);
-            int numFiles = Math.max(files.size(), table.getAllFilePaths().size());
-            return new Record(type, relativePath, lastModified, numFiles, "");
+            // why do we take the max of files.size() and table.getAllFilePaths().size()?
+            return make(type, getExistingFiles(parentFolder, relativePath), table.getAllFilePaths().size(), relativePath);
         }
 
-        public static Record make(RecordType type, List<File> files, String relativeFilePath)
+        public static Record make(RecordType type, List<File> files, int minFiles, String relativeFilePath)
         {
             long lastModified = files.stream().map(File::lastModified).reduce(0L, Long::max);
-            return new Record(type, relativeFilePath, lastModified, files.size(), "");
+            return new Record(type, relativeFilePath, lastModified, Math.max(minFiles, files.size()), "");
         }
 
         private Record(RecordType type,
@@ -279,10 +265,7 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
         @Override
         public boolean equals(Object obj)
         {
-            if (obj == null)
-                return false;
-
-            if (getClass() != obj.getClass())
+            if (!(obj instanceof Record))
                 return false;
 
             final Record other = (Record)obj;
@@ -310,14 +293,12 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
         static String EXT = ".log";
         static char SEP = '_';
         // cc_txn_opname_id.log (where cc is one of the sstable versions defined in BigVersion)
-        static String FILE_REGEX_STR = String.format("^(.{2})_txn_(.*)_(.*)%s$", EXT);
-        static Pattern FILE_REGEX = Pattern.compile(FILE_REGEX_STR);
-        static String LINE_REGEX_STR = "^(.*)\\[(\\d*)\\]$"; // *[checksum]
-        static Pattern LINE_REGEX = Pattern.compile(LINE_REGEX_STR);
+        static Pattern FILE_REGEX = Pattern.compile(String.format("^(.{2})_txn_(.*)_(.*)%s$", EXT));
+        static Pattern LINE_REGEX = Pattern.compile("^(.*)\\[(\\d*)\\]$"); // *[checksum]
 
         public final File file;
         public final TransactionData parent;
-        public final LinkedHashSet<Record> records = new LinkedHashSet<>();
+        public final Set<Record> records = new LinkedHashSet<>();
         public final Checksum checksum = new CRC32();
 
         TransactionFile(TransactionData parent)
@@ -337,7 +318,7 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
         private Record readRecord(String line)
         {
             Matcher matcher = LINE_REGEX.matcher(line);
-            if (!matcher.matches() || matcher.groupCount() != 2)
+            if (!matcher.matches())
             {
                 return Record.make(line).error(String.format("Failed to parse checksum in line '%s'", line));
             }
@@ -366,53 +347,51 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
 
         public void verifyRecords()
         {
-            Iterator<Record> it = records.iterator();
-            while(it.hasNext())
+            Optional<Record> firstInvalid = records.stream()
+                                                   .filter(this::isInvalid)
+                                                   .findFirst();
+
+            if (!firstInvalid.isPresent())
+                return;
+
+            Record failedOn = firstInvalid.get();
+            if (getLastRecord() != failedOn)
+                throw new CorruptTransactionLogException(String.format("Non-last record of transaction %s is corrupt [%s]; unexpected disk state, aborting", parent.getId(), failedOn.error), this);
+
+            for (Record r : records)
             {
-                Record record = it.next();
-                boolean isLast = !it.hasNext();
+                if (r == failedOn)
+                    break; // skip last record
 
-                if (!verifyRecord(record))
-                {
-                    if (isLast)
-                    {
-                        for (Record r : records)
-                        {
-                            if (r == record)
-                                break; // skip last record
+                if (r.onDiskRecord == null)
+                    continue; // not a remove record
 
-                            if (r.onDiskRecord == null)
-                                continue; // not a remove record
+                if (r.onDiskRecord.numFiles < r.numFiles)
+                { // if we found a corruption in the last record, then we continue only if the number of files matches exactly for all previous records.
+                    logger.error("Unexpected files detected for sstable [{}], record [{}]: number of files [{}] should have been [{}]",
+                                 r.relativeFilePath,
+                                 failedOn,
+                                 r.onDiskRecord.numFiles,
+                                 r.numFiles);
 
-                            if (r.onDiskRecord.numFiles < r.numFiles)
-                            { // if we found a corruption in the last record, then we continue only if the number of files matches exactly for all previous records.
-                                logger.error("Unexpected files detected for sstable [{}], record [{}]: number of files [{}] should have been [{}]",
-                                             r.relativeFilePath,
-                                             record,
-                                             r.onDiskRecord.numFiles,
-                                             r.numFiles);
-
-                                throw new CorruptTransactionLogException(String.format("Last record of transaction %s is corrupt [%s] and at least " +
-                                                                                       "one previous record does not match state on disk, unexpected disk state, aborting",
-                                                                                       parent.getId(),
-                                                                                       record.error),
-                                                                         this);
-                            }
-                        }
-
-                        // if only the last record is corrupt and all other records have matching files on disk, @see verifyRecord,
-                        // then we simply exited whilst serializing the last record and we carry on
-                        logger.warn(String.format("Last record of transaction %s is corrupt or incomplete [%s], but all previous records match state on disk; continuing",
-                                                  parent.getId(),
-                                                  record.error));
-
-                    }
-                    else
-                    {
-                        throw new CorruptTransactionLogException(String.format("Non-last record of transaction %s is corrupt [%s], unexpected disk state, aborting", parent.getId(), record.error), this);
-                    }
+                    throw new CorruptTransactionLogException(String.format("Last record of transaction %s is corrupt [%s] and at least " +
+                                                                           "one previous record does not match state on disk, unexpected disk state, aborting",
+                                                                           parent.getId(),
+                                                                           failedOn.error),
+                                                             this);
                 }
+
+                // if only the last record is corrupt and all other records have matching files on disk, @see verifyRecord,
+                // then we simply exited whilst serializing the last record and we carry on
+                logger.warn(String.format("Last record of transaction %s is corrupt or incomplete [%s], but all previous records match state on disk; continuing",
+                                          parent.getId(),
+                                          failedOn.error));
             }
+        }
+
+        boolean isInvalid(Record record)
+        {
+            return !verifyRecord(record);
         }
 
         public boolean verifyRecord(Record record)
@@ -427,7 +406,7 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
 
             // Paranoid sanity checks: we create another record by looking at the files as they are
             // on disk right now and make sure the information still matches
-            record.onDiskRecord = Record.make(record.type, files, record.relativeFilePath);
+            record.onDiskRecord = Record.make(record.type, files, 0, record.relativeFilePath);
 
             if (record.updateTime != record.onDiskRecord.updateTime && record.onDiskRecord.numFiles > 0)
             {
@@ -473,36 +452,28 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
 
         public boolean add(RecordType type, SSTable table)
         {
-            Record record = makeRecord(type, table);
-            if (records.contains(record))
-                return false;
-
-            addRecord(record);
-            return true;
+            return addRecord(makeRecord(type, table));
         }
 
         private Record makeRecord(RecordType type, SSTable table)
         {
-            if (type == RecordType.ADD || type == RecordType.REMOVE)
-            {
-                return Record.make(type, parent.getFolder(), table);
-            }
-            else
-            {
-                throw new AssertionError("Invalid record type " + type);
-            }
+            assert type == RecordType.ADD || type == RecordType.REMOVE;
+            return Record.make(type, parent.getFolder(), table);
         }
 
-        private void addRecord(Record record)
+        private boolean addRecord(Record record)
         {
+            if (!records.add(record))
+                return false;
+
             // we only checksum the records, not the checksums themselves
             byte[] bytes = record.getBytes();
             checksum.update(bytes, 0, bytes.length);
 
-            records.add(record);
             FileUtils.append(file, String.format("%s[%d]", record, checksum.getValue()));
 
             parent.sync();
+            return true;
         }
 
         public void remove(RecordType type, SSTable table)
@@ -524,7 +495,7 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
         {
             assert file.exists() : String.format("Expected %s to exists", file);
             records.stream()
-                   .filter((r) -> r.type == type)
+                   .filter(type::matches)
                    .forEach(this::deleteRecord);
             records.clear();
         }
@@ -565,7 +536,7 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
 
         public Record getLastRecord()
         {
-            return records.size() > 0 ? records.toArray(new Record[records.size()])[records.size() - 1] : null;
+            return Iterables.getLast(records, null);
         }
 
         private Set<File> getRecordFiles(NavigableSet<File> files, Record record)
@@ -749,9 +720,9 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
             return folder.getPath();
         }
 
-        static boolean isLogFile(String name)
+        static boolean isLogFile(File file)
         {
-            return TransactionFile.FILE_REGEX.matcher(name).matches();
+            return TransactionFile.FILE_REGEX.matcher(file.getName()).matches();
         }
 
         @VisibleForTesting
@@ -1058,7 +1029,7 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
 
         for (File dir : new Directories(metadata).getCFDirectories())
         {
-            File[] logs = dir.listFiles((dir1, name) -> TransactionData.isLogFile(name));
+            File[] logs = dir.listFiles(TransactionData::isLogFile);
 
             for (File log : logs)
             {
@@ -1125,57 +1096,19 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
 
         List<File> innerList() throws Throwable
         {
-            if (!files.isEmpty())
-                files.clear();
+            list(Files.newDirectoryStream(folder))
+            .stream()
+            .filter((f) -> !TransactionData.isLogFile(f))
+            .forEach((f) -> files.put(f, FileType.FINAL));
 
-            Set<File> txnLogs = new HashSet<>(); // the txn log files
-            boolean isAtomicStream; // whether this platform supports atomic file listing in a folder
-
-            try (DirectoryStream<Path> in = Files.newDirectoryStream(folder))
-            {
-                isAtomicStream = !forceNotAtomic && (in instanceof SecureDirectoryStream);
-
-                for (Path path : in)
-                {
-                    File file = path.toFile();
-                    if (file.isDirectory())
-                        continue;
-
-                    if (TransactionData.isLogFile(file.getName()))
-                    {
-                        // For atomic streams we can add txn log files during the first pass
-                        if (isAtomicStream)
-                            txnLogs.add(file);
-
-                        continue;
-                    }
-
-                   files.put(file, FileType.FINAL);
-                }
-            }
-
-            // If the file stream is not atomic we cannot be sure we have listed a consistent
-            // disk state, so we must be careful to list txn log files AFTER every other file
-            // since these files are deleted last, after all other files are removed
-            if (!isAtomicStream)
-            {
-                noSpamLogger.info("This platform does not support atomic directory streams (SecureDirectoryStream)");
-                try (DirectoryStream<Path> in = Files.newDirectoryStream(folder, '*' + TransactionFile.EXT))
-                {
-                    for (Path path : in)
-                    {
-                        File file = path.toFile();
-                        if (TransactionData.isLogFile(file.getName()))
-                            txnLogs.add(file);
-                        else
-                            logger.error("Ignoring unexpected file {}", file);
-                    }
-                }
-            }
-
-            // Now we read the txn log files and classify files according to txn state
-            for (File log : txnLogs)
-                classifyFiles(log);
+            // Since many file systems are not atomic, we cannot be sure we have listed a consistent disk state
+            // (Linux would permit this, but for simplicity we keep our behaviour the same across platforms)
+            // so we must be careful to list txn log files AFTER every other file since these files are deleted last,
+            // after all other files are removed
+            list(Files.newDirectoryStream(folder, '*' + TransactionFile.EXT))
+            .stream()
+            .filter(TransactionData::isLogFile)
+            .forEach(this::classifyFiles);
 
             // Finally we apply the user filter before returning our result
             return files.entrySet().stream()
@@ -1184,11 +1117,26 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
                       .collect(Collectors.toList());
         }
 
+        List<File> list(DirectoryStream<Path> stream) throws IOException
+        {
+            try
+            {
+                return StreamSupport.stream(stream.spliterator(), false)
+                                    .map(Path::toFile)
+                                    .filter((f) -> !f.isDirectory())
+                                    .collect(Collectors.toList());
+            }
+            finally
+            {
+                stream.close();
+            }
+        }
+
         /**
          * We read txn log files, if we fail we throw only if the user has specified
          * OnTxnErr.THROW, else we log an error and apply the txn log anyway
          */
-        void classifyFiles(File txnFile) throws Throwable
+        void classifyFiles(File txnFile)
         {
             try (TransactionData txn = TransactionData.make(txnFile))
             {
@@ -1198,7 +1146,7 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
             }
         }
 
-        void readTxnLog(TransactionData txn) throws Throwable
+        void readTxnLog(TransactionData txn)
         {
             Throwable err = txn.check(txn.readLogFile(null));
             if (err != null)
@@ -1210,7 +1158,7 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
             }
         }
 
-        void classifyFiles(TransactionData txn) throws Throwable
+        void classifyFiles(TransactionData txn)
         {
             TransactionFile txnFile = txn.file;
 
@@ -1256,49 +1204,20 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
         /** See if all files are present or if only the last record files are missing and it's a NEW record */
         private boolean allFilesPresent(TransactionFile txnFile, Map<Record, Set<File>> oldFiles, Map<Record, Set<File>> newFiles)
         {
-            boolean allPresent = true;
-
-            for (Map.Entry<Record, Set<File>> entry : oldFiles.entrySet())
-            {
-                if (entry.getKey().numFiles > entry.getValue().size())
-                {
-                    allPresent = false;
-                    break;
-                }
-            }
-
-            if (allPresent)
-            {
-                Record lastRecord = txnFile.getLastRecord();
-                for (Map.Entry<Record, Set<File>> entry : newFiles.entrySet())
-                {
-                    if (entry.getKey() == lastRecord)
-                        continue; //skip last record for NEW files
-
-                    if (entry.getKey().numFiles > entry.getValue().size())
-                    { // this would happen also in the case of some files not yet created but we skip the last record
-                      // so it should never occur that some files are not yet created
-                        allPresent = false;
-                        break;
-                    }
-                }
-            }
-
-            return allPresent;
+            Record lastRecord = txnFile.getLastRecord();
+            return !Stream.concat(oldFiles.entrySet().stream(),
+                                  newFiles.entrySet().stream()
+                                          .filter((e) -> e.getKey() != lastRecord))
+                          .filter((e) -> e.getKey().numFiles > e.getValue().size())
+                          .findFirst().isPresent();
         }
 
         private void filter(TransactionFile txnFile, Collection<Set<File>> oldFiles, Collection<Set<File>> newFiles)
         {
-            if (txnFile.committed())
-            {
-                for (Set<File> files : oldFiles)
-                    files.forEach((f) -> this.files.put(f, FileType.TEMPORARY));
-            }
-            else
-            { // aborted or in progress
-                for (Set<File> files : newFiles)
-                    files.forEach((f) -> this.files.put(f, FileType.TEMPORARY));
-            }
+            Collection<Set<File>> temporary = txnFile.committed() ? oldFiles : newFiles;
+            temporary.stream()
+                     .flatMap(Set::stream)
+                     .forEach((f) -> this.files.put(f, FileType.TEMPORARY));
         }
 
     }
@@ -1316,24 +1235,16 @@ class TransactionLog extends Transactional.AbstractTransactional implements Tran
     }
 
     @VisibleForTesting
-    static Set<File> listFiles(CFMetaData metadata, File folder, boolean forceNonAtomicListing, final FileType ... types)
+    static Set<File> listFiles(CFMetaData metadata, File folder, boolean forceNonAtomicListing, FileType ... types)
     {
-        Set<File> ret = new HashSet<>();
-
+        Collection<FileType> match = Arrays.asList(types);
         List<File> directories = new Directories(metadata).getCFDirectories();
         directories.add(folder);
-        for (File dir : directories)
-            ret.addAll(new FileLister(dir.toPath(),
-                                      (file, type) ->
-                                      {
-                                          for (FileType t : types)
-                                              if (t == type)
-                                                  return true;
-                                          return false;
-                                      },
-                                      OnTxnErr.IGNORE,
-                                      forceNonAtomicListing).list());
-
-        return ret;
+        return directories.stream()
+                          .flatMap((dir) -> new FileLister(dir.toPath(),
+                                                           (file, type) -> match.contains(type),
+                                                           OnTxnErr.IGNORE,
+                                                           forceNonAtomicListing).list().stream())
+                          .collect(Collectors.toSet());
     }
 }
