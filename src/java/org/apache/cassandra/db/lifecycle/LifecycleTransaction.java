@@ -562,7 +562,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
      */
     public static List<File> getFiles(Path folder, BiFunction<File, Directories.FileType, Boolean> filter, Directories.OnTxnErr onTxnErr)
     {
-        return new LogTransaction.FileLister(folder, filter, onTxnErr).list();
+        return new LogAwareFileLister(folder, filter, onTxnErr).list();
     }
 
     /**
