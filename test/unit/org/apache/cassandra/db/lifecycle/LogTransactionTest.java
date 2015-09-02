@@ -628,14 +628,14 @@ public class LogTransactionTest extends AbstractTransactionalTest
     public void testObsoletedDataFileUpdateTimeChanged() throws IOException
     {
         testObsoletedFilesChanged(sstable ->
-                                 {
-                                     // increase the modification time of the Data file
-                                     for (String filePath : sstable.getAllFilePaths())
-                                     {
-                                         if (filePath.endsWith("Data.db"))
-                                             assertTrue(new File(filePath).setLastModified(System.currentTimeMillis() + 60000)); //one minute later
-                                     }
-                                 });
+                                  {
+                                      // increase the modification time of the Data file
+                                      for (String filePath : sstable.getAllFilePaths())
+                                      {
+                                          if (filePath.endsWith("Data.db"))
+                                              assertTrue(new File(filePath).setLastModified(System.currentTimeMillis() + 60000)); //one minute later
+                                      }
+                                  });
     }
 
     private static void testObsoletedFilesChanged(Consumer<SSTableReader> modifier) throws IOException
@@ -678,18 +678,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
     }
 
     @Test
-    public void testGetTemporaryFilesSafeAfterObsoletion_MaybeAtomicListing() throws Throwable
-    {
-        testGetTemporaryFilesSafeAfterObsoletion(false);
-    }
-
-    @Test
-    public void testGetTemporaryFilesSafeAfterObsoletion_NonAtomicListing() throws Throwable
-    {
-        testGetTemporaryFilesSafeAfterObsoletion(true);
-    }
-
-    private void testGetTemporaryFilesSafeAfterObsoletion(boolean forceNonAtomicListing) throws Throwable
+    public void testGetTemporaryFilesSafeAfterObsoletion() throws Throwable
     {
         ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
         SSTableReader sstable = sstable(cfs, 0, 128);
@@ -709,7 +698,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
         // It doesn't matter what it returns but it should not throw because the txn
         // was completed before deleting files (i.e. releasing sstables)
         for (int i = 0; i < 200; i++)
-            LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder, forceNonAtomicListing);
+            LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder);
     }
 
     @Test

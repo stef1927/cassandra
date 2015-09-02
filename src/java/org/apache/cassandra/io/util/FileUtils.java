@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.text.DecimalFormat;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import sun.nio.ch.DirectBuffer;
@@ -619,6 +620,9 @@ public class FileUtils
         }
         catch (IOException ex)
         {
+            if (ex instanceof NoSuchFileException)
+                return Collections.emptyList();
+
             throw new RuntimeException(ex);
         }
     }

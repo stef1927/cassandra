@@ -54,48 +54,6 @@ final class LogFile
         return new LogFile(operationType, logFile.getParentFile(), -1, id);
     }
 
-    public Throwable readLogFile(Throwable accumulate)
-    {
-        try
-        {
-            readRecords();
-        }
-        catch (Throwable t)
-        {
-            accumulate = merge(accumulate, t);
-        }
-
-        return accumulate;
-    }
-
-    public Throwable verify(Throwable accumulate)
-    {
-        try
-        {
-            verifyRecords();
-        }
-        catch (Throwable t)
-        {
-            accumulate = merge(accumulate, t);
-        }
-
-        return accumulate;
-    }
-
-    public Throwable check(Throwable accumulate)
-    {
-        try
-        {
-            checkRecords();
-        }
-        catch (Throwable t)
-        {
-            accumulate = merge(accumulate, t);
-        }
-
-        return accumulate;
-    }
-
     void sync()
     {
         if (folderDescriptor > 0)
@@ -154,65 +112,66 @@ final class LogFile
                  .forEach(records::add);
     }
 
-    public void checkRecords()
-    {
-        for (LogRecord record : records)
-        {
-            if (record.hasError())
-                throw new LogTransaction.CorruptTransactionLogException(String.format("Record of transaction %s is corrupt [%s], aborting",
-                                                                           id,
-                                                                           record.error), this);
-        }
-    }
-
-    public void verifyRecords()
+    public boolean verify()
     {
         Optional<LogRecord> firstInvalid = records.stream()
                                                   .filter(this::isInvalid)
                                                   .findFirst();
 
         if (!firstInvalid.isPresent())
-            return;
+            return true;
 
         LogRecord failedOn = firstInvalid.get();
         if (getLastRecord() != failedOn)
-            throw new LogTransaction.CorruptTransactionLogException(String.format("Non-last record of transaction %s is corrupt [%s]; unexpected disk state, aborting", id, failedOn.error), this);
-
-        for (LogRecord r : records)
         {
-            if (r == failedOn)
-                break; // skip last record
-
-            if (r.onDiskRecord == null)
-                continue; // not a remove record
-
-            if (r.onDiskRecord.numFiles < r.numFiles)
-            { // if we found a corruption in the last record, then we continue only if the number of files matches exactly for all previous records.
-                logger.error("Unexpected files detected for sstable [{}], record [{}]: number of files [{}] should have been [{}]",
-                             r.relativeFilePath,
-                             failedOn,
-                             r.onDiskRecord.numFiles,
-                             r.numFiles);
-
-                throw new LogTransaction.CorruptTransactionLogException(String.format("Last record of transaction %s is corrupt [%s] and at least " +
-                                                                           "one previous record does not match state on disk, unexpected disk state, aborting",
-                                                                           id,
-                                                                           failedOn.error),
-                                                                        this);
-            }
-
-            // if only the last record is corrupt and all other records have matching files on disk, @see verifyRecord,
-            // then we simply exited whilst serializing the last record and we carry on
-            logger.warn(String.format("Last record of transaction %s is corrupt or incomplete [%s], but all previous records match state on disk; continuing",
-                                      id,
-                                      failedOn.error));
+            logError(failedOn);
+            return false;
         }
+
+        if (records.stream()
+                   .filter((r) -> r != failedOn)
+                   .filter(this::isInvalidWithCorruptedLastRecord)
+                   .map(LogFile::logError)
+                   .findFirst().isPresent())
+        {
+            logError(failedOn);
+            return false;
+        }
+
+        // if only the last record is corrupt and all other records have matching files on disk, @see verifyRecord,
+        // then we simply exited whilst serializing the last record and we carry on
+        logger.warn(String.format("Last record of transaction %s is corrupt or incomplete [%s], but all previous records match state on disk; continuing",
+                                  id,
+                                  failedOn.error));
+        return true;
     }
 
-    public boolean isInvalid(LogRecord record)
+    static LogRecord logError(LogRecord record)
     {
-        if (record.hasError())
+        logger.error("{}", record.error);
+        return record;
+    }
+
+    boolean isInvalid(LogRecord record)
+    {
+        if (!record.isValid())
             return true;
+
+        if (record.type == Type.UNKNOWN)
+        {
+            record.error(String.format("Could not parse record [%s]", record));
+            return true;
+        }
+
+        if (record.checksum != record.computeChecksum())
+        {
+            record.error(String.format("Invalid checksum for sstable [%s], record [%s]: [%d] should have been [%d]",
+                                       record.relativeFilePath,
+                                       record,
+                                       record.checksum,
+                                       record.computeChecksum()));
+            return true;
+        }
 
         if (record.type != Type.REMOVE)
             return false;
@@ -225,16 +184,28 @@ final class LogFile
 
         if (record.updateTime != record.onDiskRecord.updateTime && record.onDiskRecord.numFiles > 0)
         {
-            logger.error("Unexpected files detected for sstable [{}], record [{}]: last update time [{}] should have been [{}]",
-                         record.relativeFilePath,
-                         record,
-                         new Date(record.onDiskRecord.updateTime),
-                         new Date(record.updateTime));
-
-            record.error("Failed to verify: unexpected sstable files");
+            record.error(String.format("Unexpected files detected for sstable [%s], record [%s]: last update time [%tT] should have been [%tT]",
+                                       record.relativeFilePath,
+                                       record,
+                                       record.onDiskRecord.updateTime,
+                                       record.updateTime));
             return true;
         }
 
+        return false;
+    }
+
+    boolean isInvalidWithCorruptedLastRecord(LogRecord record)
+    {
+        if (record.type == Type.REMOVE && record.onDiskRecord.numFiles < record.numFiles)
+        { // if we found a corruption in the last record, then we continue only if the number of files matches exactly for all previous records.
+            record.error(String.format("Incomplete fileset detected for sstable [%s], record [%s]: number of files [%d] should have been [%d]. Treating as unrecoverable due to corruption of the final record.",
+                         record.relativeFilePath,
+                         record.raw,
+                         record.onDiskRecord.numFiles,
+                         record.numFiles));
+            return true;
+        }
         return false;
     }
 
@@ -327,19 +298,10 @@ final class LogFile
     {
         Map<LogRecord, Set<File>> ret = new HashMap<>();
 
-        for (LogRecord record : records)
-        {
-            if (record.type != type)
-                continue;
-
-            if (record.hasError())
-            {
-                logger.error("Ignoring record {} due to error {}", record, record.error);
-                continue;
-            }
-
-            ret.put(record, getRecordFiles(files, record));
-        }
+        records.stream()
+               .filter(type::matches)
+               .filter(LogRecord::isValid)
+               .forEach((r) -> ret.put(r, getRecordFiles(files, r)));
 
         return ret;
     }

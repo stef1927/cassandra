@@ -397,8 +397,6 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
      */
     static void removeUnfinishedLeftovers(CFMetaData metadata)
     {
-        Throwable accumulate = null;
-
         for (File dir : new Directories(metadata).getCFDirectories())
         {
             File[] logs = dir.listFiles(LogFile::isLogFile);
@@ -406,15 +404,17 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
             for (File log : logs)
             {
                 LogFile data = LogFile.make(log);
-                accumulate = data.verify(data.readLogFile(accumulate));
-                if (accumulate == null)
-                    accumulate = data.removeUnfinishedLeftovers(null);
+                data.readRecords();
+                if (data.verify())
+                {
+                    Throwable failure = data.removeUnfinishedLeftovers(null);
+                    logger.error("Failed to remove unfinished transaction leftovers for log {}", log, failure);
+                }
                 else
-                    logger.error("Unexpected disk state: failed to read transaction log {}", log, accumulate);
+                {
+                    logger.error("Unexpected disk state: failed to read transaction log {}", log);
+                }
             }
         }
-
-        if (accumulate != null)
-            logger.error("Failed to remove unfinished transaction leftovers", accumulate);
     }
 }

@@ -51,9 +51,9 @@ final class LogRecord
     public final long updateTime;
     public final int numFiles;
     public final String raw;
-    public final int checksum;
+    public final long checksum;
 
-    public List<String> error;
+    public String error;
     public LogRecord onDiskRecord;
 
     // (add|remove|commit|abort):[*,*,*][checksum]
@@ -68,7 +68,7 @@ final class LogRecord
                 return new LogRecord(Type.UNKNOWN, "", 0, 0, 0, line);
 
             Type type = Type.fromPrefix(matcher.group(1));
-            return new LogRecord(type, matcher.group(2), Long.valueOf(matcher.group(3)), Integer.valueOf(matcher.group(4)), Integer.valueOf(matcher.group(5)), line);
+            return new LogRecord(type, matcher.group(2), Long.valueOf(matcher.group(3)), Integer.valueOf(matcher.group(4)), Long.valueOf(matcher.group(5)), line);
         }
         catch (Throwable t)
         {
@@ -107,11 +107,11 @@ final class LogRecord
         this(type, relativeFilePath, updateTime, numFiles, 0, null);
     }
 
-        private LogRecord(Type type,
+    private LogRecord(Type type,
                       String relativeFilePath,
                       long updateTime,
                       int numFiles,
-                      int checksum,
+                      long checksum,
                       String raw)
     {
         this.type = type;
@@ -138,15 +138,13 @@ final class LogRecord
 
     public LogRecord error(String error)
     {
-        if (this.error == null)
-            this.error = new ArrayList<>();
-        this.error.add(error);
+        this.error = error;
         return this;
     }
 
-    public boolean hasError()
+    public boolean isValid()
     {
-        return this.error != null;
+        return this.error == null;
     }
 
     private String format()
@@ -196,7 +194,7 @@ final class LogRecord
         return raw;
     }
 
-    private int computeChecksum()
+    long computeChecksum()
     {
         CRC32 crc32 = new CRC32();
         crc32.update(relativeFilePath.getBytes(FileUtils.CHARSET));
@@ -204,6 +202,6 @@ final class LogRecord
         FBUtilities.updateChecksumInt(crc32, (int) updateTime);
         FBUtilities.updateChecksumInt(crc32, (int) (updateTime >>> 32));
         FBUtilities.updateChecksumInt(crc32, numFiles);
-        return (int) crc32.getValue();
+        return crc32.getValue() & (Long.MAX_VALUE);
     }
 }

@@ -12,7 +12,6 @@ import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Throwables;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -113,14 +112,9 @@ final class LogAwareFileLister
 
     void readTxnLog(LogFile txn)
     {
-        Throwable err = txn.check(txn.readLogFile(null));
-        if (err != null)
-        {
-            if (onTxnErr == OnTxnErr.THROW)
-                throw Throwables.propagate(err);
-
-            logger.error("Failed to read temporary files of txn {}: {}", txn, err.getMessage());
-        }
+        txn.readRecords();
+        if (!txn.verify() && onTxnErr == OnTxnErr.THROW)
+            throw new LogTransaction.CorruptTransactionLogException("Some records failed verification. See earlier in log for details.", txn);
     }
 
     void classifyFiles(LogFile txnFile)
@@ -130,13 +124,13 @@ final class LogAwareFileLister
 
         if (txnFile.completed())
         { // last record present, filter regardless of disk status
-            filter(txnFile, oldFiles.values(), newFiles.values());
+            setTemporary(txnFile, oldFiles.values(), newFiles.values());
             return;
         }
 
         if (allFilesPresent(txnFile, oldFiles, newFiles))
         {  // all files present, transaction is in progress, this will filter as aborted
-            filter(txnFile, oldFiles.values(), newFiles.values());
+            setTemporary(txnFile, oldFiles.values(), newFiles.values());
             return;
         }
 
@@ -152,7 +146,7 @@ final class LogAwareFileLister
 
         if (txnFile.completed())
         { // if after re-reading the txn is completed then filter accordingly
-            filter(txnFile, oldFiles.values(), newFiles.values());
+            setTemporary(txnFile, oldFiles.values(), newFiles.values());
             return;
         }
 
@@ -175,7 +169,7 @@ final class LogAwareFileLister
                       .findFirst().isPresent();
     }
 
-    private void filter(LogFile txnFile, Collection<Set<File>> oldFiles, Collection<Set<File>> newFiles)
+    private void setTemporary(LogFile txnFile, Collection<Set<File>> oldFiles, Collection<Set<File>> newFiles)
     {
         Collection<Set<File>> temporary = txnFile.committed() ? oldFiles : newFiles;
         temporary.stream()
@@ -186,17 +180,11 @@ final class LogAwareFileLister
     @VisibleForTesting
     static Set<File> getTemporaryFiles(CFMetaData metadata, File folder)
     {
-        return getTemporaryFiles(metadata, folder, false);
+        return listFiles(metadata, folder, FileType.TEMPORARY);
     }
 
     @VisibleForTesting
-    static Set<File> getTemporaryFiles(CFMetaData metadata, File folder, boolean forceNonAtomicListing)
-    {
-        return listFiles(metadata, folder, forceNonAtomicListing, FileType.TEMPORARY);
-    }
-
-    @VisibleForTesting
-    static Set<File> listFiles(CFMetaData metadata, File folder, boolean forceNonAtomicListing, FileType ... types)
+    static Set<File> listFiles(CFMetaData metadata, File folder, FileType ... types)
     {
         Collection<FileType> match = Arrays.asList(types);
         List<File> directories = new Directories(metadata).getCFDirectories();

@@ -563,7 +563,7 @@ public class Directories
         /** Throw the exception */
         THROW,
 
-        /** Ignore the txn log file */
+        /** Ignore the problematic parts of the txn log file */
         IGNORE
     }
 
