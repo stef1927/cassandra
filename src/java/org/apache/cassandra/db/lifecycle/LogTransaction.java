@@ -191,7 +191,7 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
     }
 
     @VisibleForTesting
-    LogFile getData()
+    LogFile getLogFile()
     {
         return data;
     }

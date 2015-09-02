@@ -12,6 +12,7 @@ import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Throwables;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -116,7 +117,7 @@ final class LogAwareFileLister
         if (err != null)
         {
             if (onTxnErr == OnTxnErr.THROW)
-                throw err;
+                throw Throwables.propagate(err);
 
             logger.error("Failed to read temporary files of txn {}: {}", txn, err.getMessage());
         }

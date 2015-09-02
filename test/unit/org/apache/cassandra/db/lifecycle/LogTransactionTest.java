@@ -133,7 +133,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
             {
                 assertFiles(txnLogs.getDataFolder(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(),
                                                                                       sstableOld.getAllFilePaths(),
-                                                                                      Collections.singleton(txnLogs.getData().getLogFile().file.getPath()))));
+                                                                                      Collections.singleton(txnLogs.getLogFile().file.getPath()))));
             }
 
             void assertPrepared() throws Exception
@@ -339,7 +339,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
         sstableNew.selfRef().release();
         sstableOld.selfRef().release();
 
-        Assert.assertEquals(tmpFiles, LogTransaction.getTemporaryFiles(cfs.metadata, sstableNew.descriptor.directory));
+        Assert.assertEquals(tmpFiles, LogAwareFileLister.getTemporaryFiles(cfs.metadata, sstableNew.descriptor.directory));
 
         // normally called at startup
         LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
@@ -372,14 +372,14 @@ public class LogTransactionTest extends AbstractTransactionalTest
         LogTransaction.SSTableTidier tidier = log.obsoleted(sstableOld);
 
         //Fake a commit
-        log.getData().getLogFile().commit();
+        log.getLogFile().commit();
 
         Set<File> tmpFiles = Sets.newHashSet(Iterables.concat(sstableOld.getAllFilePaths().stream().map(File::new).collect(Collectors.toList())));
 
         sstableNew.selfRef().release();
         sstableOld.selfRef().release();
 
-        Assert.assertEquals(tmpFiles, LogTransaction.getTemporaryFiles(cfs.metadata, sstableOld.descriptor.directory));
+        Assert.assertEquals(tmpFiles, LogAwareFileLister.getTemporaryFiles(cfs.metadata, sstableOld.descriptor.directory));
 
         // normally called at startup
         LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
@@ -405,7 +405,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
 
         File dataFolder = sstable1.descriptor.directory;
 
-        Set<File> tmpFiles = LogTransaction.getTemporaryFiles(cfs.metadata, dataFolder);
+        Set<File> tmpFiles = LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder);
         assertNotNull(tmpFiles);
         assertEquals(0, tmpFiles.size());
 
@@ -426,7 +426,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
         int numNewFiles = afterSecondSSTable.length - beforeSecondSSTable.length;
         assertEquals(numNewFiles - 1, sstable2.getAllFilePaths().size()); // new files except for transaction log file
 
-        tmpFiles = LogTransaction.getTemporaryFiles(cfs.metadata, dataFolder);
+        tmpFiles = LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder);
         assertNotNull(tmpFiles);
         assertEquals(numNewFiles - 1, tmpFiles.size());
 
@@ -450,7 +450,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
         log.finish();
 
         //Now it should be empty since the transaction has finished
-        tmpFiles = LogTransaction.getTemporaryFiles(cfs.metadata, dataFolder);
+        tmpFiles = LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder);
         assertNotNull(tmpFiles);
         assertEquals(0, tmpFiles.size());
 
@@ -468,7 +468,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
     {
         testCorruptRecord((t, s) ->
                           { // Fake a commit with invalid checksum
-                              FileUtils.append(t.getData().getLogFile().file,
+                              FileUtils.append(t.getLogFile().file,
                                                String.format("commit:[%d,0,0][%d]",
                                                              System.currentTimeMillis(),
                                                              12345678L));
@@ -481,12 +481,12 @@ public class LogTransactionTest extends AbstractTransactionalTest
     {
         testCorruptRecord((t, s) ->
                           { // Fake two lines with invalid checksum
-                              FileUtils.append(t.getData().getLogFile().file,
+                              FileUtils.append(t.getLogFile().file,
                                                String.format("add:[ma-3-big,%d,4][%d]",
                                                              System.currentTimeMillis(),
                                                              12345678L));
 
-                              FileUtils.append(t.getData().getLogFile().file,
+                              FileUtils.append(t.getLogFile().file,
                                                String.format("commit:[%d,0,0][%d]",
                                                              System.currentTimeMillis(),
                                                              12345678L));
@@ -504,12 +504,12 @@ public class LogTransactionTest extends AbstractTransactionalTest
                                   if (filePath.endsWith("Data.db"))
                                   {
                                       assertTrue(FileUtils.delete(filePath));
-                                      t.getData().sync();
+                                      t.getLogFile().sync();
                                       break;
                                   }
                               }
 
-                              FileUtils.append(t.getData().getLogFile().file,
+                              FileUtils.append(t.getLogFile().file,
                                                String.format("commit:[%d,0,0][%d]",
                                                              System.currentTimeMillis(),
                                                              12345678L));
@@ -522,7 +522,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
     {
         testCorruptRecord((t, s) ->
                           { // Fake a commit with invalid checksum and a wrong record format (extra spaces)
-                              FileUtils.append(t.getData().getLogFile().file,
+                              FileUtils.append(t.getLogFile().file,
                                                String.format("commit:[%d ,0 ,0 ][%d]",
                                                              System.currentTimeMillis(),
                                                              12345678L));
@@ -536,7 +536,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
         testCorruptRecord((t, s) ->
                           {
                               // Fake a commit without a checksum
-                              FileUtils.append(t.getData().getLogFile().file,
+                              FileUtils.append(t.getLogFile().file,
                                                String.format("commit:[%d,0,0]",
                                                              System.currentTimeMillis()));
                           },
@@ -548,11 +548,11 @@ public class LogTransactionTest extends AbstractTransactionalTest
     {
         testCorruptRecord((t, s) ->
                           { // Fake two lines without a checksum
-                              FileUtils.append(t.getData().getLogFile().file,
+                              FileUtils.append(t.getLogFile().file,
                                                String.format("add:[ma-3-big,%d,4]",
                                                              System.currentTimeMillis()));
 
-                              FileUtils.append(t.getData().getLogFile().file,
+                              FileUtils.append(t.getLogFile().file,
                                                String.format("commit:[%d,0,0]",
                                                              System.currentTimeMillis()));
                           },
@@ -577,7 +577,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
         // Modify the transaction log or disk state for sstableOld
         modifier.accept(log, sstableOld);
 
-        String txnFilePath = log.getData().getLogFile().file.getPath();
+        String txnFilePath = log.getLogFile().file.getPath();
 
         assertNull(log.complete(null));
 
@@ -586,7 +586,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
 
         //This should filter as completed but make sure to exclude files that were deleted by the modifier
         assertFiles(Iterables.concat(sstableOld.getAllFilePaths().stream().filter(p -> new File(p).exists()).collect(Collectors.toList())),
-                    LogTransaction.getTemporaryFiles(cfs.metadata, dataFolder));
+                    LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder));
 
         if (isRecoverable)
         { // the corruption is recoverable, we assume there is a commit record
@@ -603,7 +603,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
             try
             {
                 //This should throw a RuntimeException
-                new LogTransaction.FileLister(dataFolder.toPath(),
+                new LogAwareFileLister(dataFolder.toPath(),
                                               (file, type) -> type != Directories.FileType.FINAL,
                                               Directories.OnTxnErr.THROW).list();
                 fail("Expected exception");
@@ -655,7 +655,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
         modifier.accept(sstableOld);
 
         //Fake a commit
-        log.getData().getLogFile().commit();
+        log.getLogFile().commit();
 
         //This should not remove the old files
         LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
@@ -663,7 +663,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
         assertFiles(log.getDataFolder(), Sets.newHashSet(Iterables.concat(
                                                                                     sstableNew.getAllFilePaths(),
                                                                                     sstableOld.getAllFilePaths(),
-                                                                                    Collections.singleton(log.getData().getLogFile().file.getPath()))));
+                                                                                    Collections.singleton(log.getLogFile().file.getPath()))));
 
         sstableOld.selfRef().release();
         sstableNew.selfRef().release();
@@ -674,7 +674,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
         assertFiles(log.getDataFolder(), Sets.newHashSet(Iterables.concat(
                                                                                     sstableNew.getAllFilePaths(),
                                                                                     sstableOld.getAllFilePaths(),
-                                                                                    Collections.singleton(log.getData().getLogFile().file.getPath()))));
+                                                                                    Collections.singleton(log.getLogFile().file.getPath()))));
     }
 
     @Test
@@ -709,7 +709,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
         // It doesn't matter what it returns but it should not throw because the txn
         // was completed before deleting files (i.e. releasing sstables)
         for (int i = 0; i < 200; i++)
-            LogTransaction.getTemporaryFiles(cfs.metadata, dataFolder, forceNonAtomicListing);
+            LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder, forceNonAtomicListing);
     }
 
     @Test
@@ -734,7 +734,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
             // This should race with the asynchronous deletion of txn log files
             // it should throw because we are violating the requirement that a transaction must
             // finish before deleting files (i.e. releasing sstables)
-            LogTransaction.getTemporaryFiles(cfs.metadata, dataFolder);
+            LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder);
             fail("Expected runtime exception");
         }
         catch(RuntimeException e)
