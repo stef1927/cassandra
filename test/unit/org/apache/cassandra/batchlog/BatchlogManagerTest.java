@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import com.google.common.collect.Lists;
 import org.junit.*;
@@ -298,44 +299,22 @@ public class BatchlogManagerTest
         long initialReplayedBatches = BatchlogManager.instance.getTotalBatchesReplayed();
         CFMetaData cfm = Schema.instance.getCFMetaData(KEYSPACE1, CF_STANDARD4);
 
-        // Generate 1000 version 1.2 mutations and put them all into the batchlog.
-        // Half (500) ready to be replayed, half not.
-        for (int i = 0; i < 1000; i++)
+        // Generate 1400 version 2.0 mutations and put them all into the batchlog.
+        // Half ready to be replayed, half not.
+        for (int i = 0; i < 1400; i++)
         {
             Mutation mutation = new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), ByteBufferUtil.bytes(i))
                 .clustering("name" + i)
                 .add("val", "val" + i)
                 .build();
 
-            long timestamp = i < 500
-                           ? (System.currentTimeMillis() - BatchlogManager.getBatchlogTimeout())
-                           : (System.currentTimeMillis() + BatchlogManager.getBatchlogTimeout());
-
-
-            Mutation batchMutation = LegacyBatchlogMigrator.getStoreMutation(Batch.createLocal(UUID.randomUUID(),
-                                                                                            timestamp * 1000,
-                                                                                               Collections.singleton(mutation)),
-                                                                             MessagingService.VERSION_12);
-            assertTrue(LegacyBatchlogMigrator.isLegacyBatchlogMutation(batchMutation));
-            LegacyBatchlogMigrator.handleLegacyMutation(batchMutation);
-        }
-
-        // Add 400 version 2.0 mutations and put them all into the batchlog.
-        // Half (200) ready to be replayed, half not.
-        for (int i = 1000; i < 1400; i++)
-        {
-            Mutation mutation = new RowUpdateBuilder(cfm, FBUtilities.timestampMicros(), ByteBufferUtil.bytes(i))
-                .clustering("name" + i)
-                .add("val", "val" + i)
-                .build();
-
-            long timestamp = i < 1200
+            long timestamp = i < 700
                            ? (System.currentTimeMillis() - BatchlogManager.getBatchlogTimeout())
                            : (System.currentTimeMillis() + BatchlogManager.getBatchlogTimeout());
 
 
             Mutation batchMutation = LegacyBatchlogMigrator.getStoreMutation(Batch.createLocal(UUIDGen.getTimeUUID(timestamp, i),
-                                                                                            timestamp * 1000,
+                                                                                               TimeUnit.MILLISECONDS.toMicros(timestamp),
                                                                                                Collections.singleton(mutation)),
                                                                              MessagingService.VERSION_20);
             assertTrue(LegacyBatchlogMigrator.isLegacyBatchlogMutation(batchMutation));
@@ -384,7 +363,7 @@ public class BatchlogManagerTest
         {
             result = executeInternal(String.format("SELECT * FROM \"%s\".\"%s\" WHERE key = intAsBlob(%d)", KEYSPACE1, CF_STANDARD4, i));
             assertNotNull(result);
-            if (i < 500 || i >= 1000 && i < 1200 || i >= 1400 && i < 1450)
+            if (i < 700 || i >= 1400 && i < 1450)
             {
                 assertEquals(ByteBufferUtil.bytes(i), result.one().getBytes("key"));
                 assertEquals("name" + i, result.one().getString("name"));
