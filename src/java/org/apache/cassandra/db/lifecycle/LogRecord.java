@@ -87,9 +87,9 @@ final class LogRecord
         return new LogRecord(Type.ABORT, "", updateTime, 0, "");
     }
 
-    public static LogRecord make(Type type, String parentFolder, SSTable table)
+    public static LogRecord make(Type type, File parentFolder, SSTable table)
     {
-        String relativePath = FileUtils.getRelativePath(parentFolder, table.descriptor.baseFilename());
+        String relativePath = FileUtils.getRelativePath(parentFolder.getPath(), table.descriptor.baseFilename());
         // why do we take the max of files.size() and table.getAllFilePaths().size()?
         return make(type, getExistingFiles(parentFolder, relativePath), table.getAllFilePaths().size(), relativePath);
     }
@@ -139,17 +139,17 @@ final class LogRecord
         return record.getBytes(FileUtils.CHARSET);
     }
 
-    public List<File> getExistingFiles(String parentFolder)
+    public List<File> getExistingFiles(File folder)
     {
         if (!type.hasFile())
             return Collections.emptyList();
 
-        return getExistingFiles(parentFolder, relativeFilePath);
+        return getExistingFiles(folder, relativeFilePath);
     }
 
-    public static List<File> getExistingFiles(String parentFolder, String relativeFilePath)
+    public static List<File> getExistingFiles(File parentFolder, String relativeFilePath)
     {
-        return Arrays.asList(new File(parentFolder).listFiles((dir, name) -> name.startsWith(relativeFilePath)));
+        return Arrays.asList(parentFolder.listFiles((dir, name) -> name.startsWith(relativeFilePath)));
     }
 
     @Override

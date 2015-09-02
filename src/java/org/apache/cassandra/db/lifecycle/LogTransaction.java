@@ -110,7 +110,7 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
     }
 
     private final Tracker tracker;
-    private final LogData data;
+    private final LogFile data;
     private final Ref<LogTransaction> selfRef;
     // Deleting sstables is tricky because the mmapping might not have been finalized yet,
     // and delete will fail (on Windows) until it is (we only force the unmapping on SUN VMs).
@@ -136,10 +136,9 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
     LogTransaction(OperationType opType, File folder, Tracker tracker)
     {
         this.tracker = tracker;
-        this.data = new LogData(opType,
-                                        folder,
-                                        UUIDGen.getTimeUUID());
-        this.selfRef = new Ref<>(this, new TransactionTidier(data));
+        int folderDescriptor = CLibrary.tryOpenDirectory(folder.getPath());
+        this.data = new LogFile(opType, folder, folderDescriptor, UUIDGen.getTimeUUID());
+        this.selfRef = new Ref<>(this, new TransactionTidier(data, folderDescriptor));
 
         if (logger.isDebugEnabled())
             logger.debug("Created transaction logs with id {}", data.id);
@@ -150,7 +149,7 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
      **/
     void trackNew(SSTable table)
     {
-        if (!data.file.add(Type.ADD, table))
+        if (!data.add(Type.ADD, table))
             throw new IllegalStateException(table + " is already tracked as new");
     }
 
@@ -159,7 +158,7 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
      */
     void untrackNew(SSTable table)
     {
-        data.file.remove(Type.ADD, table);
+        data.remove(Type.ADD, table);
     }
 
     /**
@@ -167,15 +166,15 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
      */
     SSTableTidier obsoleted(SSTableReader reader)
     {
-        if (data.file.contains(Type.ADD, reader))
+        if (data.contains(Type.ADD, reader))
         {
-            if (data.file.contains(Type.REMOVE, reader))
+            if (data.contains(Type.REMOVE, reader))
                 throw new IllegalArgumentException();
 
             return new SSTableTidier(reader, true, this);
         }
 
-        if (!data.file.add(Type.REMOVE, reader))
+        if (!data.add(Type.REMOVE, reader))
             throw new IllegalStateException();
 
         if (tracker != null)
@@ -197,11 +196,11 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
     @VisibleForTesting
     String getDataFolder()
     {
-        return data.getFolder();
+        return data.folder.getPath();
     }
 
     @VisibleForTesting
-    LogData getData()
+    LogFile getData()
     {
         return data;
     }
@@ -234,11 +233,13 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
      */
     private static class TransactionTidier implements RefCounted.Tidy, Runnable
     {
-        private final LogData data;
+        private final LogFile data;
+        private final int folderDescriptor;
 
-        TransactionTidier(LogData data)
+        TransactionTidier(LogFile data, int folderDescriptor)
         {
             this.data = data;
+            this.folderDescriptor = folderDescriptor;
         }
 
         public void tidy() throws Exception
@@ -269,7 +270,8 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
             {
                 if (logger.isDebugEnabled())
                     logger.debug("Closing file transaction {}", name());
-                data.close();
+
+                CLibrary.tryCloseFD(folderDescriptor);
             }
         }
     }
@@ -373,13 +375,13 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
 
     protected Throwable doCommit(Throwable accumulate)
     {
-        data.file.commit();
+        data.commit();
         return complete(accumulate);
     }
 
     protected Throwable doAbort(Throwable accumulate)
     {
-        data.file.abort();
+        data.abort();
         return complete(accumulate);
     }
 
@@ -397,18 +399,16 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
 
         for (File dir : new Directories(metadata).getCFDirectories())
         {
-            File[] logs = dir.listFiles(LogData::isLogFile);
+            File[] logs = dir.listFiles(LogFile::isLogFile);
 
             for (File log : logs)
             {
-                try (LogData data = LogData.make(log))
-                {
-                    accumulate = data.verify(data.readLogFile(accumulate));
-                    if (accumulate == null)
-                        accumulate = data.removeUnfinishedLeftovers(null);
-                    else
-                        logger.error("Unexpected disk state: failed to read transaction log {}", log, accumulate);
-                }
+                LogFile data = LogFile.make(log);
+                accumulate = data.verify(data.readLogFile(accumulate));
+                if (accumulate == null)
+                    accumulate = data.removeUnfinishedLeftovers(null);
+                else
+                    logger.error("Unexpected disk state: failed to read transaction log {}", log, accumulate);
             }
         }
 
@@ -466,7 +466,7 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
         {
             list(Files.newDirectoryStream(folder))
             .stream()
-            .filter((f) -> !LogData.isLogFile(f))
+            .filter((f) -> !LogFile.isLogFile(f))
             .forEach((f) -> files.put(f, FileType.FINAL));
 
             // Since many file systems are not atomic, we cannot be sure we have listed a consistent disk state
@@ -475,7 +475,7 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
             // after all other files are removed
             list(Files.newDirectoryStream(folder, '*' + LogFile.EXT))
             .stream()
-            .filter(LogData::isLogFile)
+            .filter(LogFile::isLogFile)
             .forEach(this::classifyFiles);
 
             // Finally we apply the user filter before returning our result
@@ -506,15 +506,13 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
          */
         void classifyFiles(File txnFile)
         {
-            try (LogData txn = LogData.make(txnFile))
-            {
-                readTxnLog(txn);
-                classifyFiles(txn);
-                files.put(txnFile, FileType.TXN_LOG);
-            }
+            LogFile txn = LogFile.make(txnFile);
+            readTxnLog(txn);
+            classifyFiles(txn);
+            files.put(txnFile, FileType.TXN_LOG);
         }
 
-        void readTxnLog(LogData txn)
+        void readTxnLog(LogFile txn)
         {
             Throwable err = txn.check(txn.readLogFile(null));
             if (err != null)
@@ -526,10 +524,8 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
             }
         }
 
-        void classifyFiles(LogData txn)
+        void classifyFiles(LogFile txnFile)
         {
-            LogFile txnFile = txn.file;
-
             Map<LogRecord, Set<File>> oldFiles = txnFile.getFilesOfType(files.navigableKeySet(), Type.REMOVE);
             Map<LogRecord, Set<File>> newFiles = txnFile.getFilesOfType(files.navigableKeySet(), Type.ADD);
 
@@ -549,13 +545,13 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
             // disk state again to resolve any previous races on non-atomic directory listing platforms
 
             // if txn file also gone, then do nothing (all temporary should be gone, we could remove them if any)
-            if (!txn.file.exists())
+            if (!txnFile.exists())
                 return;
 
             // otherwise read the file again to see if it is completed now
-            readTxnLog(txn);
+            readTxnLog(txnFile);
 
-            if (txn.completed())
+            if (txnFile.completed())
             { // if after re-reading the txn is completed then filter accordingly
                 filter(txnFile, oldFiles.values(), newFiles.values());
                 return;
@@ -566,7 +562,7 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
             // completed before obsoleting or aborting sstables)
             throw new RuntimeException(String.format("Failed to list directory files in %s, inconsistent disk state for transaction %s",
                                                      folder,
-                                                     txn));
+                                                     txnFile));
         }
 
         /** See if all files are present or if only the last record files are missing and it's a NEW record */

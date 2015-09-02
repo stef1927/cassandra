@@ -7,14 +7,21 @@ import java.util.regex.Pattern;
 import java.util.zip.CRC32;
 import java.util.zip.Checksum;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Iterables;
 
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.db.lifecycle.LogRecord.Type;
 import org.apache.cassandra.io.sstable.SSTable;
+import org.apache.cassandra.io.sstable.format.big.BigFormat;
 import org.apache.cassandra.io.util.FileUtils;
+import org.apache.cassandra.utils.CLibrary;
+
+import static org.apache.cassandra.utils.Throwables.merge;
 
 /**
  * The transaction log file, which contains many records.
@@ -29,15 +36,135 @@ final class LogFile
     static Pattern FILE_REGEX = Pattern.compile(String.format("^(.{2})_txn_(.*)_(.*)%s$", EXT));
     static Pattern LINE_REGEX = Pattern.compile("^(.*)\\[(\\d*)\\]$"); // *[checksum]
 
-    public final File file;
-    public final LogData parent;
-    public final Set<LogRecord> records = new LinkedHashSet<>();
-    public final Checksum checksum = new CRC32();
+    final File file;
+    final Set<LogRecord> records = new LinkedHashSet<>();
+    final Checksum checksum = new CRC32();
+    final OperationType opType;
+    final UUID id;
+    final File folder;
+    final int folderDescriptor;
 
-    LogFile(LogData parent)
+    static LogFile make(File logFile)
     {
-        this.file = new File(parent.getFileName());
-        this.parent = parent;
+        Matcher matcher = LogFile.FILE_REGEX.matcher(logFile.getName());
+        assert matcher.matches() && matcher.groupCount() == 3;
+
+        // For now we don't need this but it is there in case we need to change
+        // file format later on, the version is the sstable version as defined in BigFormat
+        //String version = matcher.group(1);
+
+        OperationType operationType = OperationType.fromFileName(matcher.group(2));
+        UUID id = UUID.fromString(matcher.group(3));
+
+        return new LogFile(operationType, logFile.getParentFile(), -1, id);
+    }
+
+    public Throwable readLogFile(Throwable accumulate)
+    {
+        try
+        {
+            readRecords();
+        }
+        catch (Throwable t)
+        {
+            accumulate = merge(accumulate, t);
+        }
+
+        return accumulate;
+    }
+
+    public Throwable verify(Throwable accumulate)
+    {
+        try
+        {
+            verifyRecords();
+        }
+        catch (Throwable t)
+        {
+            accumulate = merge(accumulate, t);
+        }
+
+        return accumulate;
+    }
+
+    public Throwable check(Throwable accumulate)
+    {
+        try
+        {
+            checkRecords();
+        }
+        catch (Throwable t)
+        {
+            accumulate = merge(accumulate, t);
+        }
+
+        return accumulate;
+    }
+
+    void sync()
+    {
+        if (folderDescriptor > 0)
+            CLibrary.trySync(folderDescriptor);
+    }
+
+    OperationType getType()
+    {
+        return opType;
+    }
+
+    UUID getId()
+    {
+        return id;
+    }
+
+    Throwable removeUnfinishedLeftovers(Throwable accumulate)
+    {
+        try
+        {
+            if (committed())
+                deleteRecords(Type.REMOVE);
+            else
+                deleteRecords(Type.ADD);
+
+            // we sync the parent file descriptor between contents and log deletion
+            // to ensure there is a happens before edge between them
+            sync();
+
+            file.delete();
+        }
+        catch (Throwable t)
+        {
+            accumulate = merge(accumulate, t);
+        }
+
+        return accumulate;
+    }
+
+    static String getFileName(File folder, OperationType opType, UUID id)
+    {
+        String fileName = StringUtils.join(BigFormat.latestVersion,
+                                           LogFile.SEP,
+                                           "txn",
+                                           LogFile.SEP,
+                                           opType.fileName,
+                                           LogFile.SEP,
+                                           id.toString(),
+                                           LogFile.EXT);
+        return StringUtils.join(folder, File.separator, fileName);
+    }
+
+    static boolean isLogFile(File file)
+    {
+        return LogFile.FILE_REGEX.matcher(file.getName()).matches();
+    }
+
+    LogFile(OperationType opType, File folder, int folderDescriptor, UUID id)
+    {
+        this.opType = opType;
+        this.id = id;
+        this.folder = folder;
+        this.file = new File(getFileName(folder, opType, id));
+        this.folderDescriptor = folderDescriptor;
     }
 
     public void readRecords()
@@ -73,7 +200,7 @@ final class LogFile
         {
             if (record.hasError())
                 throw new LogTransaction.CorruptTransactionLogException(String.format("Record of transaction %s is corrupt [%s], aborting",
-                                                                           parent.getId(),
+                                                                           id,
                                                                            record.error), this);
         }
     }
@@ -89,7 +216,7 @@ final class LogFile
 
         LogRecord failedOn = firstInvalid.get();
         if (getLastRecord() != failedOn)
-            throw new LogTransaction.CorruptTransactionLogException(String.format("Non-last record of transaction %s is corrupt [%s]; unexpected disk state, aborting", parent.getId(), failedOn.error), this);
+            throw new LogTransaction.CorruptTransactionLogException(String.format("Non-last record of transaction %s is corrupt [%s]; unexpected disk state, aborting", id, failedOn.error), this);
 
         for (LogRecord r : records)
         {
@@ -109,7 +236,7 @@ final class LogFile
 
                 throw new LogTransaction.CorruptTransactionLogException(String.format("Last record of transaction %s is corrupt [%s] and at least " +
                                                                            "one previous record does not match state on disk, unexpected disk state, aborting",
-                                                                           parent.getId(),
+                                                                           id,
                                                                            failedOn.error),
                                                              this);
             }
@@ -117,7 +244,7 @@ final class LogFile
             // if only the last record is corrupt and all other records have matching files on disk, @see verifyRecord,
             // then we simply exited whilst serializing the last record and we carry on
             logger.warn(String.format("Last record of transaction %s is corrupt or incomplete [%s], but all previous records match state on disk; continuing",
-                                      parent.getId(),
+                                      id,
                                       failedOn.error));
         }
     }
@@ -135,7 +262,7 @@ final class LogFile
         if (record.type != Type.REMOVE)
             return true;
 
-        List<File> files = record.getExistingFiles(parent.getFolder());
+        List<File> files = record.getExistingFiles(folder);
 
         // Paranoid sanity checks: we create another record by looking at the files as they are
         // on disk right now and make sure the information still matches
@@ -191,7 +318,7 @@ final class LogFile
     private LogRecord makeRecord(Type type, SSTable table)
     {
         assert type == Type.ADD || type == Type.REMOVE;
-        return LogRecord.make(type, parent.getFolder(), table);
+        return LogRecord.make(type, folder, table);
     }
 
     private boolean addRecord(LogRecord record)
@@ -205,7 +332,7 @@ final class LogFile
 
         FileUtils.append(file, String.format("%s[%d]", record, checksum.getValue()));
 
-        parent.sync();
+        sync();
         return true;
     }
 
@@ -235,7 +362,7 @@ final class LogFile
 
     private void deleteRecord(LogRecord record)
     {
-        List<File> files = record.getExistingFiles(parent.getFolder());
+        List<File> files = record.getExistingFiles(folder);
         if (files.isEmpty())
             return; // Files no longer exist, nothing to do
 
@@ -275,7 +402,7 @@ final class LogFile
     private Set<File> getRecordFiles(NavigableSet<File> files, LogRecord record)
     {
         Set<File> ret = new HashSet<>();
-        for (File file : files.tailSet(new File(parent.getFolder(), record.relativeFilePath)))
+        for (File file : files.tailSet(new File(folder, record.relativeFilePath)))
         {
             if (file.getName().startsWith(record.relativeFilePath))
                 ret.add(file);
@@ -298,7 +425,7 @@ final class LogFile
     @Override
     public String toString()
     {
-        return FileUtils.getRelativePath(parent.getFolder(), FileUtils.getCanonicalPath(file));
+        return FileUtils.getRelativePath(folder.getPath(), FileUtils.getCanonicalPath(file));
     }
 }
 
