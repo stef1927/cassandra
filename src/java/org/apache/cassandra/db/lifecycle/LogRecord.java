@@ -1,18 +1,17 @@
 package org.apache.cassandra.db.lifecycle;
 
 import java.io.File;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.CRC32;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.util.FileUtils;
+import org.apache.cassandra.utils.FBUtilities;
 
 /**
  * A log file record, each record is encoded in one line and has different
@@ -51,40 +50,40 @@ final class LogRecord
     public final String relativeFilePath;
     public final long updateTime;
     public final int numFiles;
-    public final String record;
+    public final String raw;
+    public final int checksum;
 
-    public String error;
+    public List<String> error;
     public LogRecord onDiskRecord;
 
-    static String REGEX_STR = "^(add|remove|commit|abort):\\[([^,]*),?([^,]*),?([^,]*)\\]$";
-    static Pattern REGEX = Pattern.compile(REGEX_STR, Pattern.CASE_INSENSITIVE); // (add|remove|commit|abort):[*,*,*]
+    // (add|remove|commit|abort):[*,*,*][checksum]
+    static Pattern REGEX = Pattern.compile("^(add|remove|commit|abort):\\[([^,]*),?([^,]*),?([^,]*)\\]\\[(\\d*)\\]$", Pattern.CASE_INSENSITIVE);
 
-    public static LogRecord make(String record)
+    public static LogRecord make(String line)
     {
         try
         {
-            Matcher matcher = REGEX.matcher(record);
+            Matcher matcher = REGEX.matcher(line);
             if (!matcher.matches())
-                throw new IllegalStateException("Corrupted record; does not match expected pattern " + REGEX_STR);
+                return new LogRecord(Type.UNKNOWN, "", 0, 0, 0, line);
 
             Type type = Type.fromPrefix(matcher.group(1));
-            return new LogRecord(type, matcher.group(2), Long.valueOf(matcher.group(3)), Integer.valueOf(matcher.group(4)), record);
+            return new LogRecord(type, matcher.group(2), Long.valueOf(matcher.group(3)), Integer.valueOf(matcher.group(4)), Integer.valueOf(matcher.group(5)), line);
         }
         catch (Throwable t)
         {
-            logger.debug("Failed to create record {}", record, t);
-            return new LogRecord(Type.UNKNOWN, "", 0, 0, record).error(t);
+            return new LogRecord(Type.UNKNOWN, "", 0, 0, 0, line).error(t);
         }
     }
 
     public static LogRecord makeCommit(long updateTime)
     {
-        return new LogRecord(Type.COMMIT, "", updateTime, 0, "");
+        return new LogRecord(Type.COMMIT, "", updateTime, 0);
     }
 
     public static LogRecord makeAbort(long updateTime)
     {
-        return new LogRecord(Type.ABORT, "", updateTime, 0, "");
+        return new LogRecord(Type.ABORT, "", updateTime, 0);
     }
 
     public static LogRecord make(Type type, File parentFolder, SSTable table)
@@ -97,20 +96,39 @@ final class LogRecord
     public static LogRecord make(Type type, List<File> files, int minFiles, String relativeFilePath)
     {
         long lastModified = files.stream().map(File::lastModified).reduce(0L, Long::max);
-        return new LogRecord(type, relativeFilePath, lastModified, Math.max(minFiles, files.size()), "");
+        return new LogRecord(type, relativeFilePath, lastModified, Math.max(minFiles, files.size()));
     }
 
     private LogRecord(Type type,
                       String relativeFilePath,
                       long updateTime,
+                      int numFiles)
+    {
+        this(type, relativeFilePath, updateTime, numFiles, 0, null);
+    }
+
+        private LogRecord(Type type,
+                      String relativeFilePath,
+                      long updateTime,
                       int numFiles,
-                      String record)
+                      int checksum,
+                      String raw)
     {
         this.type = type;
         this.relativeFilePath = type.hasFile() ? relativeFilePath : ""; // only meaningful for file records
         this.updateTime = type == Type.REMOVE ? updateTime : 0; // only meaningful for old records
         this.numFiles = type.hasFile() ? numFiles : 0; // only meaningful for file records
-        this.record = record.isEmpty() ? format() : record;
+        if (raw == null)
+        {
+            assert checksum == 0;
+            this.checksum = computeChecksum();
+            this.raw = format();
+        }
+        else
+        {
+            this.checksum = checksum;
+            this.raw = raw;
+        }
     }
 
     public LogRecord error(Throwable t)
@@ -120,7 +138,9 @@ final class LogRecord
 
     public LogRecord error(String error)
     {
-        this.error = error;
+        if (this.error == null)
+            this.error = new ArrayList<>();
+        this.error.add(error);
         return this;
     }
 
@@ -131,12 +151,7 @@ final class LogRecord
 
     private String format()
     {
-        return String.format("%s:[%s,%d,%d]", type.toString(), relativeFilePath, updateTime, numFiles);
-    }
-
-    public byte[] getBytes()
-    {
-        return record.getBytes(FileUtils.CHARSET);
+        return String.format("%s:[%s,%d,%d][%d]", type.toString(), relativeFilePath, updateTime, numFiles, checksum);
     }
 
     public List<File> getExistingFiles(File folder)
@@ -178,6 +193,17 @@ final class LogRecord
     @Override
     public String toString()
     {
-        return record;
+        return raw;
+    }
+
+    private int computeChecksum()
+    {
+        CRC32 crc32 = new CRC32();
+        crc32.update(relativeFilePath.getBytes(FileUtils.CHARSET));
+        crc32.update(type.toString().getBytes(FileUtils.CHARSET));
+        FBUtilities.updateChecksumInt(crc32, (int) updateTime);
+        FBUtilities.updateChecksumInt(crc32, (int) (updateTime >>> 32));
+        FBUtilities.updateChecksumInt(crc32, numFiles);
+        return (int) crc32.getValue();
     }
 }

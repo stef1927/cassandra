@@ -4,10 +4,7 @@ import java.io.File;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.zip.CRC32;
-import java.util.zip.Checksum;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Iterables;
 
 import org.apache.commons.lang3.StringUtils;
@@ -34,11 +31,9 @@ final class LogFile
     static char SEP = '_';
     // cc_txn_opname_id.log (where cc is one of the sstable versions defined in BigVersion)
     static Pattern FILE_REGEX = Pattern.compile(String.format("^(.{2})_txn_(.*)_(.*)%s$", EXT));
-    static Pattern LINE_REGEX = Pattern.compile("^(.*)\\[(\\d*)\\]$"); // *[checksum]
 
     final File file;
     final Set<LogRecord> records = new LinkedHashSet<>();
-    final Checksum checksum = new CRC32();
     final OperationType opType;
     final UUID id;
     final File folder;
@@ -121,10 +116,7 @@ final class LogFile
     {
         try
         {
-            if (committed())
-                deleteRecords(Type.REMOVE);
-            else
-                deleteRecords(Type.ADD);
+            deleteRecords(committed() ? Type.REMOVE : Type.ADD);
 
             // we sync the parent file descriptor between contents and log deletion
             // to ensure there is a happens before edge between them
@@ -138,19 +130,6 @@ final class LogFile
         }
 
         return accumulate;
-    }
-
-    static String getFileName(File folder, OperationType opType, UUID id)
-    {
-        String fileName = StringUtils.join(BigFormat.latestVersion,
-                                           LogFile.SEP,
-                                           "txn",
-                                           LogFile.SEP,
-                                           opType.fileName,
-                                           LogFile.SEP,
-                                           id.toString(),
-                                           LogFile.EXT);
-        return StringUtils.join(folder, File.separator, fileName);
     }
 
     static boolean isLogFile(File file)
@@ -169,29 +148,10 @@ final class LogFile
 
     public void readRecords()
     {
-        records.clear();
-        checksum.reset();
-
-        FileUtils.readLines(file).forEach(line -> records.add(readRecord(line)));
-    }
-
-    private LogRecord readRecord(String line)
-    {
-        Matcher matcher = LINE_REGEX.matcher(line);
-        if (!matcher.matches())
-        {
-            return LogRecord.make(line).error(String.format("Failed to parse checksum in line '%s'", line));
-        }
-
-        LogRecord record = LogRecord.make(matcher.group(1));
-
-        byte[] bytes = matcher.group(1).getBytes(FileUtils.CHARSET);
-        checksum.update(bytes, 0, bytes.length);
-
-        if (checksum.getValue() != Long.valueOf(matcher.group(2)))
-            record.error(String.format("invalid line checksum %s for '%s'", matcher.group(2), line));
-
-        return record;
+        assert records.isEmpty();
+        FileUtils.readLines(file).stream()
+                 .map(LogRecord::make)
+                 .forEach(records::add);
     }
 
     public void checkRecords()
@@ -238,7 +198,7 @@ final class LogFile
                                                                            "one previous record does not match state on disk, unexpected disk state, aborting",
                                                                            id,
                                                                            failedOn.error),
-                                                             this);
+                                                                        this);
             }
 
             // if only the last record is corrupt and all other records have matching files on disk, @see verifyRecord,
@@ -249,18 +209,13 @@ final class LogFile
         }
     }
 
-    boolean isInvalid(LogRecord record)
-    {
-        return !verifyRecord(record);
-    }
-
-    public boolean verifyRecord(LogRecord record)
+    public boolean isInvalid(LogRecord record)
     {
         if (record.hasError())
-            return false;
+            return true;
 
         if (record.type != Type.REMOVE)
-            return true;
+            return false;
 
         List<File> files = record.getExistingFiles(folder);
 
@@ -277,10 +232,10 @@ final class LogFile
                          new Date(record.updateTime));
 
             record.error("Failed to verify: unexpected sstable files");
-            return false;
+            return true;
         }
 
-        return true;
+        return false;
     }
 
     public void commit()
@@ -310,9 +265,10 @@ final class LogFile
         return committed() || aborted();
     }
 
-    public boolean add(Type type, SSTable table)
+    public void add(Type type, SSTable table)
     {
-        return addRecord(makeRecord(type, table));
+        if (!addRecord(makeRecord(type, table)))
+            throw new IllegalStateException();
     }
 
     private LogRecord makeRecord(Type type, SSTable table)
@@ -327,11 +283,7 @@ final class LogFile
             return false;
 
         // we only checksum the records, not the checksums themselves
-        byte[] bytes = record.getBytes();
-        checksum.update(bytes, 0, bytes.length);
-
-        FileUtils.append(file, String.format("%s[%d]", record, checksum.getValue()));
-
+        FileUtils.append(file, record.toString());
         sync();
         return true;
     }
@@ -363,8 +315,6 @@ final class LogFile
     private void deleteRecord(LogRecord record)
     {
         List<File> files = record.getExistingFiles(folder);
-        if (files.isEmpty())
-            return; // Files no longer exist, nothing to do
 
         // we sort the files in ascending update time order so that the last update time
         // stays the same even if we only partially delete files
@@ -404,10 +354,9 @@ final class LogFile
         Set<File> ret = new HashSet<>();
         for (File file : files.tailSet(new File(folder, record.relativeFilePath)))
         {
-            if (file.getName().startsWith(record.relativeFilePath))
-                ret.add(file);
-            else
+            if (!file.getName().startsWith(record.relativeFilePath))
                 break;
+            ret.add(file);
         }
         return ret;
     }
@@ -425,7 +374,20 @@ final class LogFile
     @Override
     public String toString()
     {
-        return FileUtils.getRelativePath(folder.getPath(), FileUtils.getCanonicalPath(file));
+        return FileUtils.getRelativePath(folder.getPath(), file.getPath());
+    }
+
+    static String getFileName(File folder, OperationType opType, UUID id)
+    {
+        String fileName = StringUtils.join(BigFormat.latestVersion,
+                                           LogFile.SEP,
+                                           "txn",
+                                           LogFile.SEP,
+                                           opType.fileName,
+                                           LogFile.SEP,
+                                           id.toString(),
+                                           LogFile.EXT);
+        return StringUtils.join(folder, File.separator, fileName);
     }
 }
 

@@ -320,16 +320,16 @@ public class FileUtils
     }
 
     /** Convert absolute path into a path relative to the base path */
-    public static String getRelativePath(String basePath, String absolutePath)
+    public static String getRelativePath(String basePath, String path)
     {
         try
         {
-            return Paths.get(basePath).relativize(Paths.get(absolutePath)).toString();
+            return Paths.get(basePath).relativize(Paths.get(path)).toString();
         }
         catch(Exception ex)
         {
             String absDataPath = FileUtils.getCanonicalPath(basePath);
-            return Paths.get(absDataPath).relativize(Paths.get(absolutePath)).toString();
+            return Paths.get(absDataPath).relativize(Paths.get(path)).toString();
         }
     }
 

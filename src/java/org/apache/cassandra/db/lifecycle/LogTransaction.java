@@ -140,8 +140,7 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
      **/
     void trackNew(SSTable table)
     {
-        if (!data.add(Type.ADD, table))
-            throw new IllegalStateException(table + " is already tracked as new");
+        data.add(Type.ADD, table);
     }
 
     /**
@@ -165,8 +164,7 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
             return new SSTableTidier(reader, true, this);
         }
 
-        if (!data.add(Type.REMOVE, reader))
-            throw new IllegalStateException();
+        data.add(Type.REMOVE, reader);
 
         if (tracker != null)
             tracker.notifyDeleting(reader);
