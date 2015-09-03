@@ -399,21 +399,29 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
     {
         for (File dir : new Directories(metadata).getCFDirectories())
         {
-            File[] logs = dir.listFiles(LogFile::isLogFile);
-
-            for (File log : logs)
+            int folderDescriptor = CLibrary.tryOpenDirectory(dir.getPath());
+            try
             {
-                LogFile data = LogFile.make(log);
-                data.readRecords();
-                if (data.verify())
+                File[] logs = dir.listFiles(LogFile::isLogFile);
+
+                for (File log : logs)
                 {
-                    Throwable failure = data.removeUnfinishedLeftovers(null);
-                    logger.error("Failed to remove unfinished transaction leftovers for log {}", log, failure);
+                    LogFile data = LogFile.make(log, folderDescriptor);
+                    data.readRecords();
+                    if (data.verify())
+                    {
+                        Throwable failure = data.removeUnfinishedLeftovers(null);
+                        logger.error("Failed to remove unfinished transaction leftovers for log {}", log, failure);
+                    }
+                    else
+                    {
+                        logger.error("Unexpected disk state: failed to read transaction log {}", log);
+                    }
                 }
-                else
-                {
-                    logger.error("Unexpected disk state: failed to read transaction log {}", log);
-                }
+            }
+            finally
+            {
+                CLibrary.tryCloseFD(folderDescriptor);
             }
         }
     }

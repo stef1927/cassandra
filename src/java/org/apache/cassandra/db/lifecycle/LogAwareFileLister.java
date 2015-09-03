@@ -104,7 +104,7 @@ final class LogAwareFileLister
      */
     void classifyFiles(File txnFile)
     {
-        LogFile txn = LogFile.make(txnFile);
+        LogFile txn = LogFile.make(txnFile, -1);
         readTxnLog(txn);
         classifyFiles(txn);
         files.put(txnFile, FileType.TXN_LOG);

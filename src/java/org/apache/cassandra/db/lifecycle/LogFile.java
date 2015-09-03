@@ -39,7 +39,7 @@ final class LogFile
     final File folder;
     final int folderDescriptor;
 
-    static LogFile make(File logFile)
+    static LogFile make(File logFile, int folderDescriptor)
     {
         Matcher matcher = LogFile.FILE_REGEX.matcher(logFile.getName());
         assert matcher.matches() && matcher.groupCount() == 3;
@@ -51,7 +51,7 @@ final class LogFile
         OperationType operationType = OperationType.fromFileName(matcher.group(2));
         UUID id = UUID.fromString(matcher.group(3));
 
-        return new LogFile(operationType, logFile.getParentFile(), -1, id);
+        return new LogFile(operationType, logFile.getParentFile(), folderDescriptor, id);
     }
 
     void sync()
