@@ -223,7 +223,7 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
     private static class TransactionTidier implements RefCounted.Tidy, Runnable
     {
         private final LogFile data;
-        private int folderDescriptor;
+        private final int folderDescriptor;
 
         TransactionTidier(LogFile data, int folderDescriptor)
         {
@@ -243,20 +243,6 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
 
         public void run()
         {
-            try
-            {
-                if (folderDescriptor >= 0)
-                    CLibrary.tryCloseFD(folderDescriptor);
-            }
-            catch (Throwable t)
-            {
-                logger.warn("Failed to close file descriptor for {}: {}", data.folder, t);
-            }
-            finally
-            {
-                folderDescriptor = -1;
-            }
-
             if (logger.isDebugEnabled())
                 logger.debug("Removing files for transaction {}", name());
 
@@ -273,7 +259,7 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
             {
                 if (logger.isDebugEnabled())
                     logger.debug("Closing file transaction {}", name());
-
+                CLibrary.tryCloseFD(folderDescriptor);
             }
         }
     }

@@ -191,8 +191,8 @@ final class LogAwareFileLister
         directories.add(folder);
         return directories.stream()
                           .flatMap((dir) -> new LogAwareFileLister(dir.toPath(),
-                                                           (file, type) -> match.contains(type),
-                                                           OnTxnErr.IGNORE).list().stream())
+                                                                   (file, type) -> match.contains(type),
+                                                                   OnTxnErr.IGNORE).list().stream())
                           .collect(Collectors.toSet());
     }
 }
