@@ -24,32 +24,29 @@ import java.util.Map;
 
 import com.google.common.collect.ImmutableMap;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.apache.cassandra.concurrent.Stage;
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.db.monitoring.ConstructionTime;
+import org.apache.cassandra.db.monitoring.MonitorableImpl;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataInputPlus;
 import org.apache.cassandra.io.util.FileUtils;
-import org.apache.cassandra.utils.concurrent.OpState;
 
 public class MessageIn<T>
 {
-    private static final Logger logger = LoggerFactory.getLogger(MessageIn.class);
-
     public final InetAddress from;
     public final T payload;
     public final Map<String, byte[]> parameters;
     public final MessagingService.Verb verb;
     public final int version;
-    public final MessageTimestamp constructionTime;
+    public final ConstructionTime constructionTime;
 
     private MessageIn(InetAddress from,
                       T payload,
                       Map<String, byte[]> parameters,
                       MessagingService.Verb verb,
                       int version,
-                      MessageTimestamp constructionTime)
+                      ConstructionTime constructionTime)
     {
         this.from = from;
         this.payload = payload;
@@ -64,17 +61,17 @@ public class MessageIn<T>
                                           Map<String, byte[]> parameters,
                                           MessagingService.Verb verb,
                                           int version,
-                                          MessageTimestamp constructionTime)
+                                          ConstructionTime constructionTime)
     {
         return new MessageIn<>(from, payload, parameters, verb, version, constructionTime);
     }
 
     public static <T2> MessageIn<T2> read(DataInputPlus in, int version, int id) throws IOException
     {
-        return read(in, version, id, new MessageTimestamp());
+        return read(in, version, id, new ConstructionTime());
     }
 
-    public static <T2> MessageIn<T2> read(DataInputPlus in, int version, int id, MessageTimestamp constructionTime) throws IOException
+    public static <T2> MessageIn<T2> read(DataInputPlus in, int version, int id, ConstructionTime constructionTime) throws IOException
     {
         InetAddress from = CompactEndpointSerializationHelper.deserialize(in);
 
@@ -113,33 +110,17 @@ public class MessageIn<T>
         }
         if (payloadSize == 0 || serializer == null)
             return create(from, null, parameters, verb, version, constructionTime);
+
         T2 payload = serializer.deserialize(in, version);
         return MessageIn.create(from, payload, parameters, verb, version, constructionTime);
     }
 
-    public final static class MessageTimestamp
+    public static ConstructionTime createTimestamp()
     {
-        public final long timestamp;
-        public final boolean isCrossNode;
-
-        private MessageTimestamp()
-        {
-            this(System.currentTimeMillis(), false);
-        }
-
-        private MessageTimestamp(long timestamp, boolean isCrossNode)
-        {
-            this.timestamp = timestamp;
-            this.isCrossNode = isCrossNode;
-        }
+        return new ConstructionTime();
     }
 
-    public static MessageTimestamp createTimestamp()
-    {
-        return new MessageTimestamp();
-    }
-
-    public static MessageTimestamp readTimestamp(DataInputPlus input) throws IOException
+    public static ConstructionTime readTimestamp(DataInputPlus input) throws IOException
     {
         // make sure to readInt, even if cross_node_to is not enabled
         int partial = input.readInt();
@@ -147,11 +128,11 @@ public class MessageIn<T>
         {
             long timestamp = System.currentTimeMillis();
             long crossNodeTimestamp = (timestamp & 0xFFFFFFFF00000000L) | (((partial & 0xFFFFFFFFL) << 2) >> 2);
-            return new MessageTimestamp(crossNodeTimestamp, timestamp != crossNodeTimestamp);
+            return new ConstructionTime(crossNodeTimestamp, timestamp != crossNodeTimestamp);
         }
         else
         {
-            return new MessageTimestamp();
+            return new ConstructionTime();
         }
     }
 

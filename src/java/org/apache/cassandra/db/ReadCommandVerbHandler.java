@@ -17,10 +17,7 @@
  */
 package org.apache.cassandra.db;
 
-import java.util.concurrent.ScheduledFuture;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
+import org.apache.cassandra.db.monitoring.MonitorableThreadLocal;
 import org.apache.cassandra.db.partitions.UnfilteredPartitionIterator;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.net.IVerbHandler;
@@ -29,12 +26,12 @@ import org.apache.cassandra.net.MessageOut;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.tracing.Tracing;
-import org.apache.cassandra.utils.concurrent.OpMonitoring;
-import org.apache.cassandra.utils.concurrent.OpState;
 
 public class ReadCommandVerbHandler implements IVerbHandler<ReadCommand>
 {
-    private static final Logger logger = LoggerFactory.getLogger(ReadCommandVerbHandler.class);
+    private static final MonitorableThreadLocal monitoringTask = new MonitorableThreadLocal();
+
+    //submit task to monitoring thread
 
     protected IVersionedSerializer<ReadResponse> serializer()
     {
@@ -49,28 +46,33 @@ public class ReadCommandVerbHandler implements IVerbHandler<ReadCommand>
         }
 
         ReadCommand command = message.payload;
-        OpState state = new OpState(command.toCQLString());
-        ScheduledFuture<?> monitor = OpMonitoring.schedule(message.constructionTime.timestamp,
-                                                           message.getTimeout(),
-                                                           state);
-        ReadResponse response;
-        try (ReadExecutionController executionController = command.executionController(state);
-             UnfilteredPartitionIterator iterator = command.executeLocally(executionController))
+
+        try
         {
-            response = command.createResponse(iterator, command.columnFilter());
-        }
+            command.setMonitoringTime(message.constructionTime, message.getTimeout());
+            monitoringTask.update(command);
 
-        if (!state.complete())
+            ReadResponse response;
+            try (ReadExecutionController executionController = command.executionController();
+                 UnfilteredPartitionIterator iterator = command.executeLocally(executionController))
+            {
+                response = command.createResponse(iterator, command.columnFilter());
+            }
+
+            if (!command.state().complete())
+            {
+                Tracing.trace("Discarding partial response to {} (timed out)", message.from);
+                MessagingService.instance().incrementDroppedMessages(message);
+                return;
+            }
+
+            Tracing.trace("Enqueuing response to {}", message.from);
+            MessageOut<ReadResponse> reply = new MessageOut<>(MessagingService.Verb.REQUEST_RESPONSE, response, ReadResponse.serializer);
+            MessagingService.instance().sendReply(reply, id, message.from);
+        }
+        finally
         {
-            Tracing.trace("Discarding partial response to {} (timed out)", message.from);
-            MessagingService.instance().incrementDroppedMessages(message);
-            return;
+            monitoringTask.reset();
         }
-
-        monitor.cancel(false);
-
-        Tracing.trace("Enqueuing response to {}", message.from);
-        MessageOut<ReadResponse> reply = new MessageOut<>(MessagingService.Verb.REQUEST_RESPONSE, response, ReadResponse.serializer);
-        MessagingService.instance().sendReply(reply, id, message.from);
     }
 }

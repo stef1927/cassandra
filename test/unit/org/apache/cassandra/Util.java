@@ -42,6 +42,7 @@ import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.compaction.AbstractCompactionTask;
 import org.apache.cassandra.db.compaction.CompactionManager;
 import org.apache.cassandra.db.marshal.AbstractType;
+import org.apache.cassandra.db.monitoring.MonitoringStateRef;
 import org.apache.cassandra.db.partitions.*;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.dht.IPartitioner;
@@ -57,7 +58,6 @@ import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.CounterId;
 import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.concurrent.OpState;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -320,13 +320,8 @@ public class Util
 
     public static List<FilteredPartition> getAll(ReadCommand command)
     {
-        return getAll(command, new OpState());
-    }
-
-    public static List<FilteredPartition> getAll(ReadCommand command, OpState state)
-    {
         List<FilteredPartition> results = new ArrayList<>();
-        try (ReadExecutionController executionController = command.executionController(state);
+        try (ReadExecutionController executionController = command.executionController();
              PartitionIterator iterator = command.executeInternal(executionController))
         {
             while (iterator.hasNext())

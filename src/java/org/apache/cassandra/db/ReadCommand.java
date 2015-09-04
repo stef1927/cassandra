@@ -28,6 +28,10 @@ import org.slf4j.LoggerFactory;
 import org.apache.cassandra.config.*;
 import org.apache.cassandra.cql3.Operator;
 import org.apache.cassandra.db.filter.*;
+import org.apache.cassandra.db.monitoring.Monitorable;
+import org.apache.cassandra.db.monitoring.MonitorableImpl;
+import org.apache.cassandra.db.monitoring.MonitoringState;
+import org.apache.cassandra.db.monitoring.MonitoringStateRef;
 import org.apache.cassandra.db.partitions.*;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.dht.AbstractBounds;
@@ -45,7 +49,6 @@ import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Pair;
-import org.apache.cassandra.utils.concurrent.OpState;
 
 /**
  * General interface for storage-engine read commands (common to both range and
@@ -53,7 +56,7 @@ import org.apache.cassandra.utils.concurrent.OpState;
  * <p>
  * This contains all the informations needed to do a local read.
  */
-public abstract class ReadCommand implements ReadQuery
+public abstract class ReadCommand extends MonitorableImpl implements ReadQuery
 {
     private static final int TEST_ITERATION_DELAY_MILLIS = Integer.valueOf(System.getProperty("cassandra.test.read_iteration_delay_ms", "0"));
     protected static final Logger logger = LoggerFactory.getLogger(ReadCommand.class);
@@ -377,12 +380,7 @@ public abstract class ReadCommand implements ReadQuery
 
     public ReadExecutionController executionController()
     {
-        return executionController(new OpState());
-    }
-
-    public ReadExecutionController executionController(OpState state)
-    {
-        return ReadExecutionController.forCommand(this, state);
+        return ReadExecutionController.forCommand(this);
     }
 
     /**
@@ -478,7 +476,7 @@ public abstract class ReadCommand implements ReadQuery
         };
     }
 
-    protected UnfilteredPartitionIterator withStateTracking(UnfilteredPartitionIterator iter, final OpState state)
+    protected UnfilteredPartitionIterator withStateTracking(UnfilteredPartitionIterator iter, final MonitoringStateRef state)
     {
         return new WrappingUnfilteredPartitionIterator(iter)
         {
@@ -496,7 +494,7 @@ public abstract class ReadCommand implements ReadQuery
         };
     }
 
-    protected UnfilteredRowIterator withStateTracking(UnfilteredRowIterator iter, final OpState state)
+    protected UnfilteredRowIterator withStateTracking(UnfilteredRowIterator iter, final MonitoringStateRef state)
     {
         return new WrappingUnfilteredRowIterator(iter)
         {
@@ -560,6 +558,12 @@ public abstract class ReadCommand implements ReadQuery
         if (limits() != DataLimits.NONE)
             sb.append(' ').append(limits());
         return sb.toString();
+    }
+
+    // Monitorable interface
+    public String name()
+    {
+        return toCQLString();
     }
 
     private static class Serializer implements IVersionedSerializer<ReadCommand>

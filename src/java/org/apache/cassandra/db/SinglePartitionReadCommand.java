@@ -45,7 +45,7 @@ import org.apache.cassandra.service.StorageProxy;
 import org.apache.cassandra.service.pager.*;
 import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.utils.concurrent.OpOrder;
-import org.apache.cassandra.utils.concurrent.OpState;
+import org.apache.cassandra.db.monitoring.MonitoringStateRef;
 
 /**
  * A read command that selects a (part of a) single partition.
@@ -389,7 +389,7 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
      */
     public UnfilteredRowIterator queryMemtableAndDisk(ColumnFamilyStore cfs, OpOrder.Group readOp)
     {
-        return queryMemtableAndDiskInternal(cfs, new OpState());
+        return queryMemtableAndDiskInternal(cfs, new MonitoringStateRef());
     }
 
     public UnfilteredRowIterator queryMemtableAndDisk(ColumnFamilyStore cfs, ReadExecutionController executionController)
@@ -397,7 +397,7 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
         return queryMemtableAndDiskInternal(cfs, executionController.state());
     }
 
-    private UnfilteredRowIterator queryMemtableAndDiskInternal(ColumnFamilyStore cfs, OpState state)
+    private UnfilteredRowIterator queryMemtableAndDiskInternal(ColumnFamilyStore cfs, MonitoringStateRef state)
     {
         Tracing.trace("Executing single-partition query on {}", cfs.name);
 
@@ -405,7 +405,7 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
         return queryMemtableAndDiskInternal(cfs, copyOnHeap, state);
     }
 
-    protected abstract UnfilteredRowIterator queryMemtableAndDiskInternal(ColumnFamilyStore cfs, boolean copyOnHeap, OpState state);
+    protected abstract UnfilteredRowIterator queryMemtableAndDiskInternal(ColumnFamilyStore cfs, boolean copyOnHeap, MonitoringStateRef state);
 
     @Override
     public String toString()

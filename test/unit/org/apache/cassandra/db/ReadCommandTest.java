@@ -28,11 +28,11 @@ import org.apache.cassandra.Util;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.marshal.AsciiType;
 import org.apache.cassandra.db.marshal.BytesType;
+import org.apache.cassandra.db.monitoring.MonitoringStateRef;
 import org.apache.cassandra.db.partitions.FilteredPartition;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.schema.KeyspaceParams;
 import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.concurrent.OpState;
 
 import static org.junit.Assert.assertEquals;
 
@@ -80,11 +80,10 @@ public class ReadCommandTest
                 .apply();
 
         ReadCommand readCommand = Util.cmd(cfs).build();
-        OpState state = new OpState();
-        assertEquals(2, Util.getAll(readCommand, state).size());
+        assertEquals(2, Util.getAll(readCommand).size());
 
-        state.abort();
-        assertEquals(0, Util.getAll(readCommand, state).size());
+        readCommand.state().abort();
+        assertEquals(0, Util.getAll(readCommand).size());
     }
 
     @Test
@@ -107,14 +106,13 @@ public class ReadCommandTest
                 .apply();
 
         ReadCommand readCommand = Util.cmd(cfs, Util.dk("key")).build();
-        OpState state = new OpState();
 
-        List<FilteredPartition> partitions = Util.getAll(readCommand, state);
+        List<FilteredPartition> partitions = Util.getAll(readCommand);
         assertEquals(1, partitions.size());
         assertEquals(2, partitions.get(0).rowCount());
 
-        state.abort();
-        assertEquals(0, Util.getAll(readCommand, state).size());
+        readCommand.state().abort();
+        assertEquals(0, Util.getAll(readCommand).size());
     }
 
     @Test
@@ -137,13 +135,12 @@ public class ReadCommandTest
                 .apply();
 
         ReadCommand readCommand = Util.cmd(cfs, Util.dk("key")).includeRow("cc").includeRow("dd").build();
-        OpState state = new OpState();
 
-        List<FilteredPartition> partitions = Util.getAll(readCommand, state);
+        List<FilteredPartition> partitions = Util.getAll(readCommand);
         assertEquals(1, partitions.size());
         assertEquals(2, partitions.get(0).rowCount());
 
-        state.abort();
-        assertEquals(0, Util.getAll(readCommand, state).size());
+        readCommand.state().abort();
+        assertEquals(0, Util.getAll(readCommand).size());
     }
 }
