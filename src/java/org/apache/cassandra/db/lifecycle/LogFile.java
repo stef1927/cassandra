@@ -1,6 +1,7 @@
 package org.apache.cassandra.db.lifecycle;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -80,7 +81,7 @@ final class LogFile
             // to ensure there is a happens before edge between them
             sync();
 
-            file.delete();
+            Files.delete(file.toPath());
         }
         catch (Throwable t)
         {
@@ -130,7 +131,7 @@ final class LogFile
 
         if (records.stream()
                    .filter((r) -> r != failedOn)
-                   .filter(this::isInvalidWithCorruptedLastRecord)
+                   .filter(LogFile::isInvalidWithCorruptedLastRecord)
                    .map(LogFile::logError)
                    .findFirst().isPresent())
         {
@@ -195,7 +196,7 @@ final class LogFile
         return false;
     }
 
-    boolean isInvalidWithCorruptedLastRecord(LogRecord record)
+    static boolean isInvalidWithCorruptedLastRecord(LogRecord record)
     {
         if (record.type == Type.REMOVE && record.onDiskRecord.numFiles < record.numFiles)
         { // if we found a corruption in the last record, then we continue only if the number of files matches exactly for all previous records.
@@ -221,14 +222,22 @@ final class LogFile
         addRecord(LogRecord.makeAbort(System.currentTimeMillis()));
     }
 
+    private boolean isLastRecordValidWithType(Type type)
+    {
+        LogRecord lastRecord = getLastRecord();
+        return lastRecord != null &&
+               lastRecord.type == type &&
+               !isInvalid(lastRecord);
+    }
+
     public boolean committed()
     {
-        return records.contains(LogRecord.makeCommit(0));
+        return isLastRecordValidWithType(Type.COMMIT);
     }
 
     public boolean aborted()
     {
-        return records.contains(LogRecord.makeAbort(0));
+        return isLastRecordValidWithType(Type.ABORT);
     }
 
     public boolean completed()

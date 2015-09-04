@@ -334,12 +334,12 @@ public class LogTransactionTest extends AbstractTransactionalTest
         log.trackNew(sstableNew);
         LogTransaction.SSTableTidier tidier = log.obsoleted(sstableOld);
 
-        Set<File> tmpFiles = Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths().stream().map(File::new).collect(Collectors.toList())));
+        Set<File> tmpFiles = sstableNew.getAllFilePaths().stream().map(File::new).collect(Collectors.toSet());
 
         sstableNew.selfRef().release();
         sstableOld.selfRef().release();
 
-        Assert.assertEquals(tmpFiles, LogAwareFileLister.getTemporaryFiles(cfs.metadata, sstableNew.descriptor.directory));
+        Assert.assertEquals(tmpFiles, LogAwareFileLister.getTemporaryFiles(sstableNew.descriptor.directory));
 
         // normally called at startup
         LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
@@ -374,12 +374,12 @@ public class LogTransactionTest extends AbstractTransactionalTest
         //Fake a commit
         log.getLogFile().commit();
 
-        Set<File> tmpFiles = Sets.newHashSet(Iterables.concat(sstableOld.getAllFilePaths().stream().map(File::new).collect(Collectors.toList())));
+        Set<File> tmpFiles = sstableOld.getAllFilePaths().stream().map(File::new).collect(Collectors.toSet());
 
         sstableNew.selfRef().release();
         sstableOld.selfRef().release();
 
-        Assert.assertEquals(tmpFiles, LogAwareFileLister.getTemporaryFiles(cfs.metadata, sstableOld.descriptor.directory));
+        Assert.assertEquals(tmpFiles, LogAwareFileLister.getTemporaryFiles(sstableOld.descriptor.directory));
 
         // normally called at startup
         LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
@@ -405,62 +405,64 @@ public class LogTransactionTest extends AbstractTransactionalTest
 
         File dataFolder = sstable1.descriptor.directory;
 
-        Set<File> tmpFiles = LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder);
+        Set<File> tmpFiles = LogAwareFileLister.getTemporaryFiles(dataFolder);
         assertNotNull(tmpFiles);
         assertEquals(0, tmpFiles.size());
 
-        LogTransaction log = new LogTransaction(OperationType.WRITE, cfs.metadata);
-        Directories directories = new Directories(cfs.metadata);
+        try(LogTransaction log = new LogTransaction(OperationType.WRITE, cfs.metadata))
+        {
+            Directories directories = new Directories(cfs.metadata);
 
-        File[] beforeSecondSSTable = dataFolder.listFiles(pathname -> !pathname.isDirectory());
+            File[] beforeSecondSSTable = dataFolder.listFiles(pathname -> !pathname.isDirectory());
 
-        SSTableReader sstable2 = sstable(cfs, 1, 128);
-        log.trackNew(sstable2);
+            SSTableReader sstable2 = sstable(cfs, 1, 128);
+            log.trackNew(sstable2);
 
-        Map<Descriptor, Set<Component>> sstables = directories.sstableLister(Directories.OnTxnErr.THROW).list();
-        assertEquals(2, sstables.size());
+            Map<Descriptor, Set<Component>> sstables = directories.sstableLister(Directories.OnTxnErr.THROW).list();
+            assertEquals(2, sstables.size());
 
-        // this should contain sstable1, sstable2 and the transaction log file
-        File[] afterSecondSSTable = dataFolder.listFiles(pathname -> !pathname.isDirectory());
+            // this should contain sstable1, sstable2 and the transaction log file
+            File[] afterSecondSSTable = dataFolder.listFiles(pathname -> !pathname.isDirectory());
 
-        int numNewFiles = afterSecondSSTable.length - beforeSecondSSTable.length;
-        assertEquals(numNewFiles - 1, sstable2.getAllFilePaths().size()); // new files except for transaction log file
+            int numNewFiles = afterSecondSSTable.length - beforeSecondSSTable.length;
+            assertEquals(numNewFiles - 1, sstable2.getAllFilePaths().size()); // new files except for transaction log file
 
-        tmpFiles = LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder);
-        assertNotNull(tmpFiles);
-        assertEquals(numNewFiles - 1, tmpFiles.size());
+            tmpFiles = LogAwareFileLister.getTemporaryFiles(dataFolder);
+            assertNotNull(tmpFiles);
+            assertEquals(numNewFiles - 1, tmpFiles.size());
 
-        File ssTable2DataFile = new File(sstable2.descriptor.filenameFor(Component.DATA));
-        File ssTable2IndexFile = new File(sstable2.descriptor.filenameFor(Component.PRIMARY_INDEX));
+            File ssTable2DataFile = new File(sstable2.descriptor.filenameFor(Component.DATA));
+            File ssTable2IndexFile = new File(sstable2.descriptor.filenameFor(Component.PRIMARY_INDEX));
 
-        assertTrue(tmpFiles.contains(ssTable2DataFile));
-        assertTrue(tmpFiles.contains(ssTable2IndexFile));
+            assertTrue(tmpFiles.contains(ssTable2DataFile));
+            assertTrue(tmpFiles.contains(ssTable2IndexFile));
 
-        List<File> files = directories.sstableLister(Directories.OnTxnErr.THROW).listFiles();
-        List<File> filesNoTmp = directories.sstableLister(Directories.OnTxnErr.THROW).skipTemporary(true).listFiles();
-        assertNotNull(files);
-        assertNotNull(filesNoTmp);
+            List<File> files = directories.sstableLister(Directories.OnTxnErr.THROW).listFiles();
+            List<File> filesNoTmp = directories.sstableLister(Directories.OnTxnErr.THROW).skipTemporary(true).listFiles();
+            assertNotNull(files);
+            assertNotNull(filesNoTmp);
 
-        assertTrue(files.contains(ssTable2DataFile));
-        assertTrue(files.contains(ssTable2IndexFile));
+            assertTrue(files.contains(ssTable2DataFile));
+            assertTrue(files.contains(ssTable2IndexFile));
 
-        assertFalse(filesNoTmp.contains(ssTable2DataFile));
-        assertFalse(filesNoTmp.contains(ssTable2IndexFile));
+            assertFalse(filesNoTmp.contains(ssTable2DataFile));
+            assertFalse(filesNoTmp.contains(ssTable2IndexFile));
 
-        log.finish();
+            log.finish();
 
-        //Now it should be empty since the transaction has finished
-        tmpFiles = LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder);
-        assertNotNull(tmpFiles);
-        assertEquals(0, tmpFiles.size());
+            //Now it should be empty since the transaction has finished
+            tmpFiles = LogAwareFileLister.getTemporaryFiles(dataFolder);
+            assertNotNull(tmpFiles);
+            assertEquals(0, tmpFiles.size());
 
-        filesNoTmp = directories.sstableLister(Directories.OnTxnErr.THROW).skipTemporary(true).listFiles();
-        assertNotNull(filesNoTmp);
-        assertTrue(filesNoTmp.contains(ssTable2DataFile));
-        assertTrue(filesNoTmp.contains(ssTable2IndexFile));
+            filesNoTmp = directories.sstableLister(Directories.OnTxnErr.THROW).skipTemporary(true).listFiles();
+            assertNotNull(filesNoTmp);
+            assertTrue(filesNoTmp.contains(ssTable2DataFile));
+            assertTrue(filesNoTmp.contains(ssTable2IndexFile));
 
-        sstable1.selfRef().release();
-        sstable2.selfRef().release();
+            sstable1.selfRef().release();
+            sstable2.selfRef().release();
+        }
     }
 
     @Test
@@ -559,7 +561,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
                           false);
     }
 
-    private void testCorruptRecord(BiConsumer<LogTransaction, SSTableReader> modifier, boolean isRecoverable) throws IOException
+    private static void testCorruptRecord(BiConsumer<LogTransaction, SSTableReader> modifier, boolean isRecoverable) throws IOException
     {
         ColumnFamilyStore cfs = MockSchema.newCFS(KEYSPACE);
         SSTableReader sstableOld = sstable(cfs, 0, 128);
@@ -584,43 +586,32 @@ public class LogTransactionTest extends AbstractTransactionalTest
         sstableOld.selfRef().release();
         sstableNew.selfRef().release();
 
-        //This should filter as completed but make sure to exclude files that were deleted by the modifier
-        assertFiles(Iterables.concat(sstableOld.getAllFilePaths().stream().filter(p -> new File(p).exists()).collect(Collectors.toList())),
-                    LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder));
+        // The files on disk, for old files make sure to exclude the files that were deleted by the modifier
+        Set<String> newFiles = sstableNew.getAllFilePaths().stream().collect(Collectors.toSet());
+        Set<String> oldFiles = sstableOld.getAllFilePaths().stream().filter(p -> new File(p).exists()).collect(Collectors.toSet());
+
+        //This should filter as in progress since the last record is corrupt
+        assertFiles(newFiles, LogAwareFileLister.getTemporaryFiles(dataFolder));
+        assertFiles(oldFiles, LogAwareFileLister.getFinalFiles(dataFolder));
 
         if (isRecoverable)
-        { // the corruption is recoverable, we assume there is a commit record
+        { // the corruption is recoverable but the commit record is unreadable so the transaction is still in progress
 
-            //This should remove old files
+            //This should remove new files
             LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
 
-            assertFiles(dataFolder.getPath(), Sets.newHashSet(sstableNew.getAllFilePaths()));
+            // make sure to exclude the old files that were deleted by the modifier
+            assertFiles(dataFolder.getPath(), oldFiles);
         }
         else
-        { // if an intermediate line was modified, we cannot tell,
-          // it should just throw and handle the exception with a log message
-
-            try
-            {
-                //This should throw a RuntimeException
-                new LogAwareFileLister(dataFolder.toPath(),
-                                              (file, type) -> type != Directories.FileType.FINAL,
-                                              Directories.OnTxnErr.THROW).list();
-                fail("Expected exception");
-            }
-            catch (RuntimeException ex)
-            {
-                // pass
-                ex.printStackTrace();
-            }
+        { // if an intermediate line was also modified, it should ignore the tx log file
 
             //This should not remove any files
             LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
 
-            assertFiles(dataFolder.getPath(), Sets.newHashSet(Iterables.concat(sstableNew.getAllFilePaths(),
-                                                                               sstableOld.getAllFilePaths(),
-                                                                               Collections.singleton(txnFilePath))),
-                        true);
+            assertFiles(dataFolder.getPath(), Sets.newHashSet(Iterables.concat(newFiles,
+                                                                               oldFiles,
+                                                                               Collections.singleton(txnFilePath))));
         }
     }
 
@@ -698,7 +689,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
         // It doesn't matter what it returns but it should not throw because the txn
         // was completed before deleting files (i.e. releasing sstables)
         for (int i = 0; i < 200; i++)
-            LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder);
+            LogAwareFileLister.getTemporaryFiles(dataFolder);
     }
 
     @Test
@@ -723,7 +714,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
             // This should race with the asynchronous deletion of txn log files
             // it should throw because we are violating the requirement that a transaction must
             // finish before deleting files (i.e. releasing sstables)
-            LogAwareFileLister.getTemporaryFiles(cfs.metadata, dataFolder);
+            LogAwareFileLister.getTemporaryFiles(dataFolder);
             fail("Expected runtime exception");
         }
         catch(RuntimeException e)

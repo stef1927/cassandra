@@ -6,9 +6,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.CRC32;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.FBUtilities;
@@ -19,9 +16,7 @@ import org.apache.cassandra.utils.FBUtilities;
  */
 final class LogRecord
 {
-    private static final Logger logger = LoggerFactory.getLogger(LogRecord.class);
-
-    public static enum Type
+    public enum Type
     {
         UNKNOWN, // a record that cannot be parsed
         ADD,    // new files to be retained on commit
@@ -65,7 +60,8 @@ final class LogRecord
         {
             Matcher matcher = REGEX.matcher(line);
             if (!matcher.matches())
-                return new LogRecord(Type.UNKNOWN, "", 0, 0, 0, line);
+                return new LogRecord(Type.UNKNOWN, "", 0, 0, 0, line)
+                       .error(String.format("Failed to parse [%s]", line));
 
             Type type = Type.fromPrefix(matcher.group(1));
             return new LogRecord(type, matcher.group(2), Long.valueOf(matcher.group(3)), Integer.valueOf(matcher.group(4)), Long.valueOf(matcher.group(5)), line);
@@ -129,6 +125,8 @@ final class LogRecord
             this.checksum = checksum;
             this.raw = raw;
         }
+
+        this.error = "";
     }
 
     public LogRecord error(Throwable t)
@@ -144,7 +142,7 @@ final class LogRecord
 
     public boolean isValid()
     {
-        return this.error == null;
+        return this.error.isEmpty();
     }
 
     private String format()
@@ -169,7 +167,7 @@ final class LogRecord
     public int hashCode()
     {
         // see comment in equals
-        return Objects.hash(type, relativeFilePath);
+        return Objects.hash(type, relativeFilePath, error);
     }
 
     @Override
@@ -184,8 +182,11 @@ final class LogRecord
         // we don't want duplicated records that differ only by
         // properties that might change on disk, especially COMMIT records,
         // there should be only one regardless of update time
+        // however we must compare the error to make sure we have more than
+        // one UNKNOWN record, if we fail to parse more than one
         return type == other.type &&
-               relativeFilePath.equals(other.relativeFilePath);
+               relativeFilePath.equals(other.relativeFilePath) &&
+               error.equals(other.error);
     }
 
     @Override

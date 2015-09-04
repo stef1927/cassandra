@@ -13,10 +13,6 @@ import java.util.stream.StreamSupport;
 
 import com.google.common.annotations.VisibleForTesting;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.Directories;
 
 import static org.apache.cassandra.db.Directories.*;
@@ -26,8 +22,6 @@ import static org.apache.cassandra.db.Directories.*;
  */
 final class LogAwareFileLister
 {
-    private static final Logger logger = LoggerFactory.getLogger(LogAwareFileLister.class);
-
     // The folder to scan
     private final Path folder;
 
@@ -83,7 +77,7 @@ final class LogAwareFileLister
                     .collect(Collectors.toList());
     }
 
-    List<File> list(DirectoryStream<Path> stream) throws IOException
+    static List<File> list(DirectoryStream<Path> stream) throws IOException
     {
         try
         {
@@ -159,7 +153,7 @@ final class LogAwareFileLister
     }
 
     /** See if all files are present or if only the last record files are missing and it's a NEW record */
-    private boolean allFilesPresent(LogFile txnFile, Map<LogRecord, Set<File>> oldFiles, Map<LogRecord, Set<File>> newFiles)
+    private static boolean allFilesPresent(LogFile txnFile, Map<LogRecord, Set<File>> oldFiles, Map<LogRecord, Set<File>> newFiles)
     {
         LogRecord lastRecord = txnFile.getLastRecord();
         return !Stream.concat(oldFiles.entrySet().stream(),
@@ -178,21 +172,25 @@ final class LogAwareFileLister
     }
 
     @VisibleForTesting
-    static Set<File> getTemporaryFiles(CFMetaData metadata, File folder)
+    static Set<File> getTemporaryFiles(File folder)
     {
-        return listFiles(metadata, folder, FileType.TEMPORARY);
+        return listFiles(folder, FileType.TEMPORARY);
     }
 
     @VisibleForTesting
-    static Set<File> listFiles(CFMetaData metadata, File folder, FileType ... types)
+    static Set<File> getFinalFiles(File folder)
+    {
+        return listFiles(folder, FileType.FINAL);
+    }
+
+    @VisibleForTesting
+    static Set<File> listFiles(File folder, FileType ... types)
     {
         Collection<FileType> match = Arrays.asList(types);
-        List<File> directories = new Directories(metadata).getCFDirectories();
-        directories.add(folder);
-        return directories.stream()
-                          .flatMap((dir) -> new LogAwareFileLister(dir.toPath(),
-                                                                   (file, type) -> match.contains(type),
-                                                                   OnTxnErr.IGNORE).list().stream())
-                          .collect(Collectors.toSet());
+        return new LogAwareFileLister(folder.toPath(),
+                                      (file, type) -> match.contains(type),
+                                      OnTxnErr.IGNORE).list()
+                                                      .stream()
+                                                      .collect(Collectors.toSet());
     }
 }
