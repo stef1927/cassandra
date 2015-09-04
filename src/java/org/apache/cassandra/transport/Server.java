@@ -439,6 +439,9 @@ public class Server implements CassandraDaemon.Server
 
         private void send(InetAddress endpoint, Event.NodeEvent event)
         {
+            if (logger.isTraceEnabled())
+                logger.trace("Sending event for endpoint {}, rpc address {}", endpoint, event.nodeAddress());
+
             // If the endpoint is not the local node, extract the node address
             // and if it is the same as our own RPC broadcast address (which defaults to the rcp address)
             // then don't send the notification. This covers the case of rpc_address set to "localhost",
@@ -503,7 +506,7 @@ public class Server implements CassandraDaemon.Server
             LatestEvent prev = latestEvents.get(endpoint);
             if (prev == null || prev.status != event.status)
             {
-                LatestEvent ret = latestEvents.put(endpoint, LatestEvent.forStatusChange(event.status, prev));
+                LatestEvent ret = latestEvents.put(endpoint, LatestEvent.forStatusChange(event.status, null));
                 if (ret == prev)
                     send(endpoint, event);
             }
