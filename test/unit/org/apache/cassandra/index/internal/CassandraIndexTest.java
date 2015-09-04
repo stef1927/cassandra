@@ -36,13 +36,13 @@ import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.filter.ClusteringIndexFilter;
 import org.apache.cassandra.db.filter.ClusteringIndexSliceFilter;
 import org.apache.cassandra.db.filter.ColumnFilter;
+import org.apache.cassandra.db.monitoring.MonitoringStateRef;
 import org.apache.cassandra.db.rows.Row;
 import org.apache.cassandra.db.rows.Unfiltered;
 import org.apache.cassandra.db.rows.UnfilteredRowIterator;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.concurrent.OpState;
 
 import static org.apache.cassandra.Util.throwAssert;
 import static org.junit.Assert.assertArrayEquals;
@@ -430,7 +430,7 @@ public class CassandraIndexTest extends CQLTester
                                                                                indexKey,
                                                                                ColumnFilter.all(indexCfs.metadata),
                                                                                filter);
-        try (ReadExecutionController executionController = ReadExecutionController.forCommand(command, new OpState());
+        try (ReadExecutionController executionController = ReadExecutionController.forCommand(command);
              UnfilteredRowIterator iter = command.queryMemtableAndDisk(indexCfs, executionController.indexReadOpOrderGroup()))
         {
             while( iter.hasNext())

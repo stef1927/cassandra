@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package org.apache.cassandra.utils.concurrent;
+package org.apache.cassandra.db.monitoring;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -28,12 +28,12 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-public class OpStateTest
+public class MonitoringStateRefTest
 {
     @Test
     public void testInit()
     {
-        OpState state = new OpState();
+        MonitoringStateRef state = new MonitoringStateRef();
         assertFalse(state.aborted());
         assertFalse(state.completed());
     }
@@ -41,7 +41,7 @@ public class OpStateTest
     @Test
     public void testComplete()
     {
-        OpState state = new OpState();
+        MonitoringStateRef state = new MonitoringStateRef();
         assertTrue(state.complete());
 
         assertFalse(state.aborted());
@@ -55,7 +55,7 @@ public class OpStateTest
     @Test
     public void testAbort()
     {
-        OpState state = new OpState();
+        MonitoringStateRef state = new MonitoringStateRef();
         assertTrue(state.abort());
 
         assertTrue(state.aborted());
@@ -74,7 +74,7 @@ public class OpStateTest
 
         for (int i = 0; i < nTests; i++)
         {
-           final OpState state = new OpState();
+           final MonitoringStateRef state = new MonitoringStateRef();
 
             executorService.submit(() -> {
                 state.complete();
