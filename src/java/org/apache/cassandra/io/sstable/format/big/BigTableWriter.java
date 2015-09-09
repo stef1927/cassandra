@@ -318,7 +318,7 @@ public class BigTableWriter extends SSTableWriter
         }
 
         @Override
-        protected Throwable doPreCleanup(Throwable accumulate)
+        protected Throwable doPostCleanup(Throwable accumulate)
         {
             accumulate = dbuilder.close(accumulate);
             return accumulate;
@@ -481,7 +481,7 @@ public class BigTableWriter extends SSTableWriter
         }
 
         @Override
-        protected Throwable doPreCleanup(Throwable accumulate)
+        protected Throwable doPostCleanup(Throwable accumulate)
         {
             accumulate = summary.close(accumulate);
             accumulate = bf.close(accumulate);
