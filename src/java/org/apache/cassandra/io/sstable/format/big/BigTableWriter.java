@@ -81,10 +81,6 @@ public class BigTableWriter extends SSTableWriter
             dbuilder = SegmentedFile.getBuilder(DatabaseDescriptor.getDiskAccessMode(), false);
         }
         iwriter = new IndexWriter(keyCount, dataFile);
-
-        // txnLogs will delete if safe to do so (early readers)
-        iwriter.indexFile.deleteFile(false);
-        dataFile.deleteFile(false);
     }
 
     public void mark()
