@@ -64,18 +64,18 @@ public class SSTableTxnWriter extends Transactional.AbstractTransactional implem
 
     protected Throwable doCommit(Throwable accumulate)
     {
-        return writer.commit(txn.commit(accumulate));
+        return txn.commit(writer.commit(accumulate));
     }
 
     protected Throwable doAbort(Throwable accumulate)
     {
-        return writer.abort(txn.abort(accumulate));
+        return txn.abort(writer.abort(accumulate));
     }
 
     protected void doPrepare()
     {
-        txn.prepareToCommit();
         writer.prepareToCommit();
+        txn.prepareToCommit();
     }
 
     public Collection<SSTableReader> finish(boolean openResult)
