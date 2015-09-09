@@ -64,18 +64,21 @@ public class SSTableTxnWriter extends Transactional.AbstractTransactional implem
 
     protected Throwable doCommit(Throwable accumulate)
     {
-        return txn.commit(writer.commit(accumulate));
+        // the txn should commit before the writer because it can throw
+        return writer.commit(txn.commit(accumulate));
     }
 
     protected Throwable doAbort(Throwable accumulate)
     {
+        // the writer must abort before the txn because it releases the file handle
+        // in the pre-cleanup, else the txn will not be able to delete the files on windows
         return txn.abort(writer.abort(accumulate));
     }
 
     protected void doPrepare()
     {
-        writer.prepareToCommit();
         txn.prepareToCommit();
+        writer.prepareToCommit();
     }
 
     public Collection<SSTableReader> finish(boolean openResult)
