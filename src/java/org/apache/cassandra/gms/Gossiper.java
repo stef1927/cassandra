@@ -1095,6 +1095,19 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
 
             EndpointState localEpStatePtr = endpointStateMap.get(ep);
             EndpointState remoteState = entry.getValue();
+            VersionedValue tokens = remoteState.getApplicationState(ApplicationState.TOKENS);
+            VersionedValue status = remoteState.getApplicationState(ApplicationState.STATUS);
+            VersionedValue hostId = remoteState.getApplicationState(ApplicationState.HOST_ID);
+
+            boolean full = localEpStatePtr == null ||
+                            remoteState.getHeartBeatState().getGeneration() > localEpStatePtr.getHeartBeatState().getGeneration();
+            if (full || status != null || hostId != null || tokens != null)
+                logger.info("GOSSIP entry for {}: status {}, host id {}, generation {}, version {}",
+                            entry.getKey(),
+                            status == null ? "null" : status.value,
+                            hostId == null ? "null" : hostId.value,
+                            remoteState.getHeartBeatState().getGeneration(),
+                            getMaxEndpointStateVersion(remoteState));
 
             /*
                 If state does not exist just add it. If it does then add it if the remote generation is greater.
@@ -1510,9 +1523,7 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
     public void addExpireTimeForEndpoint(InetAddress endpoint, long expireTime)
     {
         if (logger.isDebugEnabled())
-        {
             logger.debug("adding expire time for endpoint : {} ({})", endpoint, expireTime);
-        }
         expireTimeEndpointMap.put(endpoint, expireTime);
     }
 

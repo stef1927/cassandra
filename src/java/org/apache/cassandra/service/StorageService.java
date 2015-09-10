@@ -2069,11 +2069,12 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         assert pieces.length >= 2;
         Collection<Token> tokens;
         tokens = getTokensFor(endpoint);
+        long expireTime = extractExpireTime(pieces);
 
         if (logger.isDebugEnabled())
-            logger.debug("Node {} state left, tokens {}", endpoint, tokens);
+            logger.debug("Node {} state left, tokens {}, expire time {}", endpoint, tokens, expireTime);
 
-        excise(tokens, endpoint, extractExpireTime(pieces));
+        excise(tokens, endpoint, expireTime);
     }
 
     /**
@@ -2155,8 +2156,9 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
     {
         logger.info("Removing tokens {} for {}", tokens, endpoint);
 
-        if (tokenMetadata.isMember(endpoint))
-            HintsService.instance.excise(tokenMetadata.getHostId(endpoint));
+        UUID hostId = tokenMetadata.isMember(endpoint) ? tokenMetadata.getHostId(endpoint) : null;
+        if (hostId != null)
+            HintsService.instance.excise(hostId);
 
         removeEndpoint(endpoint);
         tokenMetadata.removeEndpoint(endpoint);
