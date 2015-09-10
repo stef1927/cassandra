@@ -46,33 +46,25 @@ public class ReadCommandVerbHandler implements IVerbHandler<ReadCommand>
         }
 
         ReadCommand command = message.payload;
+        command.setMonitoringTime(message.constructionTime, message.getTimeout());
+        monitoringTask.update(command);
 
-        try
+        ReadResponse response;
+        try (ReadExecutionController executionController = command.executionController();
+             UnfilteredPartitionIterator iterator = command.executeLocally(executionController))
         {
-            command.setMonitoringTime(message.constructionTime, message.getTimeout());
-            monitoringTask.update(command);
-
-            ReadResponse response;
-            try (ReadExecutionController executionController = command.executionController();
-                 UnfilteredPartitionIterator iterator = command.executeLocally(executionController))
-            {
-                response = command.createResponse(iterator, command.columnFilter());
-            }
-
-            if (!command.state().complete())
-            {
-                Tracing.trace("Discarding partial response to {} (timed out)", message.from);
-                MessagingService.instance().incrementDroppedMessages(message);
-                return;
-            }
-
-            Tracing.trace("Enqueuing response to {}", message.from);
-            MessageOut<ReadResponse> reply = new MessageOut<>(MessagingService.Verb.REQUEST_RESPONSE, response, ReadResponse.serializer);
-            MessagingService.instance().sendReply(reply, id, message.from);
+            response = command.createResponse(iterator, command.columnFilter());
         }
-        finally
+
+        if (!command.state().complete())
         {
-            monitoringTask.reset();
+            Tracing.trace("Discarding partial response to {} (timed out)", message.from);
+            MessagingService.instance().incrementDroppedMessages(message);
+            return;
         }
+
+        Tracing.trace("Enqueuing response to {}", message.from);
+        MessageOut<ReadResponse> reply = new MessageOut<>(MessagingService.Verb.REQUEST_RESPONSE, response, ReadResponse.serializer);
+        MessagingService.instance().sendReply(reply, id, message.from);
     }
 }

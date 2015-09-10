@@ -335,10 +335,6 @@ public final class MessagingService implements MessagingServiceMBean
     }
     // total dropped message counts for server lifetime
     private final Map<Verb, DroppedMessages> droppedMessagesMap = new EnumMap<>(Verb.class);
-    /**
-     * Verbs that can be monitored during processing, currently only for aborting them on timeout.
-     */
-    public static final EnumSet<Verb> MONITORABLE_VERBS = EnumSet.of(Verb.READ);
 
     private final List<ILatencySubscriber> subscribers = new ArrayList<ILatencySubscriber>();
 

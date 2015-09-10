@@ -20,13 +20,8 @@ package org.apache.cassandra.db.monitoring;
 
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 public class MonitorableThreadLocal extends ThreadLocal<AtomicReference<Monitorable>>
 {
-    private static final Logger logger = LoggerFactory.getLogger(MonitorableThreadLocal.class);
-
     @Override
     public AtomicReference<Monitorable> initialValue()
     {
@@ -35,26 +30,13 @@ public class MonitorableThreadLocal extends ThreadLocal<AtomicReference<Monitora
         return ref;
     }
 
-    public void reset()
-    {
-        set((Monitorable)null);
-    }
-
-    public void update(Monitorable monitorable)
-    {
-        set(monitorable);
-    }
-
     /**
      * Change the monitorable stored in the reference stored in this thread local.
-     * Only one thread will update its thread local so we log an error if we fail
-     * to update the value.
+     * Only one thread will update its thread local so lazySet is enough.
      */
-    private void set(Monitorable monitorable)
+    public void update(Monitorable monitorable)
     {
         AtomicReference<Monitorable> ref = get();
-        Monitorable current = ref.get();
-        if (!ref.compareAndSet(current, monitorable))
-            logger.error("Failed to update monitorable {}", monitorable);
+        ref.lazySet(monitorable);
     }
 }

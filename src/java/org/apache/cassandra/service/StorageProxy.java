@@ -1712,10 +1712,6 @@ public class StorageProxy implements StorageProxyMBean
                 else
                     throw t;
             }
-            finally
-            {
-                monitoringTask.reset();
-            }
         }
     }
 
