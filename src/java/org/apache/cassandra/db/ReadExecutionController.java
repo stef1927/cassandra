@@ -63,6 +63,11 @@ public class ReadExecutionController implements AutoCloseable
         return new ReadExecutionController(null, null, null, new MonitoringStateRef());
     }
 
+    public static ReadExecutionController forReadOp(OpOrder.Group readOp)
+    {
+        return new ReadExecutionController(readOp, null, null, new MonitoringStateRef());
+    }
+
     public static ReadExecutionController forCommand(ReadCommand command)
     {
         ColumnFamilyStore baseCfs = Keyspace.openAndGetStore(command.metadata());

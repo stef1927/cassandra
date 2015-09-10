@@ -19,9 +19,10 @@
 package org.apache.cassandra.db.monitoring;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -29,23 +30,25 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import joptsimple.internal.Strings;
 import org.apache.cassandra.concurrent.ScheduledExecutors;
+import org.apache.cassandra.config.DatabaseDescriptor;
 
 public class MonitoringTask implements Runnable
 {
     private static final Logger logger = LoggerFactory.getLogger(MonitoringTask.class);
 
-    // These are not private for testing
-    final static long CHECK_DELAY_MILLIS = 10;
-    final static long REPORT_DELAY_MILLIS = 5000;
-
     private final static MonitoringTask instance = new MonitoringTask();
     static
     {
-        ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(instance, 0, CHECK_DELAY_MILLIS, TimeUnit.MILLISECONDS);
+        ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(instance,
+                                                                 0,
+                                                                 DatabaseDescriptor.getMonitoringCheckIntervalMillis(),
+                                                                 TimeUnit.MILLISECONDS);
     }
 
     private final CopyOnWriteArrayList<AtomicReference<Monitorable>> operations;
@@ -69,11 +72,12 @@ public class MonitoringTask implements Runnable
         final long now = System.currentTimeMillis();
         operations.forEach(o -> checkOperation(now, o));
 
-        if (now - reportTime >= REPORT_DELAY_MILLIS)
-        {
-            report(now);
-            reportTime = now;
-        }
+        int reportInterval = DatabaseDescriptor.getMonitoringReportIntervalMillis();
+        if (reportInterval < 0)
+            return;
+
+        if (now - reportTime >= reportInterval)
+            logFailedOperations(now);
     }
 
     private void checkOperation(long now, AtomicReference<Monitorable> ref)
@@ -101,48 +105,80 @@ public class MonitoringTask implements Runnable
         failures.add(new Failure(operation, now));
     }
 
-    private void report(long now)
+    @VisibleForTesting
+    static List<String> logFailedOperations()
     {
-        if (failedOperations.isEmpty())
-            return;
+        String ret = instance.logFailedOperations(System.currentTimeMillis());
+        if (ret.isEmpty())
+            return Collections.emptyList();
 
-        for (Map.Entry<String, List<Failure>> entry : failedOperations.entrySet())
-        {
-            String name = entry.getKey();
-            List<Failure> failures = entry.getValue();
-
-            StringBuilder str = new StringBuilder();
-            str.append(String.format("'%s' timed out %d %s in the last %d msecs: ",
-                                     name,
-                                     failures.size(),
-                                     failures.size() > 1 ? "times" : "time",
-                                     now - reportTime));
-
-            Iterator<Failure> it = failures.iterator();
-            while(it.hasNext())
-            {
-                Failure failure = it.next();
-                Monitorable operation = failure.operation;
-                str.append(String.format("[received/failed %1$tT.%1$tL/%2$tT.%2$tL timeout %3$d %4$s]",
-                                         new Date(operation.constructionTime().timestamp),
-                                         new Date(failure.failedAt),
-                                         operation.timeout(),
-                                         operation.constructionTime().isCrossNode ? "msec/cross-node" : "msec"));
-
-                if (it.hasNext())
-                    str.append(", ");
-            }
-
-            logger.info(str.toString());
-        }
-
-        failedOperations.clear();
+        return Arrays.asList(ret.split("\n"));
     }
 
-    @VisibleForTesting
-    static int numFailedOperations()
+    private String logFailedOperations(long now)
     {
-        return instance.failedOperations.size();
+        String logMsg = getFailedOperationsLog();
+        if (!logMsg.isEmpty())
+            logger.info("Operations timed out in the last {} msecs:\n{}", now - reportTime, logMsg);
+
+        failedOperations.clear();
+        reportTime = now;
+        return logMsg;
+    }
+
+    String getFailedOperationsLog()
+    {
+        final int configMaxTimedoutOperations = DatabaseDescriptor.getMonitoringMaxTimedoutOperations();
+        final long maxTimedoutOperations = configMaxTimedoutOperations < 0 ? Long.MAX_VALUE : configMaxTimedoutOperations;
+        if (failedOperations.isEmpty() ||
+            maxTimedoutOperations == 0)
+            return Strings.EMPTY;
+
+        final StringBuilder ret = new StringBuilder();
+        failedOperations.entrySet()
+                        .stream()
+                        .sorted((o1, o2) -> Integer.compare(o2.getValue().size(), o1.getValue().size()))
+                        .limit(maxTimedoutOperations)
+                        .forEach(entry -> formatEntry(ret, entry));
+
+        if (failedOperations.size() > maxTimedoutOperations)
+            ret.append(Strings.LINE_SEPARATOR)
+               .append("...");
+
+        return ret.toString();
+    }
+
+    private static void formatEntry(StringBuilder ret, Map.Entry<String, List<Failure>> entry)
+    {
+        String name = entry.getKey();
+        if (ret.length() > 0)
+            ret.append(Strings.LINE_SEPARATOR);
+
+        List<Failure> failures = entry.getValue();
+        if (failures.size() == 1)
+        {
+            ret.append(name)
+               .append(": ")
+               .append(formatFailure(failures.get(0)));
+        }
+        else
+        {
+            ret.append(name)
+               .append(String.format(" (timed out %d times): ", failures.size()))
+               .append(formatFailure(Iterables.getFirst(failures, null)))
+               .append(failures.size() > 2 ? " ... " : ", ")
+               .append(formatFailure(Iterables.getLast(failures, null)));
+        }
+    }
+
+    private static String formatFailure(Failure failure)
+    {
+        Monitorable operation = failure.operation;
+        return String.format("received/failed %1$tT.%1$tL/%2$tT.%2$tL - timeout %3$d %4$s",
+                             new Date(operation.constructionTime().timestamp),
+                             new Date(failure.failedAt),
+                             operation.timeout(),
+                             operation.constructionTime().isCrossNode ? "msec/cross-node" : "msec");
     }
 
     private final static class Failure

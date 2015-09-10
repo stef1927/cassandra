@@ -389,7 +389,7 @@ public abstract class SinglePartitionReadCommand<F extends ClusteringIndexFilter
      */
     public UnfilteredRowIterator queryMemtableAndDisk(ColumnFamilyStore cfs, OpOrder.Group readOp)
     {
-        return queryMemtableAndDiskInternal(cfs, new MonitoringStateRef());
+        return queryMemtableAndDisk(cfs, ReadExecutionController.forReadOp(readOp));
     }
 
     public UnfilteredRowIterator queryMemtableAndDisk(ColumnFamilyStore cfs, ReadExecutionController executionController)
