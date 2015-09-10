@@ -1502,9 +1502,7 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
     public void addExpireTimeForEndpoint(InetAddress endpoint, long expireTime)
     {
         if (logger.isDebugEnabled())
-        {
             logger.debug("adding expire time for endpoint : {} ({})", endpoint, expireTime);
-        }
         expireTimeEndpointMap.put(endpoint, expireTime);
     }
 

@@ -1855,11 +1855,12 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         assert pieces.length >= 2;
         Collection<Token> tokens;
         tokens = getTokensFor(endpoint);
+        long expireTime = extractExpireTime(pieces);
 
         if (logger.isDebugEnabled())
-            logger.debug("Node {} state left, tokens {}", endpoint, tokens);
+            logger.debug("Node {} state left, tokens {}, expire time {}", endpoint, tokens, expireTime);
 
-        excise(tokens, endpoint, extractExpireTime(pieces));
+        excise(tokens, endpoint, expireTime);
     }
 
     /**
