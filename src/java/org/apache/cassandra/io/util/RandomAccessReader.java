@@ -33,9 +33,11 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     // The default buffer size when the client doesn't specify it
     public static final int DEFAULT_BUFFER_SIZE = 4096;
 
-    // The maximum buffer size when the limiter is not null, i.e. when throttling
-    // is enabled. This is required to avoid aquiring permits that are too large.
-    public static final int MAX_THROTTLED_BUFFER_SIZE = 1 << 16; // 64k
+    // The maximum buffer size, we will never buffer more than this size. Further,
+    // when the limiter is not null, i.e. when throttling is enabled, we read exactly
+    // this size, since when throttling the intention is to eventually read everything,
+    // see CASSANDRA-8630
+    public static final int MAX_BUFFER_SIZE = 1 << 16; // 64k
 
     // the IO channel to the file, we do not own a reference to this due to
     // performance reasons (CASSANDRA-9379) so it's up to the owner of the RAR to
@@ -392,19 +394,24 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         }
 
         /** The buffer size is typically already page aligned but if that is not the case
-         * make sure that it is a multiple of the page size, 4096.
+         * make sure that it is a multiple of the page size, 4096. Also limit it to the maximum
+         * buffer size unless we are throttling, in which case we may as well read the maximum
+         * directly since the intention is to read the full file, see CASSANDRA-8630.
          * */
         private void setBufferSize()
         {
+            if (limiter != null)
+            {
+                bufferSize = MAX_BUFFER_SIZE;
+                return;
+            }
+
             if ((bufferSize & ~4095) != bufferSize)
             { // should already be a page size multiple but if that's not case round it up
                 bufferSize = (bufferSize + 4095) & ~4095;
             }
 
-            if (limiter == null)
-                return;
-
-            bufferSize = Math.min(MAX_THROTTLED_BUFFER_SIZE, bufferSize);
+            bufferSize = Math.min(MAX_BUFFER_SIZE, bufferSize);
         }
 
         protected ByteBuffer createBuffer()
