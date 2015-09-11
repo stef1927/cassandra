@@ -36,19 +36,44 @@ import org.slf4j.LoggerFactory;
 
 import joptsimple.internal.Strings;
 import org.apache.cassandra.concurrent.ScheduledExecutors;
-import org.apache.cassandra.config.DatabaseDescriptor;
 
+/**
+ * A task for monitoring in progress operations, currently only read queries, and aborting them if they time out.
+ * We also log timed out operations, see CASSANDRA-7392.
+ */
 public class MonitoringTask implements Runnable
 {
     private static final Logger logger = LoggerFactory.getLogger(MonitoringTask.class);
 
+    /**
+     * Defines the interval for reporting any operations that have timed out.
+     */
+    final static String REPORT_INTERVAL_PROPERTY = "cassandra.monitoring_report_interval_ms";
+    public static int REPORT_INTERVAL_MS = Integer.valueOf(System.getProperty(REPORT_INTERVAL_PROPERTY, "5000"));
+
+    /**
+     * Defines the interval for checking if operations have timed out, it cannot be less than 50 milliseconds. If not set by default
+     * this is 10% of the reporting interval.
+     */
+    final static String CHECK_INTERVAL_PROPERTY = "cassandra.monitoring_check_interval_ms";
+    public final static int CHECK_INTERVAL_MS = Math.max(50, Integer.valueOf(System.getProperty(CHECK_INTERVAL_PROPERTY, Integer.toString(REPORT_INTERVAL_MS / 10))));
+
+    /**
+     * Defines the maximum number of unique timed out queries that will be reported in the logs.
+     * Use a negative number to remove any limit. Operations are sorted by number of time-outs
+     * and only the top operations are reported.
+     */
+    final static String MAX_TIMEDOUT_OPERATIONS_PROPERTY = "cassandra.monitoring_max_timedout_operations";
+    public static int MAX_TIMEDOUT_OPERATIONS = Integer.valueOf(System.getProperty(MAX_TIMEDOUT_OPERATIONS_PROPERTY, "5"));
+
     private final static MonitoringTask instance = new MonitoringTask();
     static
     {
-        ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(instance,
-                                                                 0,
-                                                                 DatabaseDescriptor.getMonitoringCheckIntervalMillis(),
-                                                                 TimeUnit.MILLISECONDS);
+        logger.info("Scheduling monitoring task with check interval of {} ms and report interval of {} ms, max timedout operations {}",
+                    CHECK_INTERVAL_MS,
+                    REPORT_INTERVAL_MS,
+                    MAX_TIMEDOUT_OPERATIONS);
+        ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(instance, 0, CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
     }
 
     private final CopyOnWriteArrayList<AtomicReference<Monitorable>> operations;
@@ -72,11 +97,7 @@ public class MonitoringTask implements Runnable
         final long now = System.currentTimeMillis();
         operations.forEach(o -> checkOperation(now, o));
 
-        int reportInterval = DatabaseDescriptor.getMonitoringReportIntervalMillis();
-        if (reportInterval < 0)
-            return;
-
-        if (now - reportTime >= reportInterval)
+        if (REPORT_INTERVAL_MS >= 0 && now - reportTime >= REPORT_INTERVAL_MS)
             logFailedOperations(now);
     }
 
@@ -128,20 +149,18 @@ public class MonitoringTask implements Runnable
 
     String getFailedOperationsLog()
     {
-        final int configMaxTimedoutOperations = DatabaseDescriptor.getMonitoringMaxTimedoutOperations();
-        final long maxTimedoutOperations = configMaxTimedoutOperations < 0 ? Long.MAX_VALUE : configMaxTimedoutOperations;
-        if (failedOperations.isEmpty() ||
-            maxTimedoutOperations == 0)
+        if (failedOperations.isEmpty() || MAX_TIMEDOUT_OPERATIONS == 0)
             return Strings.EMPTY;
 
+        final long limit = MAX_TIMEDOUT_OPERATIONS < 0 ? Long.MAX_VALUE : MAX_TIMEDOUT_OPERATIONS;
         final StringBuilder ret = new StringBuilder();
         failedOperations.entrySet()
                         .stream()
                         .sorted((o1, o2) -> Integer.compare(o2.getValue().size(), o1.getValue().size()))
-                        .limit(maxTimedoutOperations)
+                        .limit(limit)
                         .forEach(entry -> formatEntry(ret, entry));
 
-        if (failedOperations.size() > maxTimedoutOperations)
+        if (failedOperations.size() > limit)
             ret.append(Strings.LINE_SEPARATOR)
                .append("...");
 
@@ -156,27 +175,35 @@ public class MonitoringTask implements Runnable
 
         List<Failure> failures = entry.getValue();
         if (failures.size() == 1)
-        {
             ret.append(name)
                .append(": ")
                .append(formatFailure(failures.get(0)));
-        }
         else
-        {
             ret.append(name)
                .append(String.format(" (timed out %d times): ", failures.size()))
-               .append(formatFailure(Iterables.getFirst(failures, null)))
-               .append(failures.size() > 2 ? " ... " : ", ")
-               .append(formatFailure(Iterables.getLast(failures, null)));
-        }
+               .append(formatFailures(failures));
     }
 
     private static String formatFailure(Failure failure)
     {
         Monitorable operation = failure.operation;
-        return String.format("received/failed %1$tT.%1$tL/%2$tT.%2$tL - timeout %3$d %4$s",
-                             new Date(operation.constructionTime().timestamp),
-                             new Date(failure.failedAt),
+        return String.format("total time %d msec - timeout %d %s",
+                             failure.totalTime(),
+                             operation.timeout(),
+                             operation.constructionTime().isCrossNode ? "msec/cross-node" : "msec");
+    }
+
+    private static String formatFailures(List<Failure> failures)
+    {
+        Monitorable operation = failures.get(0).operation;
+        long avg = failures.stream().map(Failure::totalTime).reduce(0L, Long::sum) / failures.size();
+        long min = failures.stream().map(Failure::totalTime).reduce(Long.MAX_VALUE, Long::min);
+        long max = failures.stream().map(Failure::totalTime).reduce(Long.MIN_VALUE, Long::max);
+
+        return String.format("total time avg/min/max %d/%d/%d msec - timeout %d %s",
+                             avg,
+                             min,
+                             max,
                              operation.timeout(),
                              operation.constructionTime().isCrossNode ? "msec/cross-node" : "msec");
     }
@@ -190,6 +217,11 @@ public class MonitoringTask implements Runnable
         {
             this.operation = operation;
             this.failedAt = failedAt;
+        }
+
+        long totalTime()
+        {
+            return failedAt - operation.constructionTime().timestamp;
         }
     }
 }

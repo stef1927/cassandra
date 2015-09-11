@@ -20,19 +20,14 @@ package org.apache.cassandra.db.monitoring;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import com.google.common.collect.ImmutableMap;
 import org.junit.BeforeClass;
 import org.junit.Test;
-
-import org.apache.cassandra.config.DatabaseDescriptor;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -42,20 +37,20 @@ import static org.junit.Assert.fail;
 public class MonitoringTaskTest
 {
     private static final MonitorableThreadLocal monitoringTask = new MonitorableThreadLocal();
-    private static final long timeout = 10;
+    private static final long timeout = 100;
     private static final long MAX_SPIN_TIME_NANOS = TimeUnit.SECONDS.toNanos(5);
 
     @BeforeClass
     public static void setup()
     {
-        // Let's speed things up a bit
-        DatabaseDescriptor.setMonitoringCheckIntervalMillis(5);
+        // Set the check interval to the smallest possible value
+        System.setProperty(MonitoringTask.CHECK_INTERVAL_PROPERTY, "50");
 
         // This disables real-time reporting so that we can check the failed operations directly
-        DatabaseDescriptor.setMonitoringReportIntervalMillis(-1);
+        System.setProperty(MonitoringTask.REPORT_INTERVAL_PROPERTY, "-1");
 
         // Make sure that by default we report all operations that timed out
-        DatabaseDescriptor.setMonitoringMaxTimedoutOperations(-1);
+        System.setProperty(MonitoringTask.MAX_TIMEDOUT_OPERATIONS_PROPERTY, "-1");
     }
 
     private static final class TestMonitor extends MonitorableImpl
@@ -144,10 +139,10 @@ public class MonitoringTaskTest
     @Test
     public void testReport() throws InterruptedException
     {
-        int oldReportInterval = DatabaseDescriptor.getMonitoringReportIntervalMillis();
+        int oldReportInterval = MonitoringTask.REPORT_INTERVAL_MS;
 
         //This ensures we report every time we check, so we exercise the code path without extra waiting time
-        DatabaseDescriptor.setMonitoringReportIntervalMillis(DatabaseDescriptor.getMonitoringCheckIntervalMillis());
+        MonitoringTask.REPORT_INTERVAL_MS = MonitoringTask.CHECK_INTERVAL_MS;
 
         try
         {
@@ -162,7 +157,7 @@ public class MonitoringTaskTest
         }
         finally
         {
-            DatabaseDescriptor.setMonitoringReportIntervalMillis(oldReportInterval);
+            MonitoringTask.REPORT_INTERVAL_MS = oldReportInterval;
         }
     }
 
@@ -202,8 +197,8 @@ public class MonitoringTaskTest
     @Test
     public void testMaxTimedoutOperations() throws InterruptedException
     {
-        int oldMaxTimedoutOperations = DatabaseDescriptor.getMonitoringMaxTimedoutOperations();
-        DatabaseDescriptor.setMonitoringMaxTimedoutOperations(5);
+        int oldMaxTimedoutOperations = MonitoringTask.MAX_TIMEDOUT_OPERATIONS;
+        MonitoringTask.MAX_TIMEDOUT_OPERATIONS = 5;
 
         try
         {
@@ -244,8 +239,6 @@ public class MonitoringTaskTest
             finished.await();
             assertEquals(0, executorService.shutdownNow().size());
 
-            waitForOperationsToComplete(operations);
-
             List<String> failedOperations = MonitoringTask.logFailedOperations();
             assertEquals(6, failedOperations.size()); // 5 operations plus the ...
             assertTrue(failedOperations.get(0).startsWith("Operation 10"));
@@ -257,7 +250,7 @@ public class MonitoringTaskTest
         }
         finally
         {
-            DatabaseDescriptor.setMonitoringMaxTimedoutOperations(oldMaxTimedoutOperations);
+            MonitoringTask.MAX_TIMEDOUT_OPERATIONS = oldMaxTimedoutOperations;
         }
     }
 

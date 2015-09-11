@@ -305,23 +305,6 @@ public class Config
      */
     public UserFunctionTimeoutPolicy user_function_timeout_policy = UserFunctionTimeoutPolicy.die;
 
-    /**
-     * Defines the interval for checking if operations have timed out, CASSANDRA-7392.
-     */
-    public static int monitoring_check_interval_millis = 50;
-
-    /**
-     * Defines the interval for reporting any operations that have timed out, CASSANDRA-7392.
-     */
-    public static int monitoring_report_interval_millis = 5000;
-
-    /**
-     * Defines the maximum number of unique timed out queries that will be reported in the logs.
-     * Use a negative number to remove any limit. Operations are sorted by number of time-outs
-     * and only the top operations are reported, CASSANDRA-7392.
-     */
-    public static int monitoring_max_timedout_operations = 5;
-
     public static boolean getOutboundBindAny()
     {
         return outboundBindAny;

@@ -1941,39 +1941,6 @@ public class DatabaseDescriptor
     {
         return conf.gc_warn_threshold_in_ms;
     }
-	
-    public static int getMonitoringCheckIntervalMillis()
-    {
-        return conf.monitoring_check_interval_millis;
-    }
-
-    public static void setMonitoringCheckIntervalMillis(int monitoringCheckIntervalMillis)
-    {
-        conf.monitoring_check_interval_millis = monitoringCheckIntervalMillis;
-    }
-
-    public static int getMonitoringReportIntervalMillis()
-    {
-        return conf.monitoring_report_interval_millis;
-    }
-
-    public static void setMonitoringReportIntervalMillis(int monitoringReportIntervalMillis)
-    {
-        conf.monitoring_report_interval_millis = monitoringReportIntervalMillis;
-    }
-
-    public static int getMonitoringMaxTimedoutOperations()
-    {
-        return conf.monitoring_max_timedout_operations;
-    }
-
-    public static void setMonitoringMaxTimedoutOperations(int monitoringMaxTimedoutOperations)
-    {
-        conf.monitoring_max_timedout_operations = monitoringMaxTimedoutOperations;
-    }
-
-
-
 
     @VisibleForTesting
     public static void setEncryptionContext(EncryptionContext ec)
