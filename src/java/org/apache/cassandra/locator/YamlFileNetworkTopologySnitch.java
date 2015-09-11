@@ -121,6 +121,7 @@ public class YamlFileNetworkTopologySnitch
                 protected void runMayThrow() throws ConfigurationException
                 {
                     loadTopologyConfiguration();
+                    StorageService.instance.updateTopology(FBUtilities.getBroadcastAddress());
                 }
             };
             ResourceWatcher.watch(topologyConfigFilename, runnable,
