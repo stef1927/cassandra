@@ -1378,9 +1378,11 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                         SystemKeyspace.updatePeerInfo(endpoint, "release_version", quote(value.value));
                         break;
                     case DC:
+                        updateTopology(endpoint);
                         SystemKeyspace.updatePeerInfo(endpoint, "data_center", quote(value.value));
                         break;
                     case RACK:
+                        updateTopology(endpoint);
                         SystemKeyspace.updatePeerInfo(endpoint, "rack", quote(value.value));
                         break;
                     case RPC_ADDRESS:
@@ -1395,6 +1397,14 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                         break;
                 }
             }
+        }
+    }
+
+    public void updateTopology(InetAddress endpoint)
+    {
+        if (getTokenMetadata().isMember(endpoint))
+        {
+            getTokenMetadata().updateTopology(endpoint);
         }
     }
 
