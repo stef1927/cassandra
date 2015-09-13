@@ -420,13 +420,6 @@ public class PartitionUpdate extends AbstractBTreePartition
         return super.iterator();
     }
 
-    @Override
-    public SliceableUnfilteredRowIterator sliceableUnfilteredIterator(ColumnFilter columns, boolean reversed)
-    {
-        maybeBuild();
-        return super.sliceableUnfilteredIterator(columns, reversed);
-    }
-
     /**
      * Validates the data contained in this update.
      *
@@ -607,7 +600,7 @@ public class PartitionUpdate extends AbstractBTreePartition
     {
         public void serialize(PartitionUpdate update, DataOutputPlus out, int version) throws IOException
         {
-            try (UnfilteredRowIterator iter = update.sliceableUnfilteredIterator())
+            try (UnfilteredRowIterator iter = update.unfilteredIterator())
             {
                 assert !iter.isReverseOrder();
 
@@ -696,7 +689,7 @@ public class PartitionUpdate extends AbstractBTreePartition
 
         public long serializedSize(PartitionUpdate update, int version)
         {
-            try (UnfilteredRowIterator iter = update.sliceableUnfilteredIterator())
+            try (UnfilteredRowIterator iter = update.unfilteredIterator())
             {
                 if (version < MessagingService.VERSION_30)
                     return LegacyLayout.serializedSizeAsLegacyPartition(iter, version);
