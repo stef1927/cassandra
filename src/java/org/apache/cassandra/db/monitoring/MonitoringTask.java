@@ -21,7 +21,6 @@ package org.apache.cassandra.db.monitoring;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,12 +29,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import joptsimple.internal.Strings;
 import org.apache.cassandra.concurrent.ScheduledExecutors;
+import org.apache.cassandra.config.Config;
+
+import static java.lang.System.getProperty;
 
 /**
  * A task for monitoring in progress operations, currently only read queries, and aborting them if they time out.
@@ -43,19 +43,20 @@ import org.apache.cassandra.concurrent.ScheduledExecutors;
  */
 public class MonitoringTask implements Runnable
 {
+    private static final String LINE_SEPARATOR = getProperty( "line.separator" );
     private static final Logger logger = LoggerFactory.getLogger(MonitoringTask.class);
 
     /**
      * Defines the interval for reporting any operations that have timed out.
      */
-    final static String REPORT_INTERVAL_PROPERTY = "cassandra.monitoring_report_interval_ms";
+    final static String REPORT_INTERVAL_PROPERTY = Config.PROPERTY_PREFIX + "monitoring_report_interval_ms";
     public static int REPORT_INTERVAL_MS = Integer.valueOf(System.getProperty(REPORT_INTERVAL_PROPERTY, "5000"));
 
     /**
      * Defines the interval for checking if operations have timed out, it cannot be less than 50 milliseconds. If not set by default
      * this is 10% of the reporting interval.
      */
-    final static String CHECK_INTERVAL_PROPERTY = "cassandra.monitoring_check_interval_ms";
+    final static String CHECK_INTERVAL_PROPERTY = Config.PROPERTY_PREFIX + "monitoring_check_interval_ms";
     public final static int CHECK_INTERVAL_MS = Math.max(50, Integer.valueOf(System.getProperty(CHECK_INTERVAL_PROPERTY, Integer.toString(REPORT_INTERVAL_MS / 10))));
 
     /**
@@ -63,7 +64,7 @@ public class MonitoringTask implements Runnable
      * Use a negative number to remove any limit. Operations are sorted by number of time-outs
      * and only the top operations are reported.
      */
-    final static String MAX_TIMEDOUT_OPERATIONS_PROPERTY = "cassandra.monitoring_max_timedout_operations";
+    final static String MAX_TIMEDOUT_OPERATIONS_PROPERTY = Config.PROPERTY_PREFIX + "monitoring_max_timedout_operations";
     public static int MAX_TIMEDOUT_OPERATIONS = Integer.valueOf(System.getProperty(MAX_TIMEDOUT_OPERATIONS_PROPERTY, "5"));
 
     private final static MonitoringTask instance = new MonitoringTask();
@@ -150,7 +151,7 @@ public class MonitoringTask implements Runnable
     String getFailedOperationsLog()
     {
         if (failedOperations.isEmpty() || MAX_TIMEDOUT_OPERATIONS == 0)
-            return Strings.EMPTY;
+            return "";
 
         final long limit = MAX_TIMEDOUT_OPERATIONS < 0 ? Long.MAX_VALUE : MAX_TIMEDOUT_OPERATIONS;
         final StringBuilder ret = new StringBuilder();
@@ -161,7 +162,7 @@ public class MonitoringTask implements Runnable
                         .forEach(entry -> formatEntry(ret, entry));
 
         if (failedOperations.size() > limit)
-            ret.append(Strings.LINE_SEPARATOR)
+            ret.append(LINE_SEPARATOR)
                .append("...");
 
         return ret.toString();
@@ -171,7 +172,7 @@ public class MonitoringTask implements Runnable
     {
         String name = entry.getKey();
         if (ret.length() > 0)
-            ret.append(Strings.LINE_SEPARATOR);
+            ret.append(LINE_SEPARATOR);
 
         List<Failure> failures = entry.getValue();
         if (failures.size() == 1)
