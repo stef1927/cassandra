@@ -576,15 +576,15 @@ public class LogTransactionTest extends AbstractTransactionalTest
         log.trackNew(sstableNew);
         log.obsoleted(sstableOld);
 
+        sstableOld.selfRef().release();
+        sstableNew.selfRef().release();
+
         // Modify the transaction log or disk state for sstableOld
         modifier.accept(log, sstableOld);
 
         String txnFilePath = log.getLogFile().file.getPath();
 
         assertNull(log.complete(null));
-
-        sstableOld.selfRef().release();
-        sstableNew.selfRef().release();
 
         // The files on disk, for old files make sure to exclude the files that were deleted by the modifier
         Set<String> newFiles = sstableNew.getAllFilePaths().stream().collect(Collectors.toSet());
