@@ -1408,6 +1408,12 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         }
     }
 
+    public void updateTopology()
+    {
+        getTokenMetadata().updateTopology();
+
+    }
+
     private void updatePeerInfo(InetAddress endpoint)
     {
         EndpointState epState = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
