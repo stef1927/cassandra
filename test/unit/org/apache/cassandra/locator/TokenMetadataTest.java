@@ -41,8 +41,6 @@ import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.service.StorageService;
 
-import static org.apache.cassandra.Util.token;
-import static org.junit.Assert.assertEquals;
 
 @RunWith(OrderedJUnit4ClassRunner.class)
 public class TokenMetadataTest
@@ -270,8 +268,7 @@ public class TokenMetadataTest
             }
         });
 
-        tokenMetadata.updateTopology(first);
-        tokenMetadata.updateTopology(second);
+        tokenMetadata.updateTopology();
 
         allEndpoints = topology.getDatacenterEndpoints();
         assertNotNull(allEndpoints);

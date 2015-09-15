@@ -415,8 +415,8 @@ public class TokenMetadata
         }
     }
 
-    /** This is called when the snitch properties are reloaded, updating the endpoint
-     * will update the topology dc and rac mappings, see CASSANDRA-10238.
+    /**
+     * This is called when the snitch properties for this endpoint are updated, see CASSANDRA-10238.
      */
     public void updateTopology(InetAddress endpoint)
     {
@@ -427,6 +427,24 @@ public class TokenMetadata
         {
             logger.info("Updating topology for {}", endpoint);
             topology.updateEndpoint(endpoint);
+        }
+        finally
+        {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * This is called when the snitch properties for many endpoints are updated, it will update
+     * the topology mappings of any endpoints whose snitch has changed, see CASSANDRA-10238.
+     */
+    public void updateTopology()
+    {
+        lock.writeLock().lock();
+        try
+        {
+            logger.info("Updating topology for all endpoints that have changed");
+            topology.updateEndpoints();
         }
         finally
         {
@@ -1215,12 +1233,26 @@ public class TokenMetadata
 
         void updateEndpoint(InetAddress ep)
         {
-            Pair<String, String> current = currentLocations.get(ep);
             IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-
-            if (current == null || snitch == null)
+            if (snitch == null || !currentLocations.containsKey(ep))
                 return;
 
+           updateEndpoint(ep, snitch);
+        }
+
+        void updateEndpoints()
+        {
+            IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
+            if (snitch == null)
+                return;
+
+            for (InetAddress ep : currentLocations.keySet())
+                updateEndpoint(ep, snitch);
+        }
+
+        private void updateEndpoint(InetAddress ep, IEndpointSnitch snitch)
+        {
+            Pair<String, String> current = currentLocations.get(ep);
             String dc = snitch.getDatacenter(ep);
             String rack = snitch.getRack(ep);
             if (dc.equals(current.left) && rack.equals(current.right))

@@ -70,7 +70,7 @@ public class PropertyFileSnitch extends AbstractNetworkTopologySnitch
                 protected void runMayThrow() throws ConfigurationException
                 {
                     reloadConfiguration();
-                    StorageService.instance.updateTopology(FBUtilities.getBroadcastAddress());
+                    StorageService.instance.updateTopology();
                 }
             };
             ResourceWatcher.watch(SNITCH_PROPERTIES_FILENAME, runnable, 60 * 1000);
