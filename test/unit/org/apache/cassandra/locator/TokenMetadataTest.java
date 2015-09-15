@@ -268,8 +268,7 @@ public class TokenMetadataTest
             }
         });
 
-        tokenMetadata.updateTopology(first);
-        tokenMetadata.updateTopology(second);
+        tokenMetadata.updateTopology();
 
         allEndpoints = topology.getDatacenterEndpoints();
         assertNotNull(allEndpoints);
