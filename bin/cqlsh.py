@@ -113,7 +113,7 @@ from cassandra.metadata import (ColumnMetadata, KeyspaceMetadata,
                                 TableMetadata, protect_name, protect_names,
                                 protect_value)
 from cassandra.policies import WhiteListRoundRobinPolicy
-from cassandra.protocol import ProtocolHandler, QueryMessage, ResultMessage
+from cassandra.protocol import QueryMessage, ResultMessage
 from cassandra.query import SimpleStatement, ordered_dict_factory
 
 # cqlsh should run correctly when run out of a Cassandra source tree,
@@ -2389,17 +2389,9 @@ class ImportProcess(multiprocessing.Process):
 
                 request_id = conn.get_request_id()
                 conn.send_msg(query_message, request_id=request_id, cb=partial(callback, current_record))
-                #binary_message = ProtocolHandler.encode_message(query_message,
-                #                                                stream_id=request_id,
-                #                                                protocol_version=DEFAULT_PROTOCOL_VERSION,
-                #                                                compressor=None)
 
                 with conn.lock:
                     conn.in_flight += 1
-
-                # add the message directly to the connection's queue
-                #conn._requests[request_id] = (partial(callback, current_record), ProtocolHandler.decode_message)
-                #conn.push(binary_message)
 
                 # every 50 records, clear the pending writes queue and read
                 # any responses we have
