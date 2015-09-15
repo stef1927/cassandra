@@ -283,6 +283,8 @@ JUNK ::= /([ \t\r\f\v]+|(--|[/][/])[^\n\r]*([\n\r]|$)|[/][*].*?[*][/])/ ;
 
 <columnFamilyName> ::= ( ksname=<cfOrKsName> dot="." )? cfname=<cfOrKsName> ;
 
+<materializedViewName> ::= ( ksname=<cfOrKsName> dot="." )? mvname=<cfOrKsName> ;
+
 <userTypeName> ::= ( ksname=<cfOrKsName> dot="." )? utname=<cfOrKsName> ;
 
 <keyspaceName> ::= ksname=<cfOrKsName> ;
@@ -559,6 +561,7 @@ def cf_ks_name_completer(ctxt, cass):
     return [maybe_escape_name(ks) + '.' for ks in cass.get_keyspace_names()]
 
 completer_for('columnFamilyName', 'ksname')(cf_ks_name_completer)
+completer_for('materializedViewName', 'ksname')(cf_ks_name_completer)
 
 
 def cf_ks_dot_completer(ctxt, cass):
@@ -568,6 +571,7 @@ def cf_ks_dot_completer(ctxt, cass):
     return []
 
 completer_for('columnFamilyName', 'dot')(cf_ks_dot_completer)
+completer_for('materializedViewName', 'dot')(cf_ks_dot_completer)
 
 
 @completer_for('columnFamilyName', 'cfname')
@@ -582,6 +586,20 @@ def cf_name_completer(ctxt, cass):
             return ()
         raise
     return map(maybe_escape_name, cfnames)
+
+
+@completer_for('materializedViewName', 'mvname')
+def mv_name_completer(ctxt, cass):
+    ks = ctxt.get_binding('ksname', None)
+    if ks is not None:
+        ks = dequote_name(ks)
+    try:
+        mvnames = cass.get_materialized_view_names(ks)
+    except Exception:
+        if ks is None:
+            return ()
+        raise
+    return map(maybe_escape_name, mvnames)
 
 completer_for('userTypeName', 'ksname')(cf_ks_name_completer)
 
