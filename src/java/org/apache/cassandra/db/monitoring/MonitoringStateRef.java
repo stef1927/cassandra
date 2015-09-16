@@ -60,11 +60,8 @@ public class MonitoringStateRef extends AtomicReference<MonitoringState>
             if (expected != current)
                 return false;
 
-            // it's ok if both monitoring and worker threads set this to something different,
-            // logging of dropped queries is an approximation so if we log as dropped a query
-            // that completed that's OK
-            lazySet(updated);
-            return true;
+            if (compareAndSet(current, updated))
+                return true;
         }
     }
 

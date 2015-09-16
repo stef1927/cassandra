@@ -68,8 +68,8 @@ public class MonitoringStateRefTest
     @Test
     public void testRaces() throws InterruptedException
     {
-        ExecutorService executorService = Executors.newFixedThreadPool(8);
-        final int nTests = 10000;
+        ExecutorService executorService = Executors.newFixedThreadPool(64);
+        final int nTests = 1000;
         final CountDownLatch finished = new CountDownLatch(nTests*2);
 
         for (int i = 0; i < nTests; i++)
@@ -77,13 +77,32 @@ public class MonitoringStateRefTest
            final MonitoringStateRef state = new MonitoringStateRef();
 
             executorService.submit(() -> {
-                state.complete();
+                if (state.complete())
+                {
+                    assertTrue(state.completed());
+                    assertFalse(state.aborted());
+                }
+                else
+                {
+                    assertTrue(state.aborted());
+                    assertFalse(state.completed());
+                }
                 assertFalse(state.inProgress());
                 finished.countDown();
             });
 
             executorService.submit(() -> {
-                state.abort();
+                if (state.abort())
+                {
+                    assertTrue(state.aborted());
+                    assertFalse(state.completed());
+                }
+                else
+                {
+                    assertTrue(state.completed());
+                    assertFalse(state.aborted());
+                }
+
                 assertFalse(state.inProgress());
                 finished.countDown();
             });
