@@ -657,7 +657,7 @@ syntax_rules += r'''
 <useStatement> ::= "USE" <keyspaceName>
                  ;
 <selectStatement> ::= "SELECT" ( "JSON" )? <selectClause>
-                        "FROM" cf=<columnFamilyName>
+                        "FROM" (cf=<columnFamilyName> | mv=<materializedViewName>)
                           ( "WHERE" <whereClause> )?
                           ( "ORDER" "BY" <orderByClause> ( "," <orderByClause> )* )?
                           ( "LIMIT" limit=<wholenumber> )?
@@ -1151,7 +1151,7 @@ syntax_rules += r'''
                                ( "USING" <stringLiteral> ( "WITH" "OPTIONS" "=" <mapLiteral> )? )?
                          ;
 
-<createMaterializedViewStatement> ::= "CREATE" "MATERIALIZED" "VIEW" ("IF" "NOT" "EXISTS")? <columnFamilyName>?
+<createMaterializedViewStatement> ::= "CREATE" "MATERIALIZED" "VIEW" ("IF" "NOT" "EXISTS")? <materializedViewName>?
                                       "AS" <selectStatement>
                                       "PRIMARY" "KEY" <pkDef>
                                     ;
@@ -1213,7 +1213,7 @@ syntax_rules += r'''
 <dropIndexStatement> ::= "DROP" "INDEX" ("IF" "EXISTS")? idx=<indexName>
                        ;
 
-<dropMaterializedViewStatement> ::= "DROP" "MATERIALIZED" "VIEW" ("IF" "EXISTS")? mv=<columnFamilyName>
+<dropMaterializedViewStatement> ::= "DROP" "MATERIALIZED" "VIEW" ("IF" "EXISTS")? mv=<materializedViewName>
                                   ;
 
 <dropUserTypeStatement> ::= "DROP" "TYPE" ut=<userTypeName>

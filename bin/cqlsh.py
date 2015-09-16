@@ -1173,7 +1173,22 @@ class Shell(cmd.Cmd):
 
         return result
 
-    def parse_for_table_meta(self, query_string):
+    def parse_for_select_meta(self, query_string):
+        try:
+            parsed = cqlruleset.cql_parse(query_string)[1]
+        except IndexError:
+            return None
+        ks = self.cql_unprotect_name(parsed.get_binding('ksname', None))
+        name = self.cql_unprotect_name(parsed.get_binding('cfname', None))
+        try:
+            return self.get_table_meta(ks, name)
+        except ColumnFamilyNotFound:
+            try:
+               return self.get_view_meta(ks, name)
+            except MaterializedViewNotFound:
+                raise ObjectNotFound("%r not found in keyspace %r" % (name, ks))
+
+    def parse_for_update_meta(self, query_string):
         try:
             parsed = cqlruleset.cql_parse(query_string)[1]
         except IndexError:
@@ -1204,7 +1219,7 @@ class Shell(cmd.Cmd):
                 return False, None
 
         if statement.query_string[:6].lower() == 'select':
-            self.print_result(rows, self.parse_for_table_meta(statement.query_string))
+            self.print_result(rows, self.parse_for_select_meta(statement.query_string))
         elif statement.query_string.lower().startswith("list users") or statement.query_string.lower().startswith("list roles"):
             self.print_result(rows, self.get_table_meta('system_auth', 'roles'))
         elif statement.query_string.lower().startswith("list"):
@@ -1212,7 +1227,7 @@ class Shell(cmd.Cmd):
         elif rows:
             # CAS INSERT/UPDATE
             self.writeresult("")
-            self.print_static_result(rows, self.parse_for_table_meta(statement.query_string))
+            self.print_static_result(rows, self.parse_for_update_meta(statement.query_string))
         self.flush_output()
         return True, future
 
