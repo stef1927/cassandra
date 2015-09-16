@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.concurrent.ScheduledExecutors;
 import org.apache.cassandra.config.Config;
+import org.apache.cassandra.utils.NoSpamLogger;
 
 import static java.lang.System.getProperty;
 
@@ -45,12 +46,13 @@ public class MonitoringTask implements Runnable
 {
     private static final String LINE_SEPARATOR = getProperty( "line.separator" );
     private static final Logger logger = LoggerFactory.getLogger(MonitoringTask.class);
+    private static final NoSpamLogger noSpamLogger = NoSpamLogger.getLogger(logger, 15L, TimeUnit.MINUTES);
 
     /**
      * Defines the interval for reporting any operations that have timed out.
      */
     final static String REPORT_INTERVAL_PROPERTY = Config.PROPERTY_PREFIX + "monitoring_report_interval_ms";
-    public static int REPORT_INTERVAL_MS = Integer.valueOf(System.getProperty(REPORT_INTERVAL_PROPERTY, "5000"));
+    public static int REPORT_INTERVAL_MS = Math.max(0, Integer.valueOf(System.getProperty(REPORT_INTERVAL_PROPERTY, "5000")));
 
     /**
      * Defines the interval for checking if operations have timed out, it cannot be less than 50 milliseconds. If not set by default
@@ -65,7 +67,7 @@ public class MonitoringTask implements Runnable
      * and only the top operations are reported.
      */
     final static String MAX_TIMEDOUT_OPERATIONS_PROPERTY = Config.PROPERTY_PREFIX + "monitoring_max_timedout_operations";
-    public static int MAX_TIMEDOUT_OPERATIONS = Integer.valueOf(System.getProperty(MAX_TIMEDOUT_OPERATIONS_PROPERTY, "5"));
+    public static int MAX_TIMEDOUT_OPERATIONS = Integer.valueOf(System.getProperty(MAX_TIMEDOUT_OPERATIONS_PROPERTY, "50"));
 
     private final static MonitoringTask instance = new MonitoringTask();
     static
@@ -98,7 +100,7 @@ public class MonitoringTask implements Runnable
         final long now = System.currentTimeMillis();
         operations.forEach(o -> checkOperation(now, o));
 
-        if (REPORT_INTERVAL_MS >= 0 && now - reportTime >= REPORT_INTERVAL_MS)
+        if (now - reportTime >= REPORT_INTERVAL_MS)
             logFailedOperations(now);
     }
 
@@ -115,8 +117,6 @@ public class MonitoringTask implements Runnable
 
     private void addFailedOperation(long now, Monitorable operation)
     {
-        logger.debug("Operation {} aborted", operation.name());
-
         List<Failure> failures = failedOperations.get(operation.name());
         if (failures == null)
         {
@@ -141,8 +141,10 @@ public class MonitoringTask implements Runnable
     {
         String logMsg = getFailedOperationsLog();
         if (!logMsg.isEmpty())
-            logger.info("Operations timed out in the last {} msecs:\n{}", now - reportTime, logMsg);
-
+        {
+            noSpamLogger.warn("Some operations timed out, check debug log");
+            logger.debug("Operations timed out in the last {} msecs:\n{}", now - reportTime, logMsg);
+        }
         failedOperations.clear();
         reportTime = now;
         return logMsg;
