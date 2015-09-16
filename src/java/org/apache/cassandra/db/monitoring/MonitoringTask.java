@@ -143,7 +143,7 @@ public class MonitoringTask implements Runnable
         if (!logMsg.isEmpty())
         {
             noSpamLogger.warn("Some operations timed out, check debug log");
-            logger.debug("Operations timed out in the last {} msecs:\n{}", now - reportTime, logMsg);
+            logger.debug("Operations that timed out in the last {} msecs:\n{}", now - reportTime, logMsg);
         }
         failedOperations.clear();
         reportTime = now;
