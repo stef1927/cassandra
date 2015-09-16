@@ -70,7 +70,7 @@ public class MonitoringStateRefTest
     {
         ExecutorService executorService = Executors.newFixedThreadPool(8);
         final int nTests = 10000;
-        final CountDownLatch finished = new CountDownLatch(nTests);
+        final CountDownLatch finished = new CountDownLatch(nTests*2);
 
         for (int i = 0; i < nTests; i++)
         {
@@ -78,15 +78,13 @@ public class MonitoringStateRefTest
 
             executorService.submit(() -> {
                 state.complete();
-                assertTrue(state.aborted());
-                assertFalse(state.completed());
+                assertFalse(state.inProgress());
                 finished.countDown();
             });
 
             executorService.submit(() -> {
                 state.abort();
-                assertFalse(state.aborted());
-                assertTrue(state.completed());
+                assertFalse(state.inProgress());
                 finished.countDown();
             });
         }

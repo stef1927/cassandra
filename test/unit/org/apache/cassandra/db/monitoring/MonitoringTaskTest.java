@@ -47,7 +47,7 @@ public class MonitoringTaskTest
         System.setProperty(MonitoringTask.CHECK_INTERVAL_PROPERTY, "50");
 
         // This disables real-time reporting so that we can check the failed operations directly
-        System.setProperty(MonitoringTask.REPORT_INTERVAL_PROPERTY, "-1");
+        System.setProperty(MonitoringTask.REPORT_INTERVAL_PROPERTY, "60000");
 
         // Make sure that by default we report all operations that timed out
         System.setProperty(MonitoringTask.MAX_TIMEDOUT_OPERATIONS_PROPERTY, "-1");
