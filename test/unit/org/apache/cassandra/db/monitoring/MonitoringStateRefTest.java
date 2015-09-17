@@ -27,6 +27,7 @@ import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class MonitoringStateRefTest
 {
@@ -77,34 +78,27 @@ public class MonitoringStateRefTest
            final MonitoringStateRef state = new MonitoringStateRef();
 
             executorService.submit(() -> {
-                if (state.complete())
+                try
                 {
-                    assertTrue(state.completed());
-                    assertFalse(state.aborted());
+                    state.complete();
+                    assertFalse(state.inProgress());
                 }
-                else
+                finally
                 {
-                    assertTrue(state.aborted());
-                    assertFalse(state.completed());
+                    finished.countDown();
                 }
-                assertFalse(state.inProgress());
-                finished.countDown();
             });
 
             executorService.submit(() -> {
-                if (state.abort())
+                try
                 {
-                    assertTrue(state.aborted());
-                    assertFalse(state.completed());
+                    state.abort();
+                    assertFalse(state.inProgress());
                 }
-                else
+                finally
                 {
-                    assertTrue(state.completed());
-                    assertFalse(state.aborted());
+                    finished.countDown();
                 }
-
-                assertFalse(state.inProgress());
-                finished.countDown();
             });
         }
 

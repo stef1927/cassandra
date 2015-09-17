@@ -241,11 +241,6 @@ public class MonitoringTaskTest
 
             List<String> failedOperations = MonitoringTask.logFailedOperations();
             assertEquals(6, failedOperations.size()); // 5 operations plus the ...
-            assertTrue(failedOperations.get(0).startsWith("Operation 10"));
-            assertTrue(failedOperations.get(1).startsWith("Operation 9"));
-            assertTrue(failedOperations.get(2).startsWith("Operation 8"));
-            assertTrue(failedOperations.get(3).startsWith("Operation 7"));
-            assertTrue(failedOperations.get(4).startsWith("Operation 6"));
             assertEquals("...", failedOperations.get(5));
         }
         finally

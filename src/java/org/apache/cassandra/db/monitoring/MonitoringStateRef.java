@@ -54,15 +54,15 @@ public class MonitoringStateRef extends AtomicReference<MonitoringState>
 
     private boolean transitionFrom(MonitoringState expected, MonitoringState updated)
     {
-        while(true)
-        {
-            MonitoringState current = get();
-            if (expected != current)
-                return false;
+        MonitoringState current = get();
+        if (expected != current)
+            return false;
 
-            if (compareAndSet(current, updated))
-                return true;
-        }
+        // See discussion on CASSANDRA-7392 on why we are OK with lazySet even though it may
+        // introduce some inaccuracies and return an incorrect value
+        lazySet(updated);
+        return true;
+
     }
 
 }
