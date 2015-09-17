@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,7 +60,7 @@ public class MonitoringTask implements Runnable
      * this is 10% of the reporting interval.
      */
     final static String CHECK_INTERVAL_PROPERTY = Config.PROPERTY_PREFIX + "monitoring_check_interval_ms";
-    public final static int CHECK_INTERVAL_MS = Math.max(50, Integer.valueOf(System.getProperty(CHECK_INTERVAL_PROPERTY, Integer.toString(REPORT_INTERVAL_MS / 10))));
+    public final static int CHECK_INTERVAL_MS = Math.max(30, Integer.valueOf(System.getProperty(CHECK_INTERVAL_PROPERTY, Integer.toString(REPORT_INTERVAL_MS / 10))));
 
     /**
      * Defines the maximum number of unique timed out queries that will be reported in the logs.
@@ -157,11 +158,11 @@ public class MonitoringTask implements Runnable
 
         final long limit = MAX_TIMEDOUT_OPERATIONS < 0 ? Long.MAX_VALUE : MAX_TIMEDOUT_OPERATIONS;
         final StringBuilder ret = new StringBuilder();
-        failedOperations.entrySet()
-                        .stream()
-                        .sorted((o1, o2) -> Integer.compare(o2.getValue().size(), o1.getValue().size()))
-                        .limit(limit)
-                        .forEach(entry -> formatEntry(ret, entry));
+
+        List<String> failedOperationNames = Lists.newArrayList(failedOperations.keySet());
+        Collections.shuffle(failedOperationNames);
+
+        failedOperationNames.stream().limit(limit).forEach(name -> formatOperation(ret, name, failedOperations.get(name)));
 
         if (failedOperations.size() > limit)
             ret.append(LINE_SEPARATOR)
@@ -170,13 +171,11 @@ public class MonitoringTask implements Runnable
         return ret.toString();
     }
 
-    private static void formatEntry(StringBuilder ret, Map.Entry<String, List<Failure>> entry)
+    private static void formatOperation(StringBuilder ret, String name, List<Failure> failures)
     {
-        String name = entry.getKey();
         if (ret.length() > 0)
             ret.append(LINE_SEPARATOR);
 
-        List<Failure> failures = entry.getValue();
         if (failures.size() == 1)
             ret.append(name)
                .append(": ")
