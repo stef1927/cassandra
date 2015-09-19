@@ -18,7 +18,6 @@
 
 package org.apache.cassandra.db.monitoring;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -29,7 +28,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -64,8 +62,7 @@ public class MonitoringTask implements Runnable
 
     /**
      * Defines the maximum number of unique timed out queries that will be reported in the logs.
-     * Use a negative number to remove any limit. Operations are sorted by number of time-outs
-     * and only the top operations are reported.
+     * Use a negative number to remove any limit.
      */
     final static String MAX_TIMEDOUT_OPERATIONS_PROPERTY = Config.PROPERTY_PREFIX + "monitoring_max_timedout_operations";
     public static int MAX_TIMEDOUT_OPERATIONS = Integer.valueOf(System.getProperty(MAX_TIMEDOUT_OPERATIONS_PROPERTY, "50"));
@@ -81,13 +78,15 @@ public class MonitoringTask implements Runnable
     }
 
     private final CopyOnWriteArrayList<AtomicReference<Monitorable>> operations;
-    private final Map<String, List<Failure>> failedOperations;
+    private final Map<String, FailedOperation> failedOperations;
+    private boolean failedOperationsTruncated;
     private long reportTime;
 
     private MonitoringTask()
     {
         this.operations = new CopyOnWriteArrayList<>();
         this.failedOperations = new HashMap<>();
+        this.failedOperationsTruncated = false;
         this.reportTime = System.currentTimeMillis();
     }
 
@@ -113,117 +112,124 @@ public class MonitoringTask implements Runnable
 
         long elapsed = now - operation.constructionTime().timestamp;
         if (elapsed >= operation.timeout() && operation.state().abort())
-            addFailedOperation(now, operation);
+            addFailedOperation(operation, now);
     }
 
-    private void addFailedOperation(long now, Monitorable operation)
+    private void addFailedOperation(Monitorable operation, long now)
     {
-        List<Failure> failures = failedOperations.get(operation.name());
-        if (failures == null)
+        FailedOperation failedOperation = failedOperations.get(operation.name());
+        if (failedOperation != null)
         {
-            failures = new ArrayList<>();
-            failedOperations.put(operation.name(), failures);
+            failedOperation.addTimeout(operation, now);
+            return;
         }
 
-        failures.add(new Failure(operation, now));
+        if (MAX_TIMEDOUT_OPERATIONS >= 0 && failedOperations.size() >= MAX_TIMEDOUT_OPERATIONS)
+            failedOperationsTruncated = true;
+        else
+            failedOperations.put(operation.name(), new FailedOperation(operation, now));
     }
 
     @VisibleForTesting
     static List<String> logFailedOperations()
     {
-        String ret = instance.logFailedOperations(System.currentTimeMillis());
-        if (ret.isEmpty())
-            return Collections.emptyList();
-
-        return Arrays.asList(ret.split("\n"));
+        return instance.doLogFailedOperations();
     }
 
-    private String logFailedOperations(long now)
+    private List<String> doLogFailedOperations()
     {
-        String logMsg = getFailedOperationsLog();
-        if (!logMsg.isEmpty())
+        String ret = failedOperations.isEmpty() ? "" : getFailedOperationsLog();
+        updateReportingState(System.currentTimeMillis());
+        return ret.isEmpty() ? Collections.emptyList() : Arrays.asList(ret.split("\n"));
+    }
+
+    private void logFailedOperations(long now)
+    {
+        if (!failedOperations.isEmpty())
         {
             noSpamLogger.warn("Some operations timed out, check debug log");
-            logger.debug("Operations that timed out in the last {} msecs:\n{}", now - reportTime, logMsg);
+            if (logger.isDebugEnabled())
+                logger.debug("Operations that timed out in the last {} msecs:\n{}", now - reportTime, getFailedOperationsLog());
         }
-        failedOperations.clear();
+
+        updateReportingState(now);
+    }
+
+    private void updateReportingState(long now)
+    {
         reportTime = now;
-        return logMsg;
+        failedOperations.clear();
+        failedOperationsTruncated = false;
     }
 
     String getFailedOperationsLog()
     {
-        if (failedOperations.isEmpty() || MAX_TIMEDOUT_OPERATIONS == 0)
-            return "";
-
-        final long limit = MAX_TIMEDOUT_OPERATIONS < 0 ? Long.MAX_VALUE : MAX_TIMEDOUT_OPERATIONS;
         final StringBuilder ret = new StringBuilder();
+        failedOperations.values().forEach(o -> formatOperation(ret, o));
 
-        List<String> failedOperationNames = Lists.newArrayList(failedOperations.keySet());
-        Collections.shuffle(failedOperationNames);
-
-        failedOperationNames.stream().limit(limit).forEach(name -> formatOperation(ret, name, failedOperations.get(name)));
-
-        if (failedOperations.size() > limit)
+        if (failedOperationsTruncated)
             ret.append(LINE_SEPARATOR)
                .append("...");
 
         return ret.toString();
     }
 
-    private static void formatOperation(StringBuilder ret, String name, List<Failure> failures)
+    private static void formatOperation(StringBuilder ret, FailedOperation operation)
     {
         if (ret.length() > 0)
             ret.append(LINE_SEPARATOR);
 
-        if (failures.size() == 1)
-            ret.append(name)
-               .append(": ")
-               .append(formatFailure(failures.get(0)));
-        else
-            ret.append(name)
-               .append(String.format(" (timed out %d times): ", failures.size()))
-               .append(formatFailures(failures));
+        ret.append(operation.getLogMessage());
     }
 
-    private static String formatFailure(Failure failure)
-    {
-        Monitorable operation = failure.operation;
-        return String.format("total time %d msec - timeout %d %s",
-                             failure.totalTime(),
-                             operation.timeout(),
-                             operation.constructionTime().isCrossNode ? "msec/cross-node" : "msec");
-    }
-
-    private static String formatFailures(List<Failure> failures)
-    {
-        Monitorable operation = failures.get(0).operation;
-        long avg = failures.stream().map(Failure::totalTime).reduce(0L, Long::sum) / failures.size();
-        long min = failures.stream().map(Failure::totalTime).reduce(Long.MAX_VALUE, Long::min);
-        long max = failures.stream().map(Failure::totalTime).reduce(Long.MIN_VALUE, Long::max);
-
-        return String.format("total time avg/min/max %d/%d/%d msec - timeout %d %s",
-                             avg,
-                             min,
-                             max,
-                             operation.timeout(),
-                             operation.constructionTime().isCrossNode ? "msec/cross-node" : "msec");
-    }
-
-    private final static class Failure
+    private final static class FailedOperation
     {
         public final Monitorable operation;
-        public final long failedAt;
+        public int numTimeouts;
+        public long avgTime;
+        public long maxTime;
+        public long minTime;
 
-        Failure(Monitorable operation, long failedAt)
+        FailedOperation(Monitorable operation, long failedAt)
         {
             this.operation = operation;
-            this.failedAt = failedAt;
+            numTimeouts = 1;
+            avgTime = failedAt - operation.constructionTime().timestamp;
+            minTime = avgTime;
+            maxTime = avgTime;
         }
 
-        long totalTime()
+        void addTimeout(Monitorable operation, long failedAt)
         {
-            return failedAt - operation.constructionTime().timestamp;
+            assert operation.name().equals(this.operation.name()) : "Expected identical operation name";
+            numTimeouts++;
+
+            long opTime = failedAt - operation.constructionTime().timestamp;
+            avgTime = (avgTime + opTime) / 2;
+
+            if (opTime > maxTime)
+                maxTime = opTime;
+            else if (opTime < minTime)
+                minTime = opTime;
+        }
+
+        public String getLogMessage()
+        {
+            if (numTimeouts == 1)
+                return String.format("%s: total time %d msec - timeout %d %s",
+                                     operation.name(),
+                                     avgTime,
+                                     operation.timeout(),
+                                     operation.constructionTime().isCrossNode ? "msec/cross-node" : "msec");
+            else
+                return String.format("%s (timed out %d times): total time avg/min/max %d/%d/%d msec - timeout %d %s",
+                                     operation.name(),
+                                     numTimeouts,
+                                     avgTime,
+                                     minTime,
+                                     maxTime,
+                                     operation.timeout(),
+                                     operation.constructionTime().isCrossNode ? "msec/cross-node" : "msec");
         }
     }
 }
