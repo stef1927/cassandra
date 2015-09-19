@@ -31,8 +31,6 @@ public class ReadCommandVerbHandler implements IVerbHandler<ReadCommand>
 {
     private static final MonitorableThreadLocal monitoringTask = new MonitorableThreadLocal();
 
-    //submit task to monitoring thread
-
     protected IVersionedSerializer<ReadResponse> serializer()
     {
         return ReadResponse.serializer;
