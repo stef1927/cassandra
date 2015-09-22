@@ -20,13 +20,13 @@ package org.apache.cassandra.db.monitoring;
 
 public abstract class MonitorableImpl implements Monitorable
 {
-    private final MonitoringStateRef state;
+    private MonitoringState state;
     private ConstructionTime constructionTime;
     private long timeout;
 
     protected MonitorableImpl()
     {
-        this.state = new MonitoringStateRef();
+        this.state = MonitoringState.IN_PROGRESS;
     }
 
     /**
@@ -40,11 +40,6 @@ public abstract class MonitorableImpl implements Monitorable
         this.timeout = timeout;
     }
 
-    public MonitoringStateRef state()
-    {
-        return state;
-    }
-
     public ConstructionTime constructionTime()
     {
         return constructionTime;
@@ -53,5 +48,57 @@ public abstract class MonitorableImpl implements Monitorable
     public long timeout()
     {
         return timeout;
+    }
+
+    public boolean inProgress()
+    {
+        check();
+        return state == MonitoringState.IN_PROGRESS;
+    }
+
+    public boolean aborted()
+    {
+        check();
+        return state == MonitoringState.ABORTED;
+    }
+
+    public boolean completed()
+    {
+        check();
+        return state == MonitoringState.COMPLETED;
+    }
+
+    public boolean abort()
+    {
+        if (state == MonitoringState.IN_PROGRESS)
+        {
+            state = MonitoringState.ABORTED;
+            if (constructionTime != null)
+                MonitoringTask.addFailedOperation(this, ApproximateTime.currentTimeMillis());
+            return true;
+        }
+
+        return state == MonitoringState.ABORTED;
+    }
+
+    public boolean complete()
+    {
+        if (state == MonitoringState.IN_PROGRESS)
+        {
+            state = MonitoringState.COMPLETED;
+            return true;
+        }
+
+        return state == MonitoringState.COMPLETED;
+    }
+
+    private void check()
+    {
+        if (constructionTime == null || state != MonitoringState.IN_PROGRESS)
+            return;
+
+        long elapsed = ApproximateTime.currentTimeMillis() - constructionTime.timestamp;
+        if (elapsed >= timeout)
+            abort();
     }
 }

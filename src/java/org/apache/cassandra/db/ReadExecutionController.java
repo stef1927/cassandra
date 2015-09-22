@@ -17,7 +17,6 @@
  */
 package org.apache.cassandra.db;
 
-import org.apache.cassandra.db.monitoring.MonitoringStateRef;
 import org.apache.cassandra.index.Index;
 import org.apache.cassandra.utils.concurrent.OpOrder;
 
@@ -30,15 +29,11 @@ public class ReadExecutionController implements AutoCloseable
     private final OpOrder.Group indexOp;
     private final OpOrder.Group writeOp;
 
-    // The state of the execution, can be used to abort it
-    private final MonitoringStateRef state;
-
-    private ReadExecutionController(OpOrder.Group baseOp, OpOrder.Group indexOp, OpOrder.Group writeOp, MonitoringStateRef state)
+    private ReadExecutionController(OpOrder.Group baseOp, OpOrder.Group indexOp, OpOrder.Group writeOp)
     {
         this.baseOp = baseOp;
         this.indexOp = indexOp;
         this.writeOp = writeOp;
-        this.state = state;
     }
 
     public OpOrder.Group baseReadOpOrderGroup()
@@ -56,16 +51,14 @@ public class ReadExecutionController implements AutoCloseable
         return writeOp;
     }
 
-    public MonitoringStateRef state() { return state; }
-
     public static ReadExecutionController empty()
     {
-        return new ReadExecutionController(null, null, null, new MonitoringStateRef());
+        return new ReadExecutionController(null, null, null);
     }
 
     public static ReadExecutionController forReadOp(OpOrder.Group readOp)
     {
-        return new ReadExecutionController(readOp, null, null, new MonitoringStateRef());
+        return new ReadExecutionController(readOp, null, null);
     }
 
     public static ReadExecutionController forCommand(ReadCommand command)
@@ -75,7 +68,7 @@ public class ReadExecutionController implements AutoCloseable
 
         if (indexCfs == null)
         {
-            return new ReadExecutionController(baseCfs.readOrdering.start(), null, null, command.state());
+            return new ReadExecutionController(baseCfs.readOrdering.start(), null, null);
         }
         else
         {
@@ -88,7 +81,7 @@ public class ReadExecutionController implements AutoCloseable
                 // TODO: this should perhaps not open and maintain a writeOp for the full duration, but instead only *try* to delete stale entries, without blocking if there's no room
                 // as it stands, we open a writeOp and keep it open for the duration to ensure that should this CF get flushed to make room we don't block the reclamation of any room being made
                 writeOp = baseCfs.keyspace.writeOrder.start();
-                return new ReadExecutionController(baseOp, indexOp, writeOp, command.state());
+                return new ReadExecutionController(baseOp, indexOp, writeOp);
             }
             catch (RuntimeException e)
             {

@@ -36,16 +36,12 @@ import static org.junit.Assert.fail;
 
 public class MonitoringTaskTest
 {
-    private static final MonitorableThreadLocal monitoringTask = new MonitorableThreadLocal();
     private static final long timeout = 100;
     private static final long MAX_SPIN_TIME_NANOS = TimeUnit.SECONDS.toNanos(5);
 
     @BeforeClass
     public static void setup()
     {
-        // Set the check interval to the smallest possible value
-        System.setProperty(MonitoringTask.CHECK_INTERVAL_PROPERTY, "50");
-
         // This disables real-time reporting so that we can check the failed operations directly
         System.setProperty(MonitoringTask.REPORT_INTERVAL_PROPERTY, "60000");
 
@@ -88,7 +84,7 @@ public class MonitoringTaskTest
         long start = System.nanoTime();
         while(System.nanoTime() - start <= MAX_SPIN_TIME_NANOS)
         {
-            long numInProgress = operations.stream().map(Monitorable::state).filter(MonitoringStateRef::inProgress).count();
+            long numInProgress = operations.stream().filter(Monitorable::inProgress).count();
             if (numInProgress == 0)
                 return;
 
@@ -100,40 +96,34 @@ public class MonitoringTaskTest
     public void testAbort() throws InterruptedException
     {
         Monitorable operation = new TestMonitor("Test abort", new ConstructionTime(System.currentTimeMillis()), timeout);
-        monitoringTask.update(operation);
-
         waitForOperationsToComplete(operation);
 
-        assertTrue(operation.state().aborted());
-        assertFalse(operation.state().completed());
-        assertEquals(1, MonitoringTask.logFailedOperations().size());
+        assertTrue(operation.aborted());
+        assertFalse(operation.complete());
+        assertEquals(1, MonitoringTask.getFailedOperations().size());
     }
 
     @Test
     public void testAbortCrossNode() throws InterruptedException
     {
         Monitorable operation = new TestMonitor("Test for cross node", new ConstructionTime(System.currentTimeMillis(), true), timeout);
-        monitoringTask.update(operation);
-
         waitForOperationsToComplete(operation);
 
-        assertTrue(operation.state().aborted());
-        assertFalse(operation.state().completed());
-        assertEquals(1, MonitoringTask.logFailedOperations().size());
+        assertTrue(operation.aborted());
+        assertFalse(operation.complete());
+        assertEquals(1, MonitoringTask.getFailedOperations().size());
     }
 
     @Test
     public void testComplete() throws InterruptedException
     {
         Monitorable operation = new TestMonitor("Test complete", new ConstructionTime(System.currentTimeMillis()), timeout);
-        monitoringTask.update(operation);
-        operation.state().complete();
-
+        operation.complete();
         waitForOperationsToComplete(operation);
 
-        assertFalse(operation.state().aborted());
-        assertTrue(operation.state().completed());
-        assertEquals(0, MonitoringTask.logFailedOperations().size());
+        assertFalse(operation.aborted());
+        assertTrue(operation.complete());
+        assertEquals(0, MonitoringTask.getFailedOperations().size());
     }
 
     @Test
@@ -141,19 +131,15 @@ public class MonitoringTaskTest
     {
         int oldReportInterval = MonitoringTask.REPORT_INTERVAL_MS;
 
-        //This ensures we report every time we check, so we exercise the code path without extra waiting time
-        MonitoringTask.REPORT_INTERVAL_MS = MonitoringTask.CHECK_INTERVAL_MS;
-
         try
         {
             Monitorable operation = new TestMonitor("Test report", new ConstructionTime(System.currentTimeMillis()), timeout);
-            monitoringTask.update(operation);
-
             waitForOperationsToComplete(operation);
 
-            assertTrue(operation.state().aborted());
-            assertFalse(operation.state().completed());
-            assertEquals(0, MonitoringTask.logFailedOperations().size());
+            assertTrue(operation.aborted());
+            assertFalse(operation.complete());
+            MonitoringTask.logFailedOperations(ApproximateTime.currentTimeMillis());
+            assertEquals(0, MonitoringTask.getFailedOperations().size());
         }
         finally
         {
@@ -178,7 +164,6 @@ public class MonitoringTaskTest
                                                             new ConstructionTime(System.currentTimeMillis()),
                                                             timeout);
                     operations.add(operation);
-                    monitoringTask.update(operation);
                 }
                 finally
                 {
@@ -191,7 +176,7 @@ public class MonitoringTaskTest
         assertEquals(0, executorService.shutdownNow().size());
 
         waitForOperationsToComplete(operations);
-        assertEquals(threadCount, MonitoringTask.logFailedOperations().size());
+        assertEquals(threadCount, MonitoringTask.getFailedOperations().size());
     }
 
     @Test
@@ -203,7 +188,6 @@ public class MonitoringTaskTest
         try
         {
             final int threadCount = 10;
-            final List<Monitorable> operations = new ArrayList<>(threadCount);
             ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
             final CountDownLatch finished = new CountDownLatch(threadCount);
 
@@ -219,8 +203,6 @@ public class MonitoringTaskTest
                             Monitorable operation = new TestMonitor(operationName,
                                                                     new ConstructionTime(System.currentTimeMillis()),
                                                                     timeout);
-                            operations.add(operation);
-                            monitoringTask.update(operation);
                             waitForOperationsToComplete(operation);
                         }
                     }
@@ -239,7 +221,7 @@ public class MonitoringTaskTest
             finished.await();
             assertEquals(0, executorService.shutdownNow().size());
 
-            List<String> failedOperations = MonitoringTask.logFailedOperations();
+            List<String> failedOperations = MonitoringTask.getFailedOperations();
             assertEquals(6, failedOperations.size()); // 5 operations plus the ...
             assertEquals("...", failedOperations.get(5));
         }
@@ -266,7 +248,6 @@ public class MonitoringTaskTest
                                                             new ConstructionTime(System.currentTimeMillis()),
                                                             timeout);
                     operations.add(operation);
-                    monitoringTask.update(operation);
                 }
                 finally
                 {
@@ -279,7 +260,7 @@ public class MonitoringTaskTest
         assertEquals(0, executorService.shutdownNow().size());
 
         waitForOperationsToComplete(operations);
-        assertEquals(1, MonitoringTask.logFailedOperations().size());
+        assertEquals(1, MonitoringTask.getFailedOperations().size());
     }
 
     @Test
@@ -299,8 +280,7 @@ public class MonitoringTaskTest
                                                             new ConstructionTime(System.currentTimeMillis()),
                                                             timeout);
                     operations.add(operation);
-                    monitoringTask.update(operation);
-                    operation.state().complete();
+                    operation.complete();
                 }
                 finally
                 {
@@ -313,6 +293,6 @@ public class MonitoringTaskTest
         assertEquals(0, executorService.shutdownNow().size());
 
         waitForOperationsToComplete(operations);
-        assertEquals(0, MonitoringTask.logFailedOperations().size());
+        assertEquals(0, MonitoringTask.getFailedOperations().size());
     }
 }
