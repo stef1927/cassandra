@@ -20,11 +20,16 @@ package org.apache.cassandra.db.monitoring;
 
 public interface Monitorable
 {
-    MonitoringStateRef state();
-
     String name();
 
     ConstructionTime constructionTime();
 
     long timeout();
+
+    boolean inProgress();
+    boolean aborted();
+    boolean completed();
+
+    boolean abort();
+    boolean complete();
 }

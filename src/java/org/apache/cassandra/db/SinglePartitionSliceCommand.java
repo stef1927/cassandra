@@ -26,7 +26,6 @@ import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.filter.ClusteringIndexSliceFilter;
 import org.apache.cassandra.db.lifecycle.SSTableSet;
 import org.apache.cassandra.db.lifecycle.View;
-import org.apache.cassandra.db.monitoring.MonitoringStateRef;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.db.filter.*;
 import org.apache.cassandra.db.partitions.Partition;
@@ -129,7 +128,7 @@ public class SinglePartitionSliceCommand extends SinglePartitionReadCommand<Clus
         return oldestUnrepairedTombstone;
     }
 
-    protected UnfilteredRowIterator queryMemtableAndDiskInternal(ColumnFamilyStore cfs, boolean copyOnHeap, MonitoringStateRef state)
+    protected UnfilteredRowIterator queryMemtableAndDiskInternal(ColumnFamilyStore cfs, boolean copyOnHeap)
     {
         Tracing.trace("Acquiring sstable references");
         ColumnFamilyStore.ViewFragment view = cfs.select(View.select(SSTableSet.LIVE, partitionKey()));
@@ -248,7 +247,7 @@ public class SinglePartitionSliceCommand extends SinglePartitionReadCommand<Clus
                 cfs.metric.samplers.get(TableMetrics.Sampler.READS).addSample(key.getKey(), key.hashCode(), 1);
             }
 
-            return withStateTracking(merged, state);
+            return withStateTracking(merged);
         }
         catch (RuntimeException | Error e)
         {

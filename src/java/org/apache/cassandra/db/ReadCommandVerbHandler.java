@@ -17,7 +17,6 @@
  */
 package org.apache.cassandra.db;
 
-import org.apache.cassandra.db.monitoring.MonitorableThreadLocal;
 import org.apache.cassandra.db.partitions.UnfilteredPartitionIterator;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.net.IVerbHandler;
@@ -29,8 +28,6 @@ import org.apache.cassandra.tracing.Tracing;
 
 public class ReadCommandVerbHandler implements IVerbHandler<ReadCommand>
 {
-    private static final MonitorableThreadLocal monitoringTask = new MonitorableThreadLocal();
-
     protected IVersionedSerializer<ReadResponse> serializer()
     {
         return ReadResponse.serializer;
@@ -45,7 +42,6 @@ public class ReadCommandVerbHandler implements IVerbHandler<ReadCommand>
 
         ReadCommand command = message.payload;
         command.setMonitoringTime(message.constructionTime, message.getTimeout());
-        monitoringTask.update(command);
 
         ReadResponse response;
         try (ReadExecutionController executionController = command.executionController();
@@ -54,7 +50,7 @@ public class ReadCommandVerbHandler implements IVerbHandler<ReadCommand>
             response = command.createResponse(iterator, command.columnFilter());
         }
 
-        if (!command.state().complete())
+        if (!command.complete())
         {
             Tracing.trace("Discarding partial response to {} (timed out)", message.from);
             MessagingService.instance().incrementDroppedMessages(message);

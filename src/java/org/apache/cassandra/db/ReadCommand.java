@@ -29,7 +29,6 @@ import org.apache.cassandra.config.*;
 import org.apache.cassandra.cql3.Operator;
 import org.apache.cassandra.db.filter.*;
 import org.apache.cassandra.db.monitoring.MonitorableImpl;
-import org.apache.cassandra.db.monitoring.MonitoringStateRef;
 import org.apache.cassandra.db.partitions.*;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.dht.AbstractBounds;
@@ -347,7 +346,7 @@ public abstract class ReadCommand extends MonitorableImpl implements ReadQuery
 
         try
         {
-            resultIterator = withStateTracking(resultIterator, executionController.state());
+            resultIterator = withStateTracking(resultIterator);
             resultIterator = withMetricsRecording(withoutPurgeableTombstones(resultIterator, cfs), cfs.metric, startTimeNanos);
 
             // If we've used a 2ndary index, we know the result already satisfy the primary expression used, so
@@ -474,14 +473,14 @@ public abstract class ReadCommand extends MonitorableImpl implements ReadQuery
         };
     }
 
-    protected UnfilteredPartitionIterator withStateTracking(UnfilteredPartitionIterator iter, final MonitoringStateRef state)
+    protected UnfilteredPartitionIterator withStateTracking(UnfilteredPartitionIterator iter)
     {
         return new WrappingUnfilteredPartitionIterator(iter)
         {
             @Override
             public UnfilteredRowIterator computeNext(UnfilteredRowIterator iter)
             {
-                if (state.aborted())
+                if (aborted())
                     return null;
 
                 if (TEST_ITERATION_DELAY_MILLIS > 0)
@@ -492,14 +491,14 @@ public abstract class ReadCommand extends MonitorableImpl implements ReadQuery
         };
     }
 
-    protected UnfilteredRowIterator withStateTracking(UnfilteredRowIterator iter, final MonitoringStateRef state)
+    protected UnfilteredRowIterator withStateTracking(UnfilteredRowIterator iter)
     {
         return new WrappingUnfilteredRowIterator(iter)
         {
             @Override
             public boolean hasNext()
             {
-                if (state.aborted())
+                if (aborted())
                     return false;
 
                 if (TEST_ITERATION_DELAY_MILLIS > 0)
