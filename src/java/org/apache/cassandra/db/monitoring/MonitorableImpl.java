@@ -72,9 +72,9 @@ public abstract class MonitorableImpl implements Monitorable
     {
         if (state == MonitoringState.IN_PROGRESS)
         {
-            state = MonitoringState.ABORTED;
             if (constructionTime != null)
                 MonitoringTask.addFailedOperation(this, ApproximateTime.currentTimeMillis());
+            state = MonitoringState.ABORTED;
             return true;
         }
 

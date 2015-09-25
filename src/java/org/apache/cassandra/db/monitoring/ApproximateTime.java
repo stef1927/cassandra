@@ -51,4 +51,9 @@ public class ApproximateTime
         return time;
     }
 
+    public static long precision()
+    {
+        return 2 * CHECK_INTERVAL_MS;
+    }
+
 }
