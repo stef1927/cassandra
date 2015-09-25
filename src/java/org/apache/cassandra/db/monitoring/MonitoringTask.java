@@ -20,9 +20,12 @@ package org.apache.cassandra.db.monitoring;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -30,7 +33,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.concurrent.ScheduledExecutors;
-import org.apache.cassandra.config.Config;
 import org.apache.cassandra.utils.NoSpamLogger;
 
 import static java.lang.System.getProperty;
@@ -46,87 +48,143 @@ public class MonitoringTask
     private static final NoSpamLogger noSpamLogger = NoSpamLogger.getLogger(logger, 15L, TimeUnit.MINUTES);
 
     /**
+     * Defines the interval for checking the inbound queue of failed operations.
+     */
+    private static final int CHECK_INTERVAL_MS = Math.max(50, Integer.valueOf(System.getProperty("monitoring_check_interval_ms", "500")));
+
+    /**
      * Defines the interval for reporting any operations that have timed out.
      */
-    final static String REPORT_INTERVAL_PROPERTY = Config.PROPERTY_PREFIX + "monitoring_report_interval_ms";
-    public static int REPORT_INTERVAL_MS = Math.max(0, Integer.valueOf(System.getProperty(REPORT_INTERVAL_PROPERTY, "5000")));
+    private static final int REPORT_INTERVAL_MS = Math.max(0, Integer.valueOf(System.getProperty("monitoring_report_interval_ms", "5000")));
 
     /**
      * Defines the maximum number of unique timed out queries that will be reported in the logs.
      * Use a negative number to remove any limit.
      */
-    final static String MAX_TIMEDOUT_OPERATIONS_PROPERTY = Config.PROPERTY_PREFIX + "monitoring_max_timedout_operations";
-    public static int MAX_TIMEDOUT_OPERATIONS = Integer.valueOf(System.getProperty(MAX_TIMEDOUT_OPERATIONS_PROPERTY, "50"));
+    private static final int MAX_TIMEDOUT_OPERATIONS = Integer.valueOf(System.getProperty("monitoring_max_timedout_operations", "50"));
 
-    private final static MonitoringTask instance = new MonitoringTask();
-    static
-    {
-        logger.info("Scheduling monitoring task with report interval of {} ms, max timedout operations {}",
-                    REPORT_INTERVAL_MS,
-                    MAX_TIMEDOUT_OPERATIONS);
-        ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(() -> logFailedOperations(ApproximateTime.currentTimeMillis()),
-                                                                 0,
-                                                                 REPORT_INTERVAL_MS,
-                                                                 TimeUnit.MILLISECONDS);
-    }
+    @VisibleForTesting
+    static MonitoringTask instance = make(CHECK_INTERVAL_MS, REPORT_INTERVAL_MS, MAX_TIMEDOUT_OPERATIONS);
 
-    private final ConcurrentMap<String, FailedOperation> failedOperations;
+    private final long reportIntervalMillis;
+    private final int maxTimedoutOperations;
+    private final BlockingQueue<FailedOperation> failedOperationsQueue;
+    private final HashMap<String, FailedOperation> failedOperations;
+    private final ScheduledFuture<?> checkingTask;
     private boolean failedOperationsTruncated;
     private long reportTime;
 
-    private MonitoringTask()
+    @VisibleForTesting
+    static MonitoringTask make(long checkIntervalMills, int reportIntervalMillis, int maxTimedoutOperations)
     {
-        this.failedOperations = new ConcurrentHashMap<>();
+        if (instance != null)
+        {
+            instance.cancel();
+            instance = null;
+        }
+
+        return new MonitoringTask(checkIntervalMills, reportIntervalMillis, maxTimedoutOperations);
+    }
+
+    private MonitoringTask(long checkIntervalMills, int reportIntervalMillis, int maxTimedoutOperations)
+    {
+        this.reportIntervalMillis = reportIntervalMillis;
+        this.maxTimedoutOperations = maxTimedoutOperations;
+        this.failedOperationsQueue = maxTimedoutOperations > 0 ? new ArrayBlockingQueue<>(maxTimedoutOperations) : new LinkedBlockingQueue<>();
+        this.failedOperations = new HashMap<>();
         this.failedOperationsTruncated = false;
-        this.reportTime = System.currentTimeMillis();
+        this.reportTime = ApproximateTime.currentTimeMillis();
+
+        logger.info("Scheduling monitoring task with check interval of {} and report interval of {} ms, max timedout operations {}",
+                    checkIntervalMills,
+                    reportIntervalMillis,
+                    maxTimedoutOperations);
+
+        this.checkingTask = ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(() -> checkFailedOperations(ApproximateTime.currentTimeMillis()),
+                                                                                     0,
+                                                                                     checkIntervalMills,
+                                                                                     TimeUnit.MILLISECONDS);
+    }
+
+    public void cancel()
+    {
+        checkingTask.cancel(false);
     }
 
     public static void addFailedOperation(Monitorable operation, long now)
     {
-        instance.doAddFailedOperation(operation, now);
+        instance.innerAddFailedOperation(operation, now);
     }
 
-    private void doAddFailedOperation(Monitorable operation, long now)
+    private void innerAddFailedOperation(Monitorable operation, long now)
     {
-        FailedOperation failedOperation = failedOperations.get(operation.name());
-        if (failedOperation != null)
-        {
-            failedOperation.addTimeout(operation, now);
-            return;
-        }
+        if (maxTimedoutOperations == 0)
+            return; // logging of failed operations disabled
 
-        if (MAX_TIMEDOUT_OPERATIONS >= 0 && failedOperations.size() >= MAX_TIMEDOUT_OPERATIONS)
-            failedOperationsTruncated = true;
-        else
-            failedOperations.put(operation.name(), new FailedOperation(operation, now));
+        try
+        {
+            failedOperationsQueue.add(new FailedOperation(operation, now));
+        }
+        catch (IllegalStateException e)
+        {
+            failedOperationsTruncated = true; //queue is full
+        }
+    }
+
+    private void checkFailedOperations(long now)
+    {
+        checkFailedOperations(now, logger.isDebugEnabled());
     }
 
     @VisibleForTesting
-    static List<String> getFailedOperations()
+    void checkFailedOperations(long now, boolean log)
     {
-        return instance.innerGetFailedOperations();
+        aggregateFailedOperations();
+
+        if (now - reportTime >= reportIntervalMillis)
+            logFailedOperations(now, log);
     }
 
-    private List<String> innerGetFailedOperations()
+    @VisibleForTesting
+    void aggregateFailedOperations()
     {
+        while(!failedOperationsQueue.isEmpty())
+        {
+            FailedOperation failedOperation = failedOperationsQueue.remove();
+            FailedOperation existing = failedOperations.get(failedOperation.name());
+            if (existing != null)
+            {
+                existing.addTimeout(failedOperation);
+                continue;
+            }
+
+            if (maxTimedoutOperations > 0 && failedOperations.size() >= maxTimedoutOperations)
+                failedOperationsTruncated = true;
+            else
+                failedOperations.put(failedOperation.name(), failedOperation);
+        }
+    }
+
+    @VisibleForTesting
+    List<String> getFailedOperations()
+    {
+        aggregateFailedOperations();
+
         String ret = failedOperations.isEmpty() ? "" : getFailedOperationsLog();
         updateReportingState(System.currentTimeMillis());
         return ret.isEmpty() ? Collections.emptyList() : Arrays.asList(ret.split("\n"));
     }
 
-    @VisibleForTesting
-    static void logFailedOperations(long now)
-    {
-        instance.innerLogFailedOperations(now);
-    }
-
-    private void innerLogFailedOperations(long now)
+    private void logFailedOperations(long now, boolean log)
     {
         if (!failedOperations.isEmpty())
         {
             noSpamLogger.warn("Some operations timed out, check debug log");
-            if (logger.isDebugEnabled())
-                logger.debug("Operations that timed out in the last {} msecs:\n{}", now - reportTime, getFailedOperationsLog());
+            if (log)
+                logger.debug("Operations that timed out in the last {} msecs:{}{}",
+                             now - reportTime,
+                             LINE_SEPARATOR,
+                             getFailedOperationsLog());
         }
 
         updateReportingState(now);
@@ -162,26 +220,40 @@ public class MonitoringTask
     private final static class FailedOperation
     {
         public final Monitorable operation;
+        public final long failedAt;
         public int numTimeouts;
         public long avgTime;
         public long maxTime;
         public long minTime;
+        private String name;
 
         FailedOperation(Monitorable operation, long failedAt)
         {
             this.operation = operation;
+            this.failedAt = failedAt;
             numTimeouts = 1;
             avgTime = failedAt - operation.constructionTime().timestamp;
             minTime = avgTime;
             maxTime = avgTime;
         }
 
-        void addTimeout(Monitorable operation, long failedAt)
+        public String name()
         {
-            assert operation.name().equals(this.operation.name()) : "Expected identical operation name";
+            if (name == null)
+                name = operation.name();
+            return name;
+        }
+
+        public long constructionTime()
+        {
+            return operation.constructionTime().timestamp;
+        }
+
+        void addTimeout(FailedOperation operation)
+        {
             numTimeouts++;
 
-            long opTime = failedAt - operation.constructionTime().timestamp;
+            long opTime = operation.failedAt - operation.constructionTime();
             avgTime = (avgTime + opTime) / 2;
 
             if (opTime > maxTime)
@@ -194,13 +266,13 @@ public class MonitoringTask
         {
             if (numTimeouts == 1)
                 return String.format("%s: total time %d msec - timeout %d %s",
-                                     operation.name(),
+                                     name(),
                                      avgTime,
                                      operation.timeout(),
                                      operation.constructionTime().isCrossNode ? "msec/cross-node" : "msec");
             else
                 return String.format("%s (timed out %d times): total time avg/min/max %d/%d/%d msec - timeout %d %s",
-                                     operation.name(),
+                                     name(),
                                      numTimeouts,
                                      avgTime,
                                      minTime,

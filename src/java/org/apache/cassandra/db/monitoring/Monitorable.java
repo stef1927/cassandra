@@ -21,9 +21,7 @@ package org.apache.cassandra.db.monitoring;
 public interface Monitorable
 {
     String name();
-
     ConstructionTime constructionTime();
-
     long timeout();
 
     boolean inProgress();

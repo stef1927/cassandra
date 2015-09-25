@@ -39,14 +39,14 @@ public class MonitoringTaskTest
     private static final long timeout = 100;
     private static final long MAX_SPIN_TIME_NANOS = TimeUnit.SECONDS.toNanos(5);
 
+    public static final long CHECK_INTERVAL_MS = 600000; // long enough so that it won't check unless told to do so
+    public static final int REPORT_INTERVAL_MS = 0; // report every time we check
+    public static final int MAX_TIMEDOUT_OPERATIONS = -1; // unlimited
+
     @BeforeClass
     public static void setup()
     {
-        // This disables real-time reporting so that we can check the failed operations directly
-        System.setProperty(MonitoringTask.REPORT_INTERVAL_PROPERTY, "60000");
-
-        // Make sure that by default we report all operations that timed out
-        System.setProperty(MonitoringTask.MAX_TIMEDOUT_OPERATIONS_PROPERTY, "-1");
+        MonitoringTask.instance = MonitoringTask.make(CHECK_INTERVAL_MS, REPORT_INTERVAL_MS, MAX_TIMEDOUT_OPERATIONS);
     }
 
     private static final class TestMonitor extends MonitorableImpl
@@ -79,7 +79,7 @@ public class MonitoringTaskTest
     private static void waitForOperationsToComplete(List<Monitorable> operations) throws InterruptedException
     {
         long timeout = operations.stream().map(Monitorable::timeout).reduce(0L, Long::max);
-        Thread.sleep(timeout * 2);
+        Thread.sleep(timeout * 2 + ApproximateTime.precision());
 
         long start = System.nanoTime();
         while(System.nanoTime() - start <= MAX_SPIN_TIME_NANOS)
@@ -99,8 +99,21 @@ public class MonitoringTaskTest
         waitForOperationsToComplete(operation);
 
         assertTrue(operation.aborted());
-        assertFalse(operation.complete());
-        assertEquals(1, MonitoringTask.getFailedOperations().size());
+        assertFalse(operation.completed());
+        assertEquals(1, MonitoringTask.instance.getFailedOperations().size());
+    }
+
+    @Test
+    public void testAbortIdemPotent() throws InterruptedException
+    {
+        Monitorable operation = new TestMonitor("Test abort", new ConstructionTime(System.currentTimeMillis()), timeout);
+        waitForOperationsToComplete(operation);
+
+        assertTrue(operation.abort());
+
+        assertTrue(operation.aborted());
+        assertFalse(operation.completed());
+        assertEquals(1, MonitoringTask.instance.getFailedOperations().size());
     }
 
     @Test
@@ -110,8 +123,8 @@ public class MonitoringTaskTest
         waitForOperationsToComplete(operation);
 
         assertTrue(operation.aborted());
-        assertFalse(operation.complete());
-        assertEquals(1, MonitoringTask.getFailedOperations().size());
+        assertFalse(operation.completed());
+        assertEquals(1, MonitoringTask.instance.getFailedOperations().size());
     }
 
     @Test
@@ -122,28 +135,54 @@ public class MonitoringTaskTest
         waitForOperationsToComplete(operation);
 
         assertFalse(operation.aborted());
+        assertTrue(operation.completed());
+        assertEquals(0, MonitoringTask.instance.getFailedOperations().size());
+    }
+
+    @Test
+    public void testCompleteIdemPotent() throws InterruptedException
+    {
+        Monitorable operation = new TestMonitor("Test complete", new ConstructionTime(System.currentTimeMillis()), timeout);
+        operation.complete();
+        waitForOperationsToComplete(operation);
+
         assertTrue(operation.complete());
-        assertEquals(0, MonitoringTask.getFailedOperations().size());
+
+        assertFalse(operation.aborted());
+        assertTrue(operation.completed());
+        assertEquals(0, MonitoringTask.instance.getFailedOperations().size());
     }
 
     @Test
     public void testReport() throws InterruptedException
     {
-        int oldReportInterval = MonitoringTask.REPORT_INTERVAL_MS;
+        Monitorable operation = new TestMonitor("Test report", new ConstructionTime(System.currentTimeMillis()), timeout);
+        waitForOperationsToComplete(operation);
 
+        assertTrue(operation.aborted());
+        assertFalse(operation.completed());
+        MonitoringTask.instance.checkFailedOperations(ApproximateTime.currentTimeMillis(), true);
+        assertEquals(0, MonitoringTask.instance.getFailedOperations().size());
+    }
+
+    @Test
+    public void testRealScheduling() throws InterruptedException
+    {
+        MonitoringTask.instance = MonitoringTask.make(10, 100, -1);
         try
         {
             Monitorable operation = new TestMonitor("Test report", new ConstructionTime(System.currentTimeMillis()), timeout);
             waitForOperationsToComplete(operation);
 
             assertTrue(operation.aborted());
-            assertFalse(operation.complete());
-            MonitoringTask.logFailedOperations(ApproximateTime.currentTimeMillis());
-            assertEquals(0, MonitoringTask.getFailedOperations().size());
+            assertFalse(operation.completed());
+
+            Thread.sleep(ApproximateTime.precision() + 500);
+            assertEquals(0, MonitoringTask.instance.getFailedOperations().size());
         }
         finally
         {
-            MonitoringTask.REPORT_INTERVAL_MS = oldReportInterval;
+            MonitoringTask.instance = MonitoringTask.make(CHECK_INTERVAL_MS, REPORT_INTERVAL_MS, MAX_TIMEDOUT_OPERATIONS);
         }
     }
 
@@ -176,18 +215,36 @@ public class MonitoringTaskTest
         assertEquals(0, executorService.shutdownNow().size());
 
         waitForOperationsToComplete(operations);
-        assertEquals(threadCount, MonitoringTask.getFailedOperations().size());
+        assertEquals(threadCount, MonitoringTask.instance.getFailedOperations().size());
     }
 
     @Test
-    public void testMaxTimedoutOperations() throws InterruptedException
+    public void testZeroMaxTimedoutOperations() throws InterruptedException
     {
-        int oldMaxTimedoutOperations = MonitoringTask.MAX_TIMEDOUT_OPERATIONS;
-        MonitoringTask.MAX_TIMEDOUT_OPERATIONS = 5;
+        doTestMaxTimedoutOperations(0, 1, 0, false);
+    }
 
+    @Test
+    public void testMaxTimedoutOperationsExceeded() throws InterruptedException
+    {
+        doTestMaxTimedoutOperations(5, 10, 6, false);
+    }
+
+    @Test
+    public void testMaxTimedoutOperationsExceededInTotal() throws InterruptedException
+    {
+        doTestMaxTimedoutOperations(5, 10, 6, true);
+    }
+
+    private void doTestMaxTimedoutOperations(int maxTimedoutOperations,
+                                                    int numThreads,
+                                                    int numExpectedOperations,
+                                                    boolean partiallyAggregate) throws InterruptedException
+    {
+        MonitoringTask.instance = MonitoringTask.make(CHECK_INTERVAL_MS, REPORT_INTERVAL_MS, maxTimedoutOperations);
         try
         {
-            final int threadCount = 10;
+            final int threadCount = numThreads;
             ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
             final CountDownLatch finished = new CountDownLatch(threadCount);
 
@@ -204,6 +261,15 @@ public class MonitoringTaskTest
                                                                     new ConstructionTime(System.currentTimeMillis()),
                                                                     timeout);
                             waitForOperationsToComplete(operation);
+
+                            if (partiallyAggregate)
+                            {
+                                synchronized (this)
+                                { // this is normally called only by the monitoring thread
+                                  // so we simulate this with a synchronized in the tests
+                                    MonitoringTask.instance.aggregateFailedOperations();
+                                }
+                            }
                         }
                     }
                     catch (InterruptedException e)
@@ -221,13 +287,14 @@ public class MonitoringTaskTest
             finished.await();
             assertEquals(0, executorService.shutdownNow().size());
 
-            List<String> failedOperations = MonitoringTask.getFailedOperations();
-            assertEquals(6, failedOperations.size()); // 5 operations plus the ...
-            assertEquals("...", failedOperations.get(5));
+            List<String> failedOperations = MonitoringTask.instance.getFailedOperations();
+            assertEquals(numExpectedOperations, failedOperations.size());
+            if (numExpectedOperations > 0)
+                assertEquals("...", failedOperations.get(numExpectedOperations - 1));
         }
         finally
         {
-            MonitoringTask.MAX_TIMEDOUT_OPERATIONS = oldMaxTimedoutOperations;
+            MonitoringTask.instance = MonitoringTask.make(CHECK_INTERVAL_MS, REPORT_INTERVAL_MS, MAX_TIMEDOUT_OPERATIONS);
         }
     }
 
@@ -260,7 +327,8 @@ public class MonitoringTaskTest
         assertEquals(0, executorService.shutdownNow().size());
 
         waitForOperationsToComplete(operations);
-        assertEquals(1, MonitoringTask.getFailedOperations().size());
+        //MonitoringTask.instance.checkFailedOperations(ApproximateTime.currentTimeMillis());
+        assertEquals(1, MonitoringTask.instance.getFailedOperations().size());
     }
 
     @Test
@@ -293,6 +361,6 @@ public class MonitoringTaskTest
         assertEquals(0, executorService.shutdownNow().size());
 
         waitForOperationsToComplete(operations);
-        assertEquals(0, MonitoringTask.getFailedOperations().size());
+        assertEquals(0, MonitoringTask.instance.getFailedOperations().size());
     }
 }
