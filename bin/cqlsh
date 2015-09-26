@@ -31,21 +31,15 @@ exit 1
 
 from __future__ import with_statement
 
-try:
-    from cStringIO import StringIO
-except ImportError:
-    from io import StringIO
-
-import multiprocessing as multp
-import itertools
-import ctypes
-
 import cmd
 import codecs
 import ConfigParser
 import csv
+import ctypes
 import getpass
+import itertools
 import locale
+import multiprocessing as mp
 import optparse
 import os
 import platform
@@ -53,6 +47,12 @@ import sys
 import time
 import traceback
 import warnings
+
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from io import StringIO
+
 from contextlib import contextmanager
 from functools import partial
 from glob import glob
@@ -471,23 +471,11 @@ class UserTypeNotFound(Exception):
 
 
 class NoLocalNodeError(Exception):
-    verb = "find"
 
     def __init__(self, token, hosts, dc):
-        self.token = token
-        self.hosts = hosts
-        self.dc = dc
-
-    def __str__(self):
-        return str(self.token)
-
-    def message(self):
-        what = 'host from %s (for token %s) in current data center %s' \
-                % (', '.join(self.hosts), self.token, self.dc)
-        return 'Failed to %s %s, please use cqlsh in that DC' % (self.verb, what)
-
-    def __repr__(self):
-        return '<%s %s>' % (self.__class__.__name__, self.message())
+        super(NoLocalNodeError, self).__init__(
+          'Failed to find host from {} (for token {}) in current data center {}, please use cqlsh in that DC'
+          .format(', '.join(hosts), token, dc))
 
 
 class DecodeError(Exception):
@@ -856,7 +844,7 @@ class Shell(cmd.Cmd):
     def get_token_ranges(self):
         """
         Returns a list of the different token ranges of the cluster. For example
-        if you had a ring of nodes [A, B, C, D, E] then the list would be 
+        if you had a ring of nodes [A, B, C, D, E] then the list would be
         [(None, A), (A, B), (B, C), (C, D), (D, E), (E, None)].
         """
         ring, ranges = [], []
@@ -880,7 +868,7 @@ class Shell(cmd.Cmd):
     def get_token_range_to_local_host(self, ksname):
         """
         Returns a list of tuples of (token range, local host) of the keyspace.
-        If a token range does not have replicas within the same datacenter as 
+        If a token range does not have replicas within the same datacenter as
         the cqlsh instance then a NoLocalNodeError is raised.
         """
         pairs = []
@@ -1677,16 +1665,16 @@ class Shell(cmd.Cmd):
             # a single local Cassandra node busy, and I see lower throughput
             # with more processes.
             try:
-                num_processes = max(1, min(4, multp.cpu_count() - 1))
+                num_processes = max(1, min(4, mp.cpu_count() - 1))
             except NotImplementedError:
                 num_processes = 1
 
             processes, pipes = [], [],
             for i in range(num_processes):
-                parent_conn, child_conn = multp.Pipe()
+                parent_conn, child_conn = mp.Pipe()
                 pipes.append(parent_conn)
                 proc_args = (child_conn, ks, cf, columns, nullval)
-                processes.append(multp.Process(target=self.multiproc_import, args=proc_args))
+                processes.append(mp.Process(target=self.multiproc_import, args=proc_args))
 
             for process in processes:
                 process.start()
@@ -1932,14 +1920,13 @@ class Shell(cmd.Cmd):
                 traceback.print_exc()
             return meter.current_record
         try:
-            num_processes = max(1, multp.cpu_count() - 1)
+            num_processes = max(1, mp.cpu_count() - 1)
         except NotImplementedError:
             num_processes = 1
 
-
         # Split the jobs, (Host, Range), evenly across the processes and start them
         processes = []
-        queue = multp.Queue()
+        queue = mp.Queue()
         num_jobs = max(1, int(len(host_to_ranges) / num_processes))
         for i in xrange(num_processes):
             if i == num_processes-1:
@@ -1955,15 +1942,15 @@ class Shell(cmd.Cmd):
                     dialect_options,
                     csv_options,
                     )
-            processes.append(multp.Process(target=self.multiproc_export, args=proc_args))
+            processes.append(mp.Process(target=self.multiproc_export, args=proc_args))
 
         for process in processes:
             process.start()
                                  time_format=dtformats,
         # Block and wait for all the processes to return the results.
         # Print out any errors and concatenate the result tempfiles to the destination.
-        lock = multp.Lock()
-        count = multp.Value(ctypes.c_int, lock=lock)
+        lock = mp.Lock()
+        count = mp.Value(ctypes.c_int, lock=lock)
         try:
             while True:
                 if count.value == len(processes) and queue.empty():
@@ -1972,7 +1959,7 @@ class Shell(cmd.Cmd):
                 if token_range is None and result is None:
                     count.value += 1
                 elif isinstance(result, Exception):
-                    self.printerr('\nerror exporting from token range: %s:\n' % str(token_range))
+                    self.printerr('\nerror exporting from token range: {}:\n'.format(str(token_range)))
                     self.printerr(str(result))
                 else:
                     data, num = result
@@ -2052,9 +2039,10 @@ class Shell(cmd.Cmd):
                         ).strval
 
             # Asynchronously run the query for all the given token ranges
-            lock = multp.Lock()
-            count = multp.Value(ctypes.c_int, lock=lock)
+            lock = mp.Lock()
+            count = mp.Value(ctypes.c_int, lock=lock)
             num_jobs = len(jobs)
+
             def start_job():
                 try:
                     hostname, token_range = jobs.pop()
@@ -2087,15 +2075,15 @@ class Shell(cmd.Cmd):
             columns = self.get_column_names(ks, cf)
         columnlist = ', '.join(protect_names(columns))
         start_token, end_token = token_range
-        query = 'SELECT %s FROM %s.%s' % (columnlist, protect_name(ks), protect_name(cf))
+        query = 'SELECT {} FROM {}.{}'.format(columnlist, protect_name(ks), protect_name(cf))
         if start_token is not None or end_token is not None:
             query += ' WHERE'
         if start_token is not None:
-            query += ' token(%s) > %s' % (pk_cols, start_token)
+            query += ' token({}) > {}'.format(pk_cols, start_token)
         if start_token is not None and end_token is not None:
             query += ' AND'
         if end_token is not None:
-            query += ' token(%s) <= %s' % (pk_cols, end_token)
+            query += ' token({}) <= {}'.format(pk_cols, end_token)
         return query
 
     def _setup_csv_options(self, opts):
