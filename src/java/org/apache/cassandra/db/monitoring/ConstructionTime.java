@@ -25,7 +25,7 @@ public final class ConstructionTime
 
     public ConstructionTime()
     {
-        this(System.currentTimeMillis());
+        this(ApproximateTime.currentTimeMillis());
     }
 
     public ConstructionTime(long timestamp)

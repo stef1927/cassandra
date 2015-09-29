@@ -24,9 +24,9 @@ public interface Monitorable
     ConstructionTime constructionTime();
     long timeout();
 
-    boolean inProgress();
-    boolean aborted();
-    boolean completed();
+    boolean isInProgress();
+    boolean isAborted();
+    boolean isCompleted();
 
     boolean abort();
     boolean complete();

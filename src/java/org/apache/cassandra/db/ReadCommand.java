@@ -480,7 +480,7 @@ public abstract class ReadCommand extends MonitorableImpl implements ReadQuery
             @Override
             public UnfilteredRowIterator computeNext(UnfilteredRowIterator iter)
             {
-                if (aborted())
+                if (isAborted())
                     return null;
 
                 if (TEST_ITERATION_DELAY_MILLIS > 0)
@@ -498,7 +498,7 @@ public abstract class ReadCommand extends MonitorableImpl implements ReadQuery
             @Override
             public boolean hasNext()
             {
-                if (aborted())
+                if (isAborted())
                     return false;
 
                 if (TEST_ITERATION_DELAY_MILLIS > 0)
