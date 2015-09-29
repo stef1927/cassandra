@@ -50,19 +50,19 @@ public abstract class MonitorableImpl implements Monitorable
         return timeout;
     }
 
-    public boolean inProgress()
+    public boolean isInProgress()
     {
         check();
         return state == MonitoringState.IN_PROGRESS;
     }
 
-    public boolean aborted()
+    public boolean isAborted()
     {
         check();
         return state == MonitoringState.ABORTED;
     }
 
-    public boolean completed()
+    public boolean isCompleted()
     {
         check();
         return state == MonitoringState.COMPLETED;

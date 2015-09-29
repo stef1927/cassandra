@@ -34,16 +34,14 @@ public class ApproximateTime
     private static final Logger logger = LoggerFactory.getLogger(ApproximateTime.class);
     private static final int CHECK_INTERVAL_MS = Math.max(5, Integer.valueOf(System.getProperty(Config.PROPERTY_PREFIX + "approximate_time_precision_ms", "10")));
 
-    // This is an approximate time so it's neither atomic, not volatile,
-    // eventually all threads will see an updated value and this is good enough
-    private static long time;
+    private static volatile long time = System.currentTimeMillis();
     static
     {
         logger.info("Scheduling approximate time-check task with a precision of {} milliseconds", CHECK_INTERVAL_MS);
-        ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(() -> time = System.currentTimeMillis(),
-                                                                 0,
-                                                                 CHECK_INTERVAL_MS,
-                                                                 TimeUnit.MILLISECONDS);
+        ScheduledExecutors.scheduledFastTasks.scheduleWithFixedDelay(() -> time = System.currentTimeMillis(),
+                                                                     CHECK_INTERVAL_MS,
+                                                                     CHECK_INTERVAL_MS,
+                                                                     TimeUnit.MILLISECONDS);
     }
 
     public static long currentTimeMillis()

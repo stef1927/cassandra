@@ -19,6 +19,7 @@ package org.apache.cassandra.utils;
 
 import java.util.concurrent.TimeUnit;
 
+import org.apache.cassandra.concurrent.ScheduledExecutors;
 import org.apache.cassandra.config.Config;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -35,9 +36,6 @@ public class NanoTimeToCurrentTimeMillis
     private static final long TIMESTAMP_UPDATE_INTERVAL = Long.getLong(TIMESTAMP_UPDATE_INTERVAL_PROPERTY, 10000);
 
     private static volatile long TIMESTAMP_BASE[] = new long[] { System.currentTimeMillis(), System.nanoTime() };
-
-    @VisibleForTesting
-    public static final Object TIMESTAMP_UPDATE = new Object();
 
     /*
      * System.currentTimeMillis() is 25 nanoseconds. This is 2 nanoseconds (maybe) according to JMH.
@@ -56,33 +54,16 @@ public class NanoTimeToCurrentTimeMillis
 
     static
     {
-        //Pick up updates from NTP periodically
-        Thread t = new Thread("NanoTimeToCurrentTimeMillis updater")
-        {
-            @Override
-            public void run()
-            {
-                while (true)
-                {
-                    try
-                    {
-                        synchronized (TIMESTAMP_UPDATE)
-                        {
-                            TIMESTAMP_UPDATE.wait(TIMESTAMP_UPDATE_INTERVAL);
-                        }
-                    }
-                    catch (InterruptedException e)
-                    {
-                        return;
-                    }
+        ScheduledExecutors.scheduledFastTasks.scheduleWithFixedDelay(() -> updateTimestampBase(),
+                                                                     TIMESTAMP_UPDATE_INTERVAL,
+                                                                     TIMESTAMP_UPDATE_INTERVAL,
+                                                                     TimeUnit.MILLISECONDS);
+    }
 
-                    TIMESTAMP_BASE = new long[] {
-                            Math.max(TIMESTAMP_BASE[0], System.currentTimeMillis()),
-                            Math.max(TIMESTAMP_BASE[1], System.nanoTime()) };
-                }
-            }
-        };
-        t.setDaemon(true);
-        t.start();
+    private static void updateTimestampBase()
+    {
+        TIMESTAMP_BASE = new long[] {
+                                    Math.max(TIMESTAMP_BASE[0], System.currentTimeMillis()),
+                                    Math.max(TIMESTAMP_BASE[1], System.nanoTime()) };
     }
 }
