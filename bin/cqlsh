@@ -35,11 +35,8 @@ import cmd
 import codecs
 import ConfigParser
 import csv
-import ctypes
 import getpass
-import itertools
 import locale
-import multiprocessing as mp
 import optparse
 import os
 import platform
@@ -53,9 +50,12 @@ try:
 except ImportError:
     from io import StringIO
 
+from collections import deque
 from contextlib import contextmanager
 from functools import partial
 from glob import glob
+from multiprocessing import Pipe, Process, cpu_count
+from select import select
 from StringIO import StringIO
 from uuid import UUID
 
@@ -470,14 +470,6 @@ class UserTypeNotFound(Exception):
     pass
 
 
-class NoLocalNodeError(Exception):
-
-    def __init__(self, token, hosts, dc):
-        super(NoLocalNodeError, self).__init__(
-          'Failed to find host from {} (for token {}) in current data center {}, please use cqlsh in that DC'
-          .format(', '.join(hosts), token, dc))
-
-
 class DecodeError(Exception):
     verb = 'decode'
 
@@ -824,81 +816,9 @@ class Shell(cmd.Cmd):
     def get_keyspaces(self):
         return self.conn.metadata.keyspaces.values()
 
-    def get_ring(self):
-        if self.current_keyspace is None or self.current_keyspace == 'system':
-            raise NoKeyspaceError("Ring view requires a current non-system keyspace")
-        self.conn.metadata.token_map.rebuild_keyspace(self.current_keyspace, build_if_absent=True)
-        return self.conn.metadata.token_map.tokens_to_hosts_by_ks[self.current_keyspace]
-
-    def get_min_token(self):
-        partitioner = self.conn.metadata.partitioner
-        if partitioner.endswith('RandomPartitioner'):
-            return -1
-        elif partitioner.endswith('Murmur3Partitioner'):
-            return -(2 ** 63)   # -9223372036854775808
-        elif partitioner.endswith('ByteOrderedPartitioner'):
-            return ""
-        elif partitioner.endswith('OrderPreservingPartitioner'):
-            return ""
-
-    def get_token_ranges(self):
-        """
-        Returns a list of the different token ranges of the cluster. For example
-        if you had a ring of nodes [A, B, C, D, E] then the list would be
-        [(None, A), (A, B), (B, C), (C, D), (D, E), (E, None)].
-        """
-        ring, ranges = [], []
-        if hasattr(self.conn.metadata.token_map, "ring"):
-            ring = self.conn.metadata.token_map.ring
-        if ring is None or len(ring) == 0:
-            return ranges
-
-        # Don't query for the min token as that will wrap around and query for the ENTIRE range.
-        if ring[0].value != self.get_min_token():
-            ranges.append((None, ring[0]))
-        for i in xrange(len(ring)):
-            try:
-                ranges.append((ring[i], ring[i+1]))
-            except IndexError:
-                continue
-        else:
-            ranges.append((ring[i], None))
-        return ranges
-
-    def get_token_range_to_local_host(self, ksname):
-        """
-        Returns a list of tuples of (token range, local host) of the keyspace.
-        If a token range does not have replicas within the same datacenter as
-        the cqlsh instance then a NoLocalNodeError is raised.
-        """
-        pairs = []
-        tm = self.conn.metadata.token_map
-        dc = self.conn.metadata.get_host(self.hostname).datacenter
-        host = None
-
-        partitioner = self.conn.metadata.partitioner
-        if partitioner.endswith('ByteOrderedPartitioner'):
-            return pairs
-
-        for start_token, end_token in self.get_token_ranges():
-            if end_token is None:
-                hosts = tm.get_replicas(ksname, start_token)
-            else:
-                hosts = tm.get_replicas(ksname, end_token)
-
-            for host in hosts:
-                if host.datacenter == dc:
-                    if start_token is None:
-                        token_range = (None, end_token.value)
-                    elif end_token is None:
-                        token_range = (start_token.value, None)
-                    else:
-                        token_range = (start_token.value, end_token.value)
-                    pairs.append((token_range, host))
-                    break
-            else:
-                raise NoLocalNodeError(end_token, hosts, dc)
-        return pairs
+    def get_ring(self, ks):
+        self.conn.metadata.token_map.rebuild_keyspace(ks, build_if_absent=True)
+        return self.conn.metadata.token_map.tokens_to_hosts_by_ks[ks]
 
     def get_table_meta(self, ksname, tablename):
         if ksname is None:
@@ -1456,7 +1376,7 @@ class Shell(cmd.Cmd):
         # print 'Snitch: %s\n' % snitch
         if self.current_keyspace is not None and self.current_keyspace != 'system':
             print "Range ownership:"
-            ring = self.get_ring()
+            ring = self.get_ring(self.current_keyspace)
             for entry in ring.items():
                 print ' %39s  [%s]' % (str(entry[0].value), ', '.join([host.address for host in entry[1]]))
             print
@@ -1634,8 +1554,9 @@ class Shell(cmd.Cmd):
         print "\n%d rows %s in %s." % (rows, verb, describe_interval(timeend - timestart))
 
     def perform_csv_import(self, ks, cf, columns, fname, opts):
-        opts, dialect_options, csv_options = self._setup_csv_options(opts)
-        if opts:
+        config = ImportExportConfig(opts, self.csv_dialect_defaults.copy())
+        csv_options = config.csv_options
+        if config.opts:
             self.printerr('Unrecognized COPY FROM options: %s'
                           % ', '.join(opts.keys()))
             return 0
@@ -1654,27 +1575,19 @@ class Shell(cmd.Cmd):
                 return 0
 
         current_record = None
+        processes, pipes = [], [],
         try:
             if header:
                 linesource.next()
-            reader = csv.reader(linesource, **dialect_options)
+            reader = csv.reader(linesource, **config.dialect_options)
 
-            # Pick a resonable number of child processes. We need to leave at
-            # least one core for the parent process.  This doesn't necessarily
-            # need to be capped at 4, but it's currently enough to keep
-            # a single local Cassandra node busy, and I see lower throughput
-            # with more processes.
-            try:
-                num_processes = max(1, min(4, mp.cpu_count() - 1))
-            except NotImplementedError:
-                num_processes = 1
+            num_processes = config.get_num_processes(cap=4)
 
-            processes, pipes = [], [],
             for i in range(num_processes):
-                parent_conn, child_conn = mp.Pipe()
+                parent_conn, child_conn = Pipe()
                 pipes.append(parent_conn)
                 proc_args = (child_conn, ks, cf, columns, nullval)
-                processes.append(mp.Process(target=self.multiproc_import, args=proc_args))
+                processes.append(Process(target=self.multiproc_import, args=proc_args))
 
             for process in processes:
                 process.start()
@@ -1689,7 +1602,7 @@ class Shell(cmd.Cmd):
 
                 # check for any errors reported by the children
                 if (current_record % 100) == 0:
-                    if self._check_child_pipes(current_record, pipes):
+                    if self._check_import_processes(current_record, pipes):
                         # no errors seen, continue with outer loop
                         continue
                     else:
@@ -1718,7 +1631,7 @@ class Shell(cmd.Cmd):
             for process in processes:
                 process.join()
 
-            self._check_child_pipes(current_record, pipes)
+            self._check_import_processes(current_record, pipes)
 
             for pipe in pipes:
                 pipe.close()
@@ -1730,8 +1643,7 @@ class Shell(cmd.Cmd):
 
         return current_record
 
-    def _check_child_pipes(self, current_record, pipes):
-        # check the pipes for errors from child processes
+    def _check_import_processes(self, current_record, pipes):
         for pipe in pipes:
             if pipe.poll():
                 try:
@@ -1879,233 +1791,8 @@ class Shell(cmd.Cmd):
             new_cluster.shutdown()
 
     def perform_csv_export(self, ks, cf, columns, fname, opts):
-        opts, dialect_options, csv_options = self._setup_csv_options(opts)
-        if opts:
-            self.printerr('Unrecognized COPY TO options: %s' % ', '.join(opts.keys()))
-            return 0
-
-        csv_options['dtformats'] = self.display_time_format
-        csv_options['float_precision'] = self.display_float_precision
-
-        if fname is None:
-            do_close = False
-            csvdest = sys.stdout
-        else:
-            do_close = True
-            try:
-                csvdest = open(fname, 'wb')
-            except IOError, e:
-                self.printerr("Can't open %r for writing: %s" % (fname, e))
-                return 0
-
-        if csv_options["header"]:
-            writer = csv.writer(csvdest, **dialect_options)
-            writer.writerow(columns)
-
-        meter = RateMeter(10000)
-        try:
-            # Organize the token ranges with their respective host
-            ranges_and_hosts = self.get_token_range_to_local_host(ks)
-            host_to_ranges = [(self.hostname, (None, None))]
-            if len(ranges_and_hosts) != 0:
-                host_to_ranges = []
-                for token_range, host in ranges_and_hosts:
-                    host_to_ranges.append((host.address, token_range))
-                host_to_ranges = sorted(host_to_ranges)
-        except NoLocalNodeError, exc:
-            # We failed before we started because a token range had no local nodes
-            self.printerr('\nError starting export process:\n')
-            self.printerr(str(exc))
-            if self.debug:
-                traceback.print_exc()
-            return meter.current_record
-        try:
-            num_processes = max(1, mp.cpu_count() - 1)
-        except NotImplementedError:
-            num_processes = 1
-
-        # Split the jobs, (Host, Range), evenly across the processes and start them
-        processes = []
-        queue = mp.Queue()
-        num_jobs = max(1, int(len(host_to_ranges) / num_processes))
-        for i in xrange(num_processes):
-            if i == num_processes-1:
-                jobs = host_to_ranges[num_jobs*i:]
-            else:
-                jobs = host_to_ranges[num_jobs*i:num_jobs*i+num_jobs]
-            proc_args = (
-                    jobs,
-                    queue,
-                    ks,
-                    cf,
-                    columns,
-                    dialect_options,
-                    csv_options,
-                    )
-            processes.append(mp.Process(target=self.multiproc_export, args=proc_args))
-
-        for process in processes:
-            process.start()
-                                 time_format=dtformats,
-        # Block and wait for all the processes to return the results.
-        # Print out any errors and concatenate the result tempfiles to the destination.
-        lock = mp.Lock()
-        count = mp.Value(ctypes.c_int, lock=lock)
-        try:
-            while True:
-                if count.value == len(processes) and queue.empty():
-                    break
-                token_range, result = queue.get()
-                if token_range is None and result is None:
-                    count.value += 1
-                elif isinstance(result, Exception):
-                    self.printerr('\nerror exporting from token range: {}:\n'.format(str(token_range)))
-                    self.printerr(str(result))
-                else:
-                    data, num = result
-                    csvdest.write(data)
-                    meter.increment(n=num)
-        except Exception, e:
-            raise e
-        finally:
-            queue.close()
-            if do_close:
-                csvdest.close()
-        return meter.current_record
-
-    def multiproc_export(self, jobs, queue, ks, cf, columns, dialect_options, csv_options):
-        # Create all the sessions for all the given hosts
-        try:
-            hosts_to_node = dict()
-            for hostname, _ in jobs:
-                if hostname not in hosts_to_node:
-                    new_cluster = Cluster(
-                            contact_points=(hostname,),
-                            port=self.port,
-                            cql_version=self.conn.cql_version,
-                            protocol_version=DEFAULT_PROTOCOL_VERSION,
-                            auth_provider=self.auth_provider,
-                            ssl_options=sslhandling.ssl_settings(self.hostname, CONFIG_FILE) if self.ssl else None,
-                            load_balancing_policy=WhiteListRoundRobinPolicy([hostname]),
-                            compression=None,
-                            )
-                    session = new_cluster.connect(self.keyspace)
-                    session.row_factory = tuple_factory
-                    hosts_to_node[hostname] = (new_cluster, session)
-
-            class ResultHandler(object):
-                def __init__(self, token_range, future):
-                    self.token_range = token_range
-                    self.future = future
-                    self.future.add_callbacks(
-                            callback=self.result_callback,
-                            errback=self.err_callback,
-                            )
-
-                def result_callback(self, rows):
-                    # Query has successfully completed so aggregate rows and then write to file.
-                    if self.future.has_more_pages:
-                        self.future.start_fetching_next_page()
-                        self.return_results(rows)
-                    else:
-                        self.return_results(rows)
-                        self.next()
-
-                def err_callback(self, err):
-                    # Query errored out so add error to results deque.
-                    queue.put((self.token_range, err))
-                    self.next()
-
-                def return_results(self, rows):
-                    output = StringIO()
-                    writer = csv.writer(output, **dialect_options)
-                    for row in rows:
-                        writer.writerow(map(fmt, row))
-                    data = (output.getvalue(), len(rows))
-                    queue.put((self.token_range, data))
-                    output.close()
-
-                def next(self):
-                    count.value += 1
-                    start_job()
-
-            def fmt(v):
-                return format_value(
-                        v,
-                        output_encoding=csv_options['encoding'],
-                        nullval=csv_options['nullval'],
-                        time_format=csv_options['dtformats'],
-                        float_precision=csv_options['float_precision'],
-                        ).strval
-
-            # Asynchronously run the query for all the given token ranges
-            lock = mp.Lock()
-            count = mp.Value(ctypes.c_int, lock=lock)
-            num_jobs = len(jobs)
-
-            def start_job():
-                try:
-                    hostname, token_range = jobs.pop()
-                    query = self._prepare_export_query(ks, cf, columns, token_range)
-                    _, session = hosts_to_node[hostname]
-                    future = session.execute_async(query)
-                    ResultHandler(token_range, future)
-                except IndexError:
-                    pass
-
-            for _ in xrange(min(csv_options["jobs"], num_jobs)):
-                start_job()
-
-            # Wait for all the results to come in
-            while count.value < num_jobs:
-                time.sleep(1)
-
-        except Exception, e:
-            raise e
-        finally:
-            queue.put((None, None))
-            queue.close()
-            for cluster, _ in hosts_to_node.values():
-                cluster.shutdown()
-
-    def _prepare_export_query(self, ks, cf, columns, token_range):
-        table_meta = self.get_table_meta(ks, cf)
-        pk_cols = ", ".join(protect_names(col.name for col in table_meta.partition_key))
-        if columns is None:
-            columns = self.get_column_names(ks, cf)
-        columnlist = ', '.join(protect_names(columns))
-        start_token, end_token = token_range
-        query = 'SELECT {} FROM {}.{}'.format(columnlist, protect_name(ks), protect_name(cf))
-        if start_token is not None or end_token is not None:
-            query += ' WHERE'
-        if start_token is not None:
-            query += ' token({}) > {}'.format(pk_cols, start_token)
-        if start_token is not None and end_token is not None:
-            query += ' AND'
-        if end_token is not None:
-            query += ' token({}) <= {}'.format(pk_cols, end_token)
-        return query
-
-    def _setup_csv_options(self, opts):
-        dialect_options = self.csv_dialect_defaults.copy()
-        if 'quote' in opts:
-            dialect_options['quotechar'] = opts.pop('quote')
-        if 'escape' in opts:
-            dialect_options['escapechar'] = opts.pop('escape')
-        if 'delimiter' in opts:
-            dialect_options['delimiter'] = opts.pop('delimiter')
-        if dialect_options['quotechar'] == dialect_options['escapechar']:
-            dialect_options['doublequote'] = True
-            del dialect_options['escapechar']
-
-        csv_options = dict()
-        csv_options['nullval'] = opts.pop('null', '')
-        csv_options['header'] = bool(opts.pop('header', '').lower() == 'true')
-        csv_options['encoding'] = opts.pop('encoding', 'utf8')
-	csv_options['dtformats'] = opts.pop('timeformat', self.display_time_format)
-        csv_options['jobs'] = int(opts.pop('jobs', 12))
-
-        return opts, dialect_options, csv_options
+        config = ImportExportConfig(opts, self.csv_dialect_defaults.copy())
+        return ExportTask(self, ks, cf, columns, fname, config).run()
 
     def do_show(self, parsed):
         """
@@ -2463,29 +2150,376 @@ class Shell(cmd.Cmd):
         self.writeresult(text, color, newline=newline, out=sys.stderr)
 
 
+class ImportExportConfig:
+    def __init__(self, opts, dialect_options):
+        if 'quote' in opts:
+            dialect_options['quotechar'] = opts.pop('quote')
+        if 'escape' in opts:
+            dialect_options['escapechar'] = opts.pop('escape')
+        if 'delimiter' in opts:
+            dialect_options['delimiter'] = opts.pop('delimiter')
+        if dialect_options['quotechar'] == dialect_options['escapechar']:
+            dialect_options['doublequote'] = True
+            del dialect_options['escapechar']
+
+        csv_options = dict()
+        csv_options['nullval'] = opts.pop('null', '')
+        csv_options['header'] = bool(opts.pop('header', '').lower() == 'true')
+        csv_options['encoding'] = opts.pop('encoding', 'utf8')
+        csv_options['jobs'] = int(opts.pop('jobs', 12))
+	csv_options['dtformats'] = opt.pop('timeformat', shell.display_time_format)
+
+        self.opts = opts
+        self.dialect_options = dialect_options
+        self.csv_options = csv_options
+
+    def get_num_processes(self, cap):
+        """
+        Pick a reasonable number of child processes. We need to leave at
+        least one core for the parent process.  This doesn't necessarily
+        need to be capped, but 4 is currently enough to keep
+        a single local Cassandra node busy so we use this for import, whilst
+        for export we use 16 since we can connect to multiple Cassandra nodes.
+        Eventually this parameter will become an option.
+        """
+        try:
+            return max(1, min(cap, cpu_count() - 1))
+        except NotImplementedError:
+            return 1
+
+
+class ExportTask:
+    """
+    Export data in parallel by instantiating one or more processes
+    """
+    def __init__(self, shell, ks, cf, columns, fname, config):
+        self.shell = shell
+        self.config = config
+        self.ks = ks
+        self.cf = cf
+        self.columns = shell.get_column_names(ks, cf) if columns is None else columns
+        self.fname = fname
+
+    def run(self):
+        shell = self.shell
+        fname = self.fname
+        ks = self.ks
+        cf = self.cf
+        config = self.config
+        csv_options = config.csv_options
+        if config.opts:
+            shell.printerr('Unrecognized COPY TO options: %s' % ', '.join(config.opts.keys()))
+            return 0
+
+        csv_options['float_precision'] = shell.display_float_precision
+
+        if fname is None:
+            do_close = False
+            csvdest = sys.stdout
+        else:
+            do_close = True
+            try:
+                csvdest = open(fname, 'wb')
+            except IOError, e:
+                shell.printerr("Can't open %r for writing: %s" % (fname, e))
+                return 0
+
+        if csv_options["header"]:
+            writer = csv.writer(csvdest, **self.config.dialect_options)
+            writer.writerow(self.columns)
+
+        ranges = self.get_ranges()
+        num_processes = config.get_num_processes(cap=min(16, len(ranges)))
+
+        pipes = []
+        for i in xrange(num_processes):
+            parent_conn, child_conn = Pipe()
+            pipes.append(parent_conn)
+            process = ExportProcess(shell, child_conn, ks, cf, self.columns, config.dialect_options, csv_options)
+            process.start()
+
+        try:
+            return self.check_processes(csvdest, ranges, pipes)
+        finally:
+            for pipe in pipes:
+                pipe.send((None, None))
+                pipe.close()
+            if do_close:
+                csvdest.close()
+
+    def get_ranges(self):
+        shell = self.shell
+        hostname = shell.hostname
+
+        min_token = self.get_min_token()
+        if shell.conn.metadata.token_map is None or min_token is None:
+            return deque([((None, None), tuple(hostname))])
+
+        ranges = deque([])
+        hosts = [hostname]
+        local_dc = shell.conn.metadata.get_host(hostname).datacenter
+
+        ring = shell.get_ring(self.ks).items()
+        ring.sort(key=lambda tup: tup[0])
+
+        previous = None
+        for entry in ring:
+            token = entry[0].value
+            if previous is None and token == min_token:
+                continue  # avoids looping entire ring
+
+            del hosts[:]
+            for host in entry[1]:
+                if host.datacenter == local_dc:
+                    hosts.append(host.address)
+            if len(hosts) == 0:
+                hosts.append(hostname)  # fallback to default host if no replicas in current dc
+            ranges.append(((previous, token), tuple(hosts)))
+            previous = token
+
+        ranges.append(((previous, None), tuple(hosts)))
+        return ranges
+
+    def get_min_token(self):
+        partitioner = self.shell.conn.metadata.partitioner
+
+        if partitioner.endswith('RandomPartitioner'):
+            return -1
+        elif partitioner.endswith('Murmur3Partitioner'):
+            return -(2 ** 63)   # Long.MIN_VALUE in Java
+        else:
+            return None
+
+    def send_initial_work(self, ranges, pipes):
+        csv_options = self.config.csv_options
+        num_jobs_per_process = len(ranges) / len(pipes)
+        num_parallel_jobs = min(csv_options["jobs"], num_jobs_per_process)
+        for i in xrange(num_parallel_jobs):
+            for pipe in pipes:
+                if not self.send_work(ranges, pipe):
+                    return
+
+    def send_work(self, ranges, pipe):
+        if len(ranges) > 0:
+            pipe.send(ranges.popleft())
+        return len(ranges) > 0
+
+    def check_processes(self, csvdest, ranges, pipes):
+        shell = self.shell
+        meter = RateMeter(10000)
+        total_jobs = len(ranges)
+
+        self.send_initial_work(ranges, pipes)
+
+        count = 0
+        while count < total_jobs and len(pipes) > 0:
+            readable, _, _ = select(pipes, [], [])
+
+            for pipe in readable:
+                try:
+                    token_range, result = pipe.recv()
+                    if token_range is None and result is None:
+                        count += 1  # a job has finished
+                        self.send_work(ranges, pipe)
+                    elif isinstance(result, Exception):  # an error occurred
+                        shell.printerr('Error exporting from token range {}: {}'.format(token_range, result))
+                        if token_range is None:
+                            pipes.remove(pipe)
+                    else:  # partial result received
+                        data, num = result
+                        csvdest.write(data)
+                        meter.increment(n=num)
+                except EOFError:
+                    shell.printerr('Got EOF in child pipe')
+                    pipes.remove(pipe)
+
+        if count < total_jobs:
+            shell.printerr('Exported {} ranges out of {} total ranges, some records might be missing'
+                           .format(count, total_jobs))
+
+        return meter.total_records
+
+
+class ExportProcess(Process):
+    """
+    An export process instantiated by the export task.
+    """
+
+    def __init__(self, shell, pipe, ks, cf, columns, dialect_options, csv_options):
+        Process.__init__(self, target=self.run)
+        self.shell = shell
+        self.pipe = pipe
+        self.ks = ks
+        self.cf = cf
+        self.table_meta = shell.get_table_meta(ks, cf)
+        self.columns = columns
+        self.dialect_options = dialect_options
+        self.csv_options = csv_options
+        self.hosts_to_sessions = dict()
+
+    def run(self):
+        try:
+            self.inner_run()
+        finally:
+            self.close()
+
+    def inner_run(self):
+        while True:
+            try:
+                token_range, hosts = self.pipe.recv()
+                if token_range is None and hosts is None:
+                    break
+
+                self.start_job(token_range, hosts)
+            except EOFError:
+                self.shell.printerr("Parent has closed the pipe, aborting")
+                break
+            except:
+                err = sys.exc_info()[0]
+                self.pipe.send((None, Exception('Unexpected exception: {}'.format(err))))
+                break
+
+    def start_job(self, token_range, hosts):
+        try:
+            query = self.prepare_export_query(token_range)
+            session = self.get_session(hosts)
+            future = session.execute_async(query)
+            self.handle_result(token_range, future, session)
+        except IndexError:
+            pass
+
+    def get_session(self, hosts):
+        class ExportSession:
+            def __init__(self, cluster, ks):
+                self.cluster = cluster
+                self.session = cluster.connect(ks)
+                self.session.row_factory = tuple_factory
+                self.jobs = 1
+
+            def execute_async(self, query):
+                return self.session.execute_async(query)
+
+            def shutdown(self):
+                self.cluster.shutdown()
+
+        host = None
+        for h in hosts:
+            if h not in self.hosts_to_sessions:
+                host = h  # no job yet
+                break
+            elif host is None or self.hosts_to_sessions[h].jobs < self.hosts_to_sessions[host].jobs:
+                host = h
+
+        if host in self.hosts_to_sessions:
+            ret = self.hosts_to_sessions[host]
+            ret.jobs += 1
+            return ret
+
+        shell = self.shell
+        new_cluster = Cluster(
+            contact_points=(host,),
+            port=shell.port,
+            cql_version=shell.conn.cql_version,
+            protocol_version=DEFAULT_PROTOCOL_VERSION,
+            auth_provider=shell.auth_provider,
+            ssl_options=sslhandling.ssl_settings(host, CONFIG_FILE) if shell.ssl else None,
+            load_balancing_policy=WhiteListRoundRobinPolicy(hosts),
+            compression=None)
+
+        ret = ExportSession(new_cluster, self.ks)
+        self.hosts_to_sessions[host] = ret
+        return ret
+
+    def handle_result(self, token_range, future, session):
+        def result_callback(rows):
+            if future.has_more_pages:
+                future.start_fetching_next_page()
+                self.return_results(token_range, rows)
+            else:
+                self.return_results(token_range, rows)
+                self.pipe.send((None, None))
+                session.jobs -= 1
+
+        def err_callback(err):
+            self.pipe.send((token_range, Exception(err.message)))
+            self.pipe.send((None, None))
+            session.jobs -= 1
+
+        future.add_callbacks(callback=result_callback, errback=err_callback)
+
+    def return_results(self, token_range, rows):
+        output = StringIO()
+        writer = csv.writer(output, **self.dialect_options)
+        for row in rows:
+            writer.writerow(map(self.fmt, row))
+        data = (output.getvalue(), len(rows))
+        self.pipe.send((token_range, data))
+        output.close()
+
+    def fmt(self, v):
+        csv_options = self.csv_options
+        return format_value(
+            v,
+            output_encoding=csv_options['encoding'],
+            nullval=csv_options['nullval'],
+            time_format=csv_options['dtformats'],
+            float_precision=csv_options['float_precision']).strval
+
+    def close(self):
+        self.pipe.close()
+        for session in self.hosts_to_sessions.values():
+            session.shutdown()
+
+    def prepare_export_query(self, token_range):
+        pk_cols = ", ".join(protect_names(col.name for col in self.table_meta.partition_key))
+        columnlist = ', '.join(protect_names(self.columns))
+        start_token, end_token = token_range
+        query = 'SELECT {} FROM {}.{}'.format(columnlist, protect_name(self.ks), protect_name(self.cf))
+        if start_token is not None or end_token is not None:
+            query += ' WHERE'
+        if start_token is not None:
+            query += ' token({}) > {}'.format(pk_cols, start_token)
+        if start_token is not None and end_token is not None:
+            query += ' AND'
+        if end_token is not None:
+            query += ' token({}) <= {}'.format(pk_cols, end_token)
+        return query
+
+
 class RateMeter(object):
 
-    def __init__(self, log_rate):
-        self.log_rate = log_rate
-        self.last_checkpoint_time = time.time()
-        self.current_rate = 0.0
-        self.current_record = 0
+    def __init__(self, log_threshold):
+        self.log_threshold = log_threshold  # number of records after which we log
+        self.last_checkpoint_time = time.time()  # last time we logged
+        self.current_rate = 0.0  # rows per second
+        self.current_record = 0  # number of records since we last logged
+        self.total_records = 0   # total number of records
 
     def increment(self, n=1):
         self.current_record += n
 
-        new_checkpoint_time = time.time()
-        difference = new_checkpoint_time - self.last_checkpoint_time
-        if difference != 0.0:
-            new_rate = n / difference
-            self.current_rate = (self.current_rate + new_rate) / 2.0
-        if difference >= self.log_rate:
-            self.log()
+        if self.current_record >= self.log_threshold:
+            new_checkpoint_time = time.time()
+            time_difference = new_checkpoint_time - self.last_checkpoint_time
+            if time_difference != 0.0:
+                self.current_rate = self.get_new_rate(self.current_record / time_difference)
+
             self.last_checkpoint_time = new_checkpoint_time
+            self.total_records += self.current_record
+            self.current_record = 0
+            self.log()
+
+    def get_new_rate(self, new_rate):
+        """
+         return the previous rate averaged with the new rate to smooth a bit
+        """
+        if self.current_rate == 0.0:
+            return new_rate
+        else:
+            return (self.current_rate + new_rate) / 2.0
 
     def log(self):
-        output = 'Processed %s rows; Write: %.2f rows/s\r' % \
-                 (self.current_record, self.current_rate)
+        output = 'Processed {} rows; Written: {} rows/s\r'.format(self.total_records, self.current_rate)
         sys.stdout.write(output)
         sys.stdout.flush()
 
