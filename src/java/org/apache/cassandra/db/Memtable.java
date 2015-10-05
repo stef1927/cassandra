@@ -423,7 +423,7 @@ public class Memtable implements Comparable<Memtable>
         {
             // we operate "offline" here, as we expose the resulting reader consciously when done
             // (although we may want to modify this behaviour in future, to encapsulate full flush behaviour in LifecycleTransaction)
-            LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.FLUSH, cfs.metadata);
+            LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.FLUSH);
             MetadataCollector sstableMetadataCollector = new MetadataCollector(cfs.metadata.comparator).replayPosition(context);
             return new SSTableTxnWriter(txn,
                                         cfs.createSSTableMultiWriter(Descriptor.fromFilename(filename),
