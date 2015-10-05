@@ -28,6 +28,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
@@ -35,7 +36,6 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.concurrent.ScheduledExecutors;
 import org.apache.cassandra.config.Config;
-import org.apache.cassandra.utils.NoSpamLogger;
 
 import static java.lang.System.getProperty;
 
@@ -47,7 +47,6 @@ public class MonitoringTask
 {
     private static final String LINE_SEPARATOR = getProperty("line.separator");
     private static final Logger logger = LoggerFactory.getLogger(MonitoringTask.class);
-    private static final NoSpamLogger noSpamLogger = NoSpamLogger.getLogger(logger, 15L, TimeUnit.MINUTES);
 
     /**
      * Defines the interval for reporting any operations that have timed out.
@@ -64,10 +63,10 @@ public class MonitoringTask
     static MonitoringTask instance = make(REPORT_INTERVAL_MS, MAX_OPERATIONS);
 
     private final int maxOperations;
-    private final BlockingQueue<FailedOperation> operationsQueue;
     private final ScheduledFuture<?> reportingTask;
-    private int numDroppedOperations;
-    private long lastTime;
+    private final BlockingQueue<FailedOperation> operationsQueue;
+    private final AtomicLong numDroppedOperations;
+    private long lastLogTime;
 
     @VisibleForTesting
     static MonitoringTask make(int reportIntervalMillis, int maxTimedoutOperations)
@@ -85,8 +84,8 @@ public class MonitoringTask
     {
         this.maxOperations = maxOperations;
         this.operationsQueue = maxOperations > 0 ? new ArrayBlockingQueue<>(maxOperations) : new LinkedBlockingQueue<>();
-        this.numDroppedOperations = 0;
-        this.lastTime = ApproximateTime.currentTimeMillis();
+        this.numDroppedOperations = new AtomicLong();
+        this.lastLogTime = ApproximateTime.currentTimeMillis();
 
         logger.info("Scheduling monitoring task with report interval of {} ms, max operations {}", reportIntervalMillis, maxOperations);
         this.reportingTask = ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(() -> logFailedOperations(ApproximateTime.currentTimeMillis()),
@@ -111,97 +110,108 @@ public class MonitoringTask
             return; // logging of failed operations disabled
 
         if (!operationsQueue.offer(new FailedOperation(operation, now)))
-            numDroppedOperations++; //queue is full
+            numDroppedOperations.incrementAndGet();
     }
 
     @VisibleForTesting
-    Map<String, FailedOperation> aggregateFailedOperations()
+    FailedOperations aggregateFailedOperations()
     {
-        Map<String, FailedOperation> ret = new HashMap<>();
+        Map<String, FailedOperation> operations = new HashMap<>();
 
-        FailedOperation failedOperation = operationsQueue.poll();
-        while(failedOperation != null)
+        FailedOperation failedOperation;
+        while((failedOperation = operationsQueue.poll()) != null)
         {
-            FailedOperation existing = ret.get(failedOperation.name());
+            FailedOperation existing = operations.get(failedOperation.name());
             if (existing != null)
                 existing.addTimeout(failedOperation);
             else
-                ret.put(failedOperation.name(), failedOperation);
-
-            failedOperation = operationsQueue.poll();
+                operations.put(failedOperation.name(), failedOperation);
         }
 
-        return ret;
+        return new FailedOperations(operations, numDroppedOperations.getAndSet(0L));
     }
 
     @VisibleForTesting
     List<String> getFailedOperations()
     {
-        String ret = getFailedOperationsLog(aggregateFailedOperations());
-        updateReportingState(System.currentTimeMillis());
+        FailedOperations failedOperations = aggregateFailedOperations();
+        String ret = failedOperations.getLogMessage();
+        lastLogTime = ApproximateTime.currentTimeMillis();
         return ret.isEmpty() ? Collections.emptyList() : Arrays.asList(ret.split("\n"));
     }
 
-    private void logFailedOperations(long now)
-    {
-        logFailedOperations(now, logger.isDebugEnabled());
-    }
-
     @VisibleForTesting
-    void logFailedOperations(long now, boolean log)
+    void logFailedOperations(long now)
     {
-        Map<String, FailedOperation> failedOperations = aggregateFailedOperations();
+        FailedOperations failedOperations = aggregateFailedOperations();
         if (!failedOperations.isEmpty())
         {
-            long elapsed = now - lastTime;
-            noSpamLogger.warn("{} operations timed out in the last {} msecs, check debug log", failedOperations.size(), elapsed);
+            long elapsed = now - lastLogTime;
+            logger.warn("{} operations timed out in the last {} msecs, operation list available at debug log level",
+                        failedOperations.num(),
+                        elapsed);
 
-            if (log)
-                logger.info("{} operations timed out in the last {} msecs:{}{}",
-                            failedOperations.size(),
+            if (logger.isDebugEnabled())
+                logger.debug("{} operations timed out in the last {} msecs:{}{}",
+                            failedOperations.num(),
                             elapsed,
                             LINE_SEPARATOR,
-                            getFailedOperationsLog(failedOperations));
+                            failedOperations.getLogMessage());
         }
 
-        updateReportingState(now);
+        lastLogTime = now;
     }
 
-    private void updateReportingState(long now)
+    private static final class FailedOperations
     {
-        lastTime = now;
-        numDroppedOperations = 0;
-    }
+        public final Map<String, FailedOperation> operations;
+        public final long numDropped;
 
-    String getFailedOperationsLog(Map<String, FailedOperation> failedOperations)
-    {
-        if (failedOperations.isEmpty())
-            return "";
+        FailedOperations(Map<String, FailedOperation> operations, long numDropped)
+        {
+            this.operations = operations;
+            this.numDropped = numDropped;
+        }
 
-        final StringBuilder ret = new StringBuilder();
-        failedOperations.values().forEach(o -> formatOperation(ret, o));
+        public boolean isEmpty()
+        {
+            return operations.isEmpty() && numDropped == 0;
+        }
 
-        if (numDroppedOperations > 0)
-            ret.append(LINE_SEPARATOR)
-               .append("... (")
-               .append(numDroppedOperations)
-               .append(" were dropped)");
+        public long num()
+        {
+            return operations.size() + numDropped;
+        }
 
-        return ret.toString();
-    }
+        public String getLogMessage()
+        {
+            if (isEmpty())
+                return "";
 
-    private static void formatOperation(StringBuilder ret, FailedOperation operation)
-    {
-        if (ret.length() > 0)
-            ret.append(LINE_SEPARATOR);
+            final StringBuilder ret = new StringBuilder();
+            operations.values().forEach(o -> addOperation(ret, o));
 
-        ret.append(operation.getLogMessage());
+            if (numDropped > 0)
+                ret.append(LINE_SEPARATOR)
+                   .append("... (")
+                   .append(numDropped)
+                   .append(" were dropped)");
+
+            return ret.toString();
+        }
+
+        private static void addOperation(StringBuilder ret, FailedOperation operation)
+        {
+            if (ret.length() > 0)
+                ret.append(LINE_SEPARATOR);
+
+            ret.append(operation.getLogMessage());
+        }
     }
 
     private final static class FailedOperation
     {
         public final Monitorable operation;
-        public final long failedAt;
         public int numTimeouts;
         public long totalTime;
         public long maxTime;
@@ -211,7 +221,6 @@ public class MonitoringTask
         FailedOperation(Monitorable operation, long failedAt)
         {
             this.operation = operation;
-            this.failedAt = failedAt;
             numTimeouts = 1;
             totalTime = failedAt - operation.constructionTime().timestamp;
             minTime = totalTime;
@@ -225,20 +234,12 @@ public class MonitoringTask
             return name;
         }
 
-        public long constructionTime()
-        {
-            return operation.constructionTime().timestamp;
-        }
-
         void addTimeout(FailedOperation operation)
         {
             numTimeouts++;
-
-            long opTime = operation.failedAt - operation.constructionTime();
-            totalTime += opTime;
-
-            maxTime = Math.max(maxTime, opTime);
-            minTime = Math.min(minTime, opTime);
+            totalTime += operation.totalTime;
+            maxTime = Math.max(maxTime, operation.maxTime);
+            minTime = Math.min(minTime, operation.minTime);
         }
 
         public String getLogMessage()

@@ -162,7 +162,7 @@ public class MonitoringTaskTest
 
         assertTrue(operation.isAborted());
         assertFalse(operation.isCompleted());
-        MonitoringTask.instance.logFailedOperations(ApproximateTime.currentTimeMillis(), true);
+        MonitoringTask.instance.logFailedOperations(ApproximateTime.currentTimeMillis());
         assertEquals(0, MonitoringTask.instance.getFailedOperations().size());
     }
 

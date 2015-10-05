@@ -27,7 +27,11 @@ import org.apache.cassandra.concurrent.ScheduledExecutors;
 import org.apache.cassandra.config.Config;
 
 /**
- * TODO - document me
+ * This is an approximation of System.currentTimeInMillis(). It updates its
+ * time value at periodic intervals of CHECK_INTERVAL_MS milliseconds
+ * (currently 10 milliseconds by default). It can be used as a faster alternative
+ * to System.currentTimeInMillis() every time an imprecision of a few milliseconds
+ * can be accepted.
  */
 public class ApproximateTime
 {
