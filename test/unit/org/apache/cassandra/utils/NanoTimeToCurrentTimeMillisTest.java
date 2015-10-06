@@ -34,6 +34,7 @@ public class NanoTimeToCurrentTimeMillisTest
             now = Math.max(now, System.currentTimeMillis());
             if (ii % 10000 == 0)
             {
+                NanoTimeToCurrentTimeMillis.updateNow();
                 Thread.sleep(1);
             }
 
