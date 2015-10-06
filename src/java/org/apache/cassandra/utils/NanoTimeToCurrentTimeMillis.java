@@ -46,15 +46,20 @@ public class NanoTimeToCurrentTimeMillis
      * These timestamps don't order with System.currentTimeMillis() because currentTimeMillis() can tick over
      * before this one does. I have seen it behind by as much as 2ms on Linux and 25ms on Windows.
      */
-    public static final long convert(long nanoTime)
+    public static long convert(long nanoTime)
     {
         final long timestampBase[] = TIMESTAMP_BASE;
         return timestampBase[0] + TimeUnit.NANOSECONDS.toMillis(nanoTime - timestampBase[1]);
     }
 
+    public static void updateNow()
+    {
+        ScheduledExecutors.scheduledFastTasks.submit(NanoTimeToCurrentTimeMillis::updateTimestampBase);
+    }
+
     static
     {
-        ScheduledExecutors.scheduledFastTasks.scheduleWithFixedDelay(() -> updateTimestampBase(),
+        ScheduledExecutors.scheduledFastTasks.scheduleWithFixedDelay(NanoTimeToCurrentTimeMillis::updateTimestampBase,
                                                                      TIMESTAMP_UPDATE_INTERVAL,
                                                                      TIMESTAMP_UPDATE_INTERVAL,
                                                                      TimeUnit.MILLISECONDS);
