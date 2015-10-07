@@ -56,7 +56,6 @@ from functools import partial
 from glob import glob
 from multiprocessing import Pipe, Process, cpu_count
 from select import select
-from StringIO import StringIO
 from uuid import UUID
 
 description = "CQL Shell for Apache Cassandra"
@@ -1554,11 +1553,10 @@ class Shell(cmd.Cmd):
         print "\n%d rows %s in %s." % (rows, verb, describe_interval(timeend - timestart))
 
     def perform_csv_import(self, ks, cf, columns, fname, opts):
-        config = ImportExportConfig(opts, self.csv_dialect_defaults.copy())
-        csv_options = config.csv_options
-        if config.opts:
+        csv_options, dialect_options, unrecognized_options = parse_import_export_options(self, opts)
+        if unrecognized_options:
             self.printerr('Unrecognized COPY FROM options: %s'
-                          % ', '.join(opts.keys()))
+                          % ', '.join(unrecognized_options.keys()))
             return 0
         nullval, header = csv_options['nullval'], csv_options['header']
 
@@ -1579,9 +1577,9 @@ class Shell(cmd.Cmd):
         try:
             if header:
                 linesource.next()
-            reader = csv.reader(linesource, **config.dialect_options)
+            reader = csv.reader(linesource, **dialect_options)
 
-            num_processes = config.get_num_processes(cap=4)
+            num_processes = get_import_export_processes(cap=4)
 
             for i in range(num_processes):
                 parent_conn, child_conn = Pipe()
@@ -1791,8 +1789,12 @@ class Shell(cmd.Cmd):
             new_cluster.shutdown()
 
     def perform_csv_export(self, ks, cf, columns, fname, opts):
-        config = ImportExportConfig(opts, self.csv_dialect_defaults.copy())
-        return ExportTask(self, ks, cf, columns, fname, config).run()
+        csv_options, dialect_options, unrecognized_options = parse_import_export_options(self, opts)
+        if unrecognized_options:
+            self.printerr('Unrecognized COPY TO options: %s' % ', '.join(unrecognized_options.keys()))
+            return 0
+
+        return ExportTask(self, ks, cf, columns, fname, csv_options, dialect_options).run()
 
     def do_show(self, parsed):
         """
@@ -2150,68 +2152,72 @@ class Shell(cmd.Cmd):
         self.writeresult(text, color, newline=newline, out=sys.stderr)
 
 
-class ImportExportConfig:
-    def __init__(self, opts, dialect_options):
-        if 'quote' in opts:
-            dialect_options['quotechar'] = opts.pop('quote')
-        if 'escape' in opts:
-            dialect_options['escapechar'] = opts.pop('escape')
-        if 'delimiter' in opts:
-            dialect_options['delimiter'] = opts.pop('delimiter')
-        if dialect_options['quotechar'] == dialect_options['escapechar']:
-            dialect_options['doublequote'] = True
-            del dialect_options['escapechar']
-
-        csv_options = dict()
-        csv_options['nullval'] = opts.pop('null', '')
-        csv_options['header'] = bool(opts.pop('header', '').lower() == 'true')
-        csv_options['encoding'] = opts.pop('encoding', 'utf8')
-        csv_options['jobs'] = int(opts.pop('jobs', 12))
-	csv_options['dtformats'] = opt.pop('timeformat', shell.display_time_format)
-
-        self.opts = opts
-        self.dialect_options = dialect_options
-        self.csv_options = csv_options
-
-    def get_num_processes(self, cap):
-        """
-        Pick a reasonable number of child processes. We need to leave at
-        least one core for the parent process.  This doesn't necessarily
-        need to be capped, but 4 is currently enough to keep
-        a single local Cassandra node busy so we use this for import, whilst
-        for export we use 16 since we can connect to multiple Cassandra nodes.
-        Eventually this parameter will become an option.
-        """
-        try:
-            return max(1, min(cap, cpu_count() - 1))
-        except NotImplementedError:
-            return 1
-
-
-class ExportTask:
+def parse_import_export_options(shell, opts):
     """
-    Export data in parallel by instantiating one or more processes
+    Parse options for import (COPY FROM) and export (COPY TO) operations.
+    Extract from opts csv and dialect options.
+
+    :return: 3 dictionaries: the csv options, the dialect options, any unrecognized options.
     """
-    def __init__(self, shell, ks, cf, columns, fname, config):
+    dialect_options = shell.csv_dialect_defaults.copy()
+    if 'quote' in opts:
+        dialect_options['quotechar'] = opts.pop('quote')
+    if 'escape' in opts:
+        dialect_options['escapechar'] = opts.pop('escape')
+    if 'delimiter' in opts:
+        dialect_options['delimiter'] = opts.pop('delimiter')
+    if dialect_options['quotechar'] == dialect_options['escapechar']:
+        dialect_options['doublequote'] = True
+        del dialect_options['escapechar']
+
+    csv_options = dict()
+    csv_options['nullval'] = opts.pop('null', '')
+    csv_options['header'] = bool(opts.pop('header', '').lower() == 'true')
+    csv_options['encoding'] = opts.pop('encoding', 'utf8')
+    csv_options['jobs'] = int(opts.pop('jobs', 12))
+    csv_options['dtformats'] = opts.pop('timeformat', shell.display_time_format)
+    csv_options['float_precision'] = shell.display_float_precision
+
+    return csv_options, dialect_options, opts
+
+
+def get_import_export_processes(cap):
+    """
+    Pick a reasonable number of child processes. We need to leave at
+    least one core for the parent process.  This doesn't necessarily
+    need to be capped, but 4 is currently enough to keep
+    a single local Cassandra node busy so we use this for import, whilst
+    for export we use 16 since we can connect to multiple Cassandra nodes.
+    Eventually this parameter will become an option.
+    """
+    try:
+        return max(1, min(cap, cpu_count() - 1))
+    except NotImplementedError:
+        return 1
+
+
+class ExportTask(object):
+    """
+    A class that exports data to .csv by instantiating one or more processes that work in parallel (ExportProcess).
+    We communicate with these processes via pipes.
+    """
+    def __init__(self, shell, ks, cf, columns, fname, csv_options, dialect_options):
         self.shell = shell
-        self.config = config
+        self.csv_options = csv_options
+        self.dialect_options = dialect_options
         self.ks = ks
         self.cf = cf
         self.columns = shell.get_column_names(ks, cf) if columns is None else columns
         self.fname = fname
 
     def run(self):
+        """
+        Initiates the export by creating the processes.
+        """
         shell = self.shell
         fname = self.fname
         ks = self.ks
         cf = self.cf
-        config = self.config
-        csv_options = config.csv_options
-        if config.opts:
-            shell.printerr('Unrecognized COPY TO options: %s' % ', '.join(config.opts.keys()))
-            return 0
-
-        csv_options['float_precision'] = shell.display_float_precision
 
         if fname is None:
             do_close = False
@@ -2224,18 +2230,18 @@ class ExportTask:
                 shell.printerr("Can't open %r for writing: %s" % (fname, e))
                 return 0
 
-        if csv_options["header"]:
-            writer = csv.writer(csvdest, **self.config.dialect_options)
+        if self.csv_options['header']:
+            writer = csv.writer(csvdest, **self.dialect_options)
             writer.writerow(self.columns)
 
         ranges = self.get_ranges()
-        num_processes = config.get_num_processes(cap=min(16, len(ranges)))
+        num_processes = get_import_export_processes(cap=min(16, len(ranges)))
 
         pipes = []
         for i in xrange(num_processes):
             parent_conn, child_conn = Pipe()
             pipes.append(parent_conn)
-            process = ExportProcess(shell, child_conn, ks, cf, self.columns, config.dialect_options, csv_options)
+            process = ExportProcess(self, child_conn)
             process.start()
 
         try:
@@ -2248,39 +2254,61 @@ class ExportTask:
                 csvdest.close()
 
     def get_ranges(self):
+        """
+        return a queue of tuples, where the first tuple entry is a token range (from, to]
+        and the second entry is a list of hosts that own that range. Each host is responsible
+        for all the tokens in the rage (from, to].
+
+        The ring information comes from the driver metadata token map, which is built by
+        querying System.PEERS.
+
+        We only consider replicas that are in the local datacenter. If there are no local replicas
+        we use the cqlsh session host.
+        """
         shell = self.shell
         hostname = shell.hostname
 
         min_token = self.get_min_token()
         if shell.conn.metadata.token_map is None or min_token is None:
-            return deque([((None, None), tuple(hostname))])
+            return deque([((None, None), tuple([hostname]))])
 
         ranges = deque([])
-        hosts = [hostname]
         local_dc = shell.conn.metadata.get_host(hostname).datacenter
 
         ring = shell.get_ring(self.ks).items()
-        ring.sort(key=lambda tup: tup[0])
+        ring.sort()
 
         previous = None
-        for entry in ring:
-            token = entry[0].value
-            if previous is None and token == min_token:
+        for token, replicas in ring:
+            if previous is None and token.value == min_token:
                 continue  # avoids looping entire ring
 
-            del hosts[:]
-            for host in entry[1]:
+            hosts = []
+            for host in replicas:
                 if host.datacenter == local_dc:
                     hosts.append(host.address)
             if len(hosts) == 0:
                 hosts.append(hostname)  # fallback to default host if no replicas in current dc
-            ranges.append(((previous, token), tuple(hosts)))
-            previous = token
+            ranges.append(((previous, token.value), tuple(hosts)))
+            previous = token.value
 
-        ranges.append(((previous, None), tuple(hosts)))
+        #  If the ring is empty (previous is None) we get the entire ring from the
+        #  host we are currently connected to, otherwise for the last ring interval
+        #  we query the same replicas that hold the last token in the ring
+        if len(ranges) == 0:
+            ranges.append(((None, None), tuple([hostname])))
+        else:
+            ranges.append(((previous, None), ranges[-1][1]))
+
         return ranges
 
     def get_min_token(self):
+        """
+        :return the minimum token, which depends on the partitioner.
+        For partitioners that do not support tokens we return None, in
+        this cases we will not work in parallel, we'll just send all requests
+        to the cqlsh session host.
+        """
         partitioner = self.shell.conn.metadata.partitioner
 
         if partitioner.endswith('RandomPartitioner'):
@@ -2291,20 +2319,34 @@ class ExportTask:
             return None
 
     def send_initial_work(self, ranges, pipes):
-        csv_options = self.config.csv_options
+        """
+        We send up to the maximum number of parallel jobs to each pipe.
+        """
         num_jobs_per_process = len(ranges) / len(pipes)
-        num_parallel_jobs = min(csv_options["jobs"], num_jobs_per_process)
-        for i in xrange(num_parallel_jobs):
+        num_parallel_jobs = min(self.csv_options['jobs'], num_jobs_per_process)
+        for _ in xrange(num_parallel_jobs):
             for pipe in pipes:
                 if not self.send_work(ranges, pipe):
                     return
 
     def send_work(self, ranges, pipe):
+        """
+        We send to the pipe a range by removing it from the ranges.
+        """
         if len(ranges) > 0:
             pipe.send(ranges.popleft())
         return len(ranges) > 0
 
     def check_processes(self, csvdest, ranges, pipes):
+        """
+        Here we monitor all child processes by collecting their results
+        or any errors. As soon as a process completes a job we send some more,
+        if we still have ranges to process. In case of exceptions or permanent
+        error returned by the processes we exclude that pipe from the candicate pipes.
+        A process can signal a permanent error by sending None as the range for which the
+        error occurred. We terminate when we have processed all the ranges or when there
+        are no more pipes to continue working with.
+        """
         shell = self.shell
         meter = RateMeter(10000)
         total_jobs = len(ranges)
@@ -2337,24 +2379,44 @@ class ExportTask:
             shell.printerr('Exported {} ranges out of {} total ranges, some records might be missing'
                            .format(count, total_jobs))
 
-        return meter.total_records
+        return meter.get_total_records()
+
+
+class ExportSession(object):
+    """
+    A class for connecting to a cluster and storing the number
+    of jobs that this connection is processing. It wraps the methods
+    for executing a query asynchronously and for shutting down the
+    connection to the cluster.
+    """
+    def __init__(self, cluster, ks):
+        self.cluster = cluster
+        self.session = cluster.connect(ks)
+        self.session.row_factory = tuple_factory
+        self.jobs = 1
+
+    def execute_async(self, query):
+        return self.session.execute_async(query)
+
+    def shutdown(self):
+        self.cluster.shutdown()
 
 
 class ExportProcess(Process):
     """
-    An export process instantiated by the export task.
+    An child worker process for the export task, ExportTask.
     """
 
-    def __init__(self, shell, pipe, ks, cf, columns, dialect_options, csv_options):
+    def __init__(self, parent, pipe):
         Process.__init__(self, target=self.run)
-        self.shell = shell
+        self.shell = parent.shell
         self.pipe = pipe
-        self.ks = ks
-        self.cf = cf
-        self.table_meta = shell.get_table_meta(ks, cf)
-        self.columns = columns
-        self.dialect_options = dialect_options
-        self.csv_options = csv_options
+        self.ks = parent.ks
+        self.cf = parent.cf
+        self.table_meta = parent.shell.get_table_meta(parent.ks, parent.cf)
+        self.columns = parent.columns
+        self.dialect_options = parent.dialect_options
+        self.csv_options = parent.csv_options
         self.hosts_to_sessions = dict()
 
     def run(self):
@@ -2364,6 +2426,15 @@ class ExportProcess(Process):
             self.close()
 
     def inner_run(self):
+        """
+        The parent sends us (range, hosts) on the pipe to request
+        us to process a range, for which we can select any of the
+        hosts on the right.
+        We keep on working until we receive (None, None) from the
+        parent task. In case of exception we signal a permanent
+        error to the parent by sending (None, error) - rather than
+        (range, error).
+        """
         while True:
             try:
                 token_range, hosts = self.pipe.recv()
@@ -2380,63 +2451,53 @@ class ExportProcess(Process):
                 break
 
     def start_job(self, token_range, hosts):
-        try:
-            query = self.prepare_export_query(token_range)
-            session = self.get_session(hosts)
-            future = session.execute_async(query)
-            self.handle_result(token_range, future, session)
-        except IndexError:
-            pass
+        """
+        Begin querying a range by executing an async query that
+        will later on invoke the callbacks attached in attach_callbacks.
+        """
+        query = self.prepare_export_query(token_range)
+        session = self.get_session(hosts)
+        future = session.execute_async(query)
+        self.attach_callbacks(token_range, future, session)
 
     def get_session(self, hosts):
-        class ExportSession:
-            def __init__(self, cluster, ks):
-                self.cluster = cluster
-                self.session = cluster.connect(ks)
-                self.session.row_factory = tuple_factory
-                self.jobs = 1
+        """
+        We select a host to connect to. If we have no connections to one of the hosts
+        yet then we select this host, else we pick the one with the smallest number
+        of jobs.
 
-            def execute_async(self, query):
-                return self.session.execute_async(query)
+        :return: An ExportSession connected to the chosen host.
+        """
+        new_hosts = [h for h in hosts if h not in self.hosts_to_sessions]
+        if new_hosts:
+            host = new_hosts[0]
+            shell = self.shell
+            new_cluster = Cluster(
+                contact_points=(host,),
+                port=shell.port,
+                cql_version=shell.conn.cql_version,
+                protocol_version=DEFAULT_PROTOCOL_VERSION,
+                auth_provider=shell.auth_provider,
+                ssl_options=sslhandling.ssl_settings(host, CONFIG_FILE) if shell.ssl else None,
+                load_balancing_policy=WhiteListRoundRobinPolicy(hosts),
+                compression=None)
 
-            def shutdown(self):
-                self.cluster.shutdown()
+            session = ExportSession(new_cluster, self.ks)
+            self.hosts_to_sessions[host] = session
+            return session
+        else:
+            host = min(hosts, key=lambda h: self.hosts_to_sessions[h].jobs)
+            session = self.hosts_to_sessions[host]
+            session.jobs += 1
+            return session
 
-        host = None
-        for h in hosts:
-            if h not in self.hosts_to_sessions:
-                host = h  # no job yet
-                break
-            elif host is None or self.hosts_to_sessions[h].jobs < self.hosts_to_sessions[host].jobs:
-                host = h
-
-        if host in self.hosts_to_sessions:
-            ret = self.hosts_to_sessions[host]
-            ret.jobs += 1
-            return ret
-
-        shell = self.shell
-        new_cluster = Cluster(
-            contact_points=(host,),
-            port=shell.port,
-            cql_version=shell.conn.cql_version,
-            protocol_version=DEFAULT_PROTOCOL_VERSION,
-            auth_provider=shell.auth_provider,
-            ssl_options=sslhandling.ssl_settings(host, CONFIG_FILE) if shell.ssl else None,
-            load_balancing_policy=WhiteListRoundRobinPolicy(hosts),
-            compression=None)
-
-        ret = ExportSession(new_cluster, self.ks)
-        self.hosts_to_sessions[host] = ret
-        return ret
-
-    def handle_result(self, token_range, future, session):
+    def attach_callbacks(self, token_range, future, session):
         def result_callback(rows):
             if future.has_more_pages:
                 future.start_fetching_next_page()
-                self.return_results(token_range, rows)
+                self.write_rows_to_csv(token_range, rows)
             else:
-                self.return_results(token_range, rows)
+                self.write_rows_to_csv(token_range, rows)
                 self.pipe.send((None, None))
                 session.jobs -= 1
 
@@ -2447,7 +2508,7 @@ class ExportProcess(Process):
 
         future.add_callbacks(callback=result_callback, errback=err_callback)
 
-    def return_results(self, token_range, rows):
+    def write_rows_to_csv(self, token_range, rows):
         output = StringIO()
         writer = csv.writer(output, **self.dialect_options)
         for row in rows:
@@ -2471,6 +2532,9 @@ class ExportProcess(Process):
             session.shutdown()
 
     def prepare_export_query(self, token_range):
+        """
+        Return a query where we select all the data for this token range
+        """
         pk_cols = ", ".join(protect_names(col.name for col in self.table_meta.partition_key))
         columnlist = ', '.join(protect_names(self.columns))
         start_token, end_token = token_range
@@ -2499,15 +2563,18 @@ class RateMeter(object):
         self.current_record += n
 
         if self.current_record >= self.log_threshold:
-            new_checkpoint_time = time.time()
-            time_difference = new_checkpoint_time - self.last_checkpoint_time
-            if time_difference != 0.0:
-                self.current_rate = self.get_new_rate(self.current_record / time_difference)
-
-            self.last_checkpoint_time = new_checkpoint_time
-            self.total_records += self.current_record
-            self.current_record = 0
+            self.update()
             self.log()
+
+    def update(self):
+        new_checkpoint_time = time.time()
+        time_difference = new_checkpoint_time - self.last_checkpoint_time
+        if time_difference != 0.0:
+            self.current_rate = self.get_new_rate(self.current_record / time_difference)
+
+        self.last_checkpoint_time = new_checkpoint_time
+        self.total_records += self.current_record
+        self.current_record = 0
 
     def get_new_rate(self, new_rate):
         """
@@ -2522,6 +2589,11 @@ class RateMeter(object):
         output = 'Processed {} rows; Written: {} rows/s\r'.format(self.total_records, self.current_rate)
         sys.stdout.write(output)
         sys.stdout.flush()
+
+    def get_total_records(self):
+        self.update()
+        self.log()
+        return self.total_records
 
 
 class SwitchCommand(object):
