@@ -196,7 +196,7 @@ final class LogFile
 
     private boolean readRecords()
     {
-        assert records.isEmpty() : "Records are already available";
+        records.clear();
 
         LogRecord finalRecord = null;
         boolean missingFinalRecord = false;
@@ -278,7 +278,11 @@ final class LogFile
         List<File> files = record.getExistingFiles();
 
         // Paranoid sanity checks: we create another record by looking at the files as they are
-        // on disk right now and make sure the information still matches
+        // on disk right now and make sure the information still matches. We don't want to delete
+        // files by mistake if the user has copied them from backup and forgot to remove a txn log
+        // file that obsoleted the very same files. So we check the latest update time and make sure
+        // it matches. Because we delete files from oldest to newest, the latest update time should
+        // always match.
         record.onDiskRecord = record.withChangedFiles(files);
 
         if (record.updateTime != record.onDiskRecord.updateTime && record.onDiskRecord.numFiles > 0)
@@ -415,7 +419,7 @@ final class LogFile
         List<File> files = record.getExistingFiles();
 
         // we sort the files in ascending update time order so that the last update time
-        // stays the same even if we only partially delete files
+        // stays the same even if we only partially delete files, see comment in isInvalid()
         files.sort((f1, f2) -> Long.compare(f1.lastModified(), f2.lastModified()));
 
         files.forEach(LogTransaction::delete);

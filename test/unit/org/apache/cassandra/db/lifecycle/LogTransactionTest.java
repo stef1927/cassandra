@@ -665,21 +665,17 @@ public class LogTransactionTest extends AbstractTransactionalTest
 
         Arrays.stream(sstables).forEach(s -> s.selfRef().release());
 
+        LogTransaction.removeUnfinishedLeftovers(Arrays.asList(dataFolder1, dataFolder2));
+        LogTransaction.waitForDeletions();
+
         if (shouldCommit)
         {
-            LogTransaction.removeUnfinishedLeftovers(Arrays.asList(dataFolder1, dataFolder2));
-
-            LogTransaction.waitForDeletions();
-
             // only new sstables should still be there
             assertFiles(dataFolder1.getPath(), new HashSet<>(sstables[1].getAllFilePaths()));
             assertFiles(dataFolder2.getPath(), new HashSet<>(sstables[3].getAllFilePaths()));
         }
         else
         {
-            // this should fail and leave everything as is
-            LogTransaction.removeUnfinishedLeftovers(Arrays.asList(dataFolder1, dataFolder2));
-
             // all files should still be there
             assertFiles(dataFolder1.getPath(), Sets.newHashSet(Iterables.concat(sstables[0].getAllFilePaths(),
                                                                                 sstables[1].getAllFilePaths(),
