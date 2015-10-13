@@ -1,6 +1,8 @@
 package org.apache.cassandra.db.lifecycle;
 
 import java.io.File;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -13,7 +15,7 @@ import org.apache.cassandra.utils.FBUtilities;
 /**
  * A decoded line in a transaction log file segment.
  *
- * @see LogFileSegment and LogFile.
+ * @see LogFileReplica and LogFile.
  */
 final class LogRecord
 {
@@ -41,37 +43,37 @@ final class LogRecord
         }
 
         public boolean isFinal() { return this == Type.COMMIT || this == Type.ABORT; }
-
-        public boolean isAny() { return !isFinal(); }
     }
 
-
+    // the type of record, see Type
     public final Type type;
-    public final Optional<String> fileName;
-    public final Optional<File> folder;
+    // for sstable records, the absolute path of the table desc
+    public final Optional<String> absolutePath;
+    // for sstable records, the last update time of all files (may not be available for NEW records)
     public final long updateTime;
+    // for sstable records, the total number of files (may not be available for NEW records)
     public final int numFiles;
+    // the raw string as written or read from a file
     public final String raw;
+    // the record checksum
     public final long checksum;
-
-    public String error;
-    public LogRecord onDiskRecord;
+    // an optional error
+    public Optional<String> error;
 
     // (add|remove|commit|abort):[*,*,*][checksum]
     static Pattern REGEX = Pattern.compile("^(add|remove|commit|abort):\\[([^,]*),?([^,]*),?([^,]*)\\]\\[(\\d*)\\]$", Pattern.CASE_INSENSITIVE);
 
-    public static LogRecord make(File file, String line)
+    public static LogRecord make(String line)
     {
         try
         {
             Matcher matcher = REGEX.matcher(line);
             if (!matcher.matches())
-                return new LogRecord(Type.UNKNOWN, null, "", 0, 0, 0, line)
-                       .error(String.format("Failed to parse [%s]", line));
+                return new LogRecord(Type.UNKNOWN, null, 0, 0, 0, line)
+                       .setError(String.format("Failed to parse [%s]", line));
 
             Type type = Type.fromPrefix(matcher.group(1));
             return new LogRecord(type,
-                                 file.getParentFile(),
                                  matcher.group(2),
                                  Long.valueOf(matcher.group(3)),
                                  Integer.valueOf(matcher.group(4)),
@@ -79,60 +81,64 @@ final class LogRecord
         }
         catch (Throwable t)
         {
-            return new LogRecord(Type.UNKNOWN, null, "", 0, 0, 0, line).error(t);
+            return new LogRecord(Type.UNKNOWN, null, 0, 0, 0, line).setError(t);
         }
     }
 
     public static LogRecord makeCommit(long updateTime)
     {
-        return new LogRecord(Type.COMMIT, null, "", updateTime, 0);
+        return new LogRecord(Type.COMMIT, updateTime);
     }
 
     public static LogRecord makeAbort(long updateTime)
     {
-        return new LogRecord(Type.ABORT, null, "", updateTime, 0);
+        return new LogRecord(Type.ABORT, updateTime);
     }
 
     public static LogRecord make(Type type, SSTable table)
     {
-        File folder = table.descriptor.directory;
-        String fileName = FileUtils.getRelativePath(folder.getPath(), table.descriptor.baseFilename());
-        return make(type, folder, getExistingFiles(folder, fileName), table.getAllFilePaths().size(), fileName);
+        String absoluteTablePath = FileUtils.getCanonicalPath(table.descriptor.baseFilename());
+        return make(type, getExistingFiles(absoluteTablePath), table.getAllFilePaths().size(), absoluteTablePath);
     }
 
     public LogRecord withChangedFiles(List<File> files)
     {
-        return make(type, folder.get(), files, 0, fileName.get());
+        return make(type, files, 0, absolutePath.get());
     }
 
-    public static LogRecord make(Type type, File folder, List<File> files, int minFiles, String fileName)
+    public static LogRecord make(Type type, List<File> files, int minFiles, String absolutePath)
     {
         long lastModified = files.stream().map(File::lastModified).reduce(0L, Long::max);
-        return new LogRecord(type, folder, fileName, lastModified, Math.max(minFiles, files.size()));
+        return new LogRecord(type, absolutePath, lastModified, Math.max(minFiles, files.size()));
+    }
+
+    private LogRecord(Type type, long updateTime)
+    {
+        this(type, null, updateTime, 0, 0, null);
     }
 
     private LogRecord(Type type,
-                      File folder,
-                      String fileName,
+                      String absolutePath,
                       long updateTime,
                       int numFiles)
     {
-        this(type, folder, fileName, updateTime, numFiles, 0, null);
+        this(type, absolutePath, updateTime, numFiles, 0, null);
     }
 
     private LogRecord(Type type,
-                      File folder,
-                      String fileName,
+                      String absolutePath,
                       long updateTime,
                       int numFiles,
                       long checksum,
                       String raw)
     {
+        assert !type.hasFile() || absolutePath != null : "Expected file path for file records";
+
         this.type = type;
-        this.folder = type.hasFile() ? Optional.of(folder) : Optional.<File>empty();
-        this.fileName = type.hasFile() ? Optional.of(fileName) : Optional.<String>empty();
+        this.absolutePath = type.hasFile() ? Optional.of(absolutePath) : Optional.<String>empty();
         this.updateTime = type == Type.REMOVE ? updateTime : 0;
         this.numFiles = type.hasFile() ? numFiles : 0;
+        this.error = Optional.empty();
         if (raw == null)
         {
             assert checksum == 0;
@@ -144,31 +150,31 @@ final class LogRecord
             this.checksum = checksum;
             this.raw = raw;
         }
-
-        this.error = "";
     }
 
-    public LogRecord error(Throwable t)
+    public LogRecord setError(Throwable t)
     {
-        return error(t.getMessage());
+        return setError(t.getMessage());
     }
 
-    public LogRecord error(String error)
+    public LogRecord setError(String error)
     {
-        this.error = error;
+        if (!this.error.isPresent())
+            this.error = Optional.of(error);
+
         return this;
     }
 
     public boolean isValid()
     {
-        return error.isEmpty() && type != Type.UNKNOWN;
+        return !error.isPresent() && type != Type.UNKNOWN;
     }
 
     private String format()
     {
         return String.format("%s:[%s,%d,%d][%d]",
                              type.toString(),
-                             fileName.isPresent() ? fileName.get() : "",
+                             absolutePath(),
                              updateTime,
                              numFiles,
                              checksum);
@@ -176,14 +182,14 @@ final class LogRecord
 
     public List<File> getExistingFiles()
     {
-        assert folder.isPresent() : "Expected a folder for a file type record";
-        assert fileName.isPresent() : "Expected an sstable for a file type record";
-        return getExistingFiles(folder.get(), fileName.get());
+        assert absolutePath.isPresent() : "Expected a path in order to get existing files";
+        return getExistingFiles(absolutePath.get());
     }
 
-    public static List<File> getExistingFiles(File parentFolder, String fileName)
+    public static List<File> getExistingFiles(String absoluteFilePath)
     {
-        return Arrays.asList(parentFolder.listFiles((dir, name) -> name.startsWith(fileName)));
+        Path path = Paths.get(absoluteFilePath);
+        return Arrays.asList(path.getParent().toFile().listFiles((dir, name) -> name.startsWith(path.getFileName().toString())));
     }
 
     public boolean isFinal()
@@ -191,16 +197,21 @@ final class LogRecord
         return type.isFinal();
     }
 
-    public boolean isAny()
+    String fileName()
     {
-        return type.isAny();
+        return absolutePath.isPresent() ? Paths.get(absolutePath.get()).getFileName().toString() : "";
+    }
+
+    String absolutePath()
+    {
+        return absolutePath.isPresent() ? absolutePath.get() : "";
     }
 
     @Override
     public int hashCode()
     {
         // see comment in equals
-        return Objects.hash(type, folder, fileName, error);
+        return Objects.hash(type, absolutePath, numFiles, updateTime);
     }
 
     @Override
@@ -211,16 +222,12 @@ final class LogRecord
 
         final LogRecord other = (LogRecord)obj;
 
-        // we exclude on purpose checksum, update time and count as
-        // we don't want duplicated records that differ only by
-        // properties that might change on disk, especially COMMIT records,
-        // there should be only one regardless of update time
-        // however we must compare the error to make sure we have more than
-        // one UNKNOWN record, if we fail to parse more than one
+        // we exclude on purpose checksum, error and full file path
+        // since records must match across log file replicas on different disks
         return type == other.type &&
-               folder.equals(other.folder) &&
-               fileName.equals(other.fileName) &&
-               error.equals(other.error);
+               absolutePath.equals(other.absolutePath) &&
+               numFiles == other.numFiles &&
+               updateTime == other.updateTime;
     }
 
     @Override
@@ -236,7 +243,7 @@ final class LogRecord
     long computeChecksum()
     {
         CRC32 crc32 = new CRC32();
-        crc32.update((fileName.isPresent() ? fileName.get() : "").getBytes(FileUtils.CHARSET));
+        crc32.update((absolutePath()).getBytes(FileUtils.CHARSET));
         crc32.update(type.toString().getBytes(FileUtils.CHARSET));
         FBUtilities.updateChecksumInt(crc32, (int) updateTime);
         FBUtilities.updateChecksumInt(crc32, (int) (updateTime >>> 32));

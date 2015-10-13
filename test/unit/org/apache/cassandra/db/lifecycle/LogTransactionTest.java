@@ -841,25 +841,17 @@ public class LogTransactionTest extends AbstractTransactionalTest
     @Test
     public void testUnparsableLastRecord() throws IOException
     {
-        testCorruptRecord((t, s) ->
-                          {
-                              t.logFiles().forEach(f -> FileUtils.append(f, "commit:[a,b,c][12345678]"));
-                          },
-                          true);
+        testCorruptRecord((t, s) -> t.logFiles().forEach(f -> FileUtils.append(f, "commit:[a,b,c][12345678]")), true);
     }
 
     @Test
     public void testUnparsableFirstRecord() throws IOException
     {
-        testCorruptRecord((t, s) ->
-                          {
-                              t.logFiles().forEach(f -> {
-                                  List<String> lines = FileUtils.readLines(f);
-                                  lines.add(0, "add:[a,b,c][12345678]");
-                                  FileUtils.replace(f, lines.toArray(new String[lines.size()]));
-                              });
-                          },
-                          false);
+        testCorruptRecord((t, s) -> t.logFiles().forEach(f -> {
+            List<String> lines = FileUtils.readLines(f);
+            lines.add(0, "add:[a,b,c][12345678]");
+            FileUtils.replace(f, lines.toArray(new String[lines.size()]));
+        }), false);
     }
 
     private static void testCorruptRecord(BiConsumer<LogTransaction, SSTableReader> modifier, boolean isRecoverable) throws IOException

@@ -19,8 +19,6 @@
 package org.apache.cassandra.db.lifecycle;
 
 import java.io.File;
-import java.util.List;
-import java.util.stream.Collectors;
 
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.CLibrary;
@@ -37,22 +35,22 @@ import org.apache.cassandra.utils.CLibrary;
  *
  * @see LogFile
  */
-final class LogFileSegment
+final class LogFileReplica
 {
     private final int folderDescriptor;
     private final File file;
 
-    static LogFileSegment create(File folder, String fileName)
+    static LogFileReplica create(File folder, String fileName)
     {
-        return new LogFileSegment(CLibrary.tryOpenDirectory(folder.getPath()), new File(fileName));
+        return new LogFileReplica(CLibrary.tryOpenDirectory(folder.getPath()), new File(fileName));
     }
 
-    static LogFileSegment open(File file)
+    static LogFileReplica open(File file)
     {
-        return new LogFileSegment(CLibrary.tryOpenDirectory(file.getParentFile().getPath()), file);
+        return new LogFileReplica(CLibrary.tryOpenDirectory(file.getParentFile().getPath()), file);
     }
 
-    LogFileSegment(int folderDescriptor, File file)
+    LogFileReplica(int folderDescriptor, File file)
     {
         this.folderDescriptor = folderDescriptor;
         this.file = file;
@@ -78,13 +76,6 @@ final class LogFileSegment
     void delete()
     {
         LogTransaction.delete(file);
-    }
-
-    List<LogRecord> readRecords()
-    {
-        return FileUtils.readLines(file).stream()
-                        .map(l -> LogRecord.make(file, l))
-                        .collect(Collectors.toList());
     }
 
     boolean exists()
