@@ -596,6 +596,76 @@ public class LogTransactionTest extends AbstractTransactionalTest
     }
 
     @Test
+    public void testRemoveUnfinishedLeftovers_multipleFolders_partialFinalRecords_first() throws Throwable
+    {
+        testRemoveUnfinishedLeftovers_multipleFolders_errorConditions(txn -> {
+            List<File> logFiles = txn.logFiles();
+            Assert.assertEquals(2, logFiles.size());
+
+            // insert a full record and a partial one
+            String finalRecord = LogRecord.makeCommit(System.currentTimeMillis()).raw;
+            int toChop = finalRecord.length() / 2;
+            FileUtils.append(logFiles.get(0), finalRecord.substring(0, finalRecord.length() - toChop));
+            FileUtils.append(logFiles.get(1), finalRecord);
+
+        }, true);
+    }
+
+    @Test
+    public void testRemoveUnfinishedLeftovers_multipleFolders_partialFinalRecords_second() throws Throwable
+    {
+        testRemoveUnfinishedLeftovers_multipleFolders_errorConditions(txn -> {
+            List<File> logFiles = txn.logFiles();
+            Assert.assertEquals(2, logFiles.size());
+
+            // insert a full record and a partial one
+            String finalRecord = LogRecord.makeCommit(System.currentTimeMillis()).raw;
+            int toChop = finalRecord.length() / 2;
+            FileUtils.append(logFiles.get(0), finalRecord);
+            FileUtils.append(logFiles.get(1), finalRecord.substring(0, finalRecord.length() - toChop));
+
+        }, true);
+    }
+
+    @Test
+    public void testRemoveUnfinishedLeftovers_multipleFolders_partialNonFinalRecord_first() throws Throwable
+    {
+        testRemoveUnfinishedLeftovers_multipleFolders_errorConditions(txn -> {
+            List<File> logFiles = txn.logFiles();
+            Assert.assertEquals(2, logFiles.size());
+
+            // insert a partial sstable record and a full commit record
+            String sstableRecord = LogRecord.make(LogRecord.Type.ADD, Collections.emptyList(), 0, "abc").raw;
+            int toChop = sstableRecord.length() / 2;
+            FileUtils.append(logFiles.get(0), sstableRecord.substring(0, sstableRecord.length() - toChop));
+            FileUtils.append(logFiles.get(1), sstableRecord);
+            String finalRecord = LogRecord.makeCommit(System.currentTimeMillis()).raw;
+            FileUtils.append(logFiles.get(0), finalRecord);
+            FileUtils.append(logFiles.get(1), finalRecord);
+
+        }, false);
+    }
+
+    @Test
+    public void testRemoveUnfinishedLeftovers_multipleFolders_partialNonFinalRecord_second() throws Throwable
+    {
+        testRemoveUnfinishedLeftovers_multipleFolders_errorConditions(txn -> {
+            List<File> logFiles = txn.logFiles();
+            Assert.assertEquals(2, logFiles.size());
+
+            // insert a partial sstable record and a full commit record
+            String sstableRecord = LogRecord.make(LogRecord.Type.ADD, Collections.emptyList(), 0, "abc").raw;
+            int toChop = sstableRecord.length() / 2;
+            FileUtils.append(logFiles.get(0), sstableRecord);
+            FileUtils.append(logFiles.get(1), sstableRecord.substring(0, sstableRecord.length() - toChop));
+            String finalRecord = LogRecord.makeCommit(System.currentTimeMillis()).raw;
+            FileUtils.append(logFiles.get(0), finalRecord);
+            FileUtils.append(logFiles.get(1), finalRecord);
+
+        }, false);
+    }
+
+    @Test
     public void testRemoveUnfinishedLeftovers_multipleFolders_missingFinalRecords_first() throws Throwable
     {
         testRemoveUnfinishedLeftovers_multipleFolders_errorConditions(txn -> {

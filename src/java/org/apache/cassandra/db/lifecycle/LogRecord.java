@@ -13,9 +13,9 @@ import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.FBUtilities;
 
 /**
- * A decoded line in a transaction log file segment.
+ * A decoded line in a transaction log file replica.
  *
- * @see LogFileReplica and LogFile.
+ * @see LogReplica and LogFile.
  */
 final class LogRecord
 {
@@ -45,20 +45,48 @@ final class LogRecord
         public boolean isFinal() { return this == Type.COMMIT || this == Type.ABORT; }
     }
 
+    /**
+     * The status of a record after it has been verified, any parsing errors
+     * are also store here.
+     */
+    public final static class Status
+    {
+        // if there are any errors, they end up here
+        Optional<String> error = Optional.empty();
+
+        // if the record was only partially matched across files this is true
+        boolean partial = false;
+
+        // if the status of this record on disk is required (e.g. existing files), it is
+        // stored here for caching
+        LogRecord onDiskRecord;
+
+        void setError(String error)
+        {
+            if (!this.error.isPresent())
+                this.error = Optional.of(error);
+        }
+
+        boolean hasError()
+        {
+            return error.isPresent();
+        }
+    }
+
     // the type of record, see Type
     public final Type type;
     // for sstable records, the absolute path of the table desc
     public final Optional<String> absolutePath;
     // for sstable records, the last update time of all files (may not be available for NEW records)
     public final long updateTime;
-    // for sstable records, the total number of files (may not be available for NEW records)
+    // for sstable records, the total number of files (may not be accurate for NEW records)
     public final int numFiles;
     // the raw string as written or read from a file
     public final String raw;
-    // the record checksum
+    // the checksum of this record, written at the end of the record string
     public final long checksum;
-    // an optional error
-    public Optional<String> error;
+    // the status of this record, @see Status class
+    public final Status status;
 
     // (add|remove|commit|abort):[*,*,*][checksum]
     static Pattern REGEX = Pattern.compile("^(add|remove|commit|abort):\\[([^,]*),?([^,]*),?([^,]*)\\]\\[(\\d*)\\]$", Pattern.CASE_INSENSITIVE);
@@ -101,9 +129,9 @@ final class LogRecord
         return make(type, getExistingFiles(absoluteTablePath), table.getAllFilePaths().size(), absoluteTablePath);
     }
 
-    public LogRecord withChangedFiles(List<File> files)
+    public LogRecord withExistingFiles()
     {
-        return make(type, files, 0, absolutePath.get());
+        return make(type, getExistingFiles(), 0, absolutePath.get());
     }
 
     public static LogRecord make(Type type, List<File> files, int minFiles, String absolutePath)
@@ -138,7 +166,7 @@ final class LogRecord
         this.absolutePath = type.hasFile() ? Optional.of(absolutePath) : Optional.<String>empty();
         this.updateTime = type == Type.REMOVE ? updateTime : 0;
         this.numFiles = type.hasFile() ? numFiles : 0;
-        this.error = Optional.empty();
+        this.status = new Status();
         if (raw == null)
         {
             assert checksum == 0;
@@ -152,22 +180,45 @@ final class LogRecord
         }
     }
 
-    public LogRecord setError(Throwable t)
+    LogRecord setError(Throwable t)
     {
         return setError(t.getMessage());
     }
 
-    public LogRecord setError(String error)
+    LogRecord setError(String error)
     {
-        if (!this.error.isPresent())
-            this.error = Optional.of(error);
-
+        status.setError(error);
         return this;
     }
 
-    public boolean isValid()
+    String error()
     {
-        return !error.isPresent() && type != Type.UNKNOWN;
+        return status.error.orElse("");
+    }
+
+    void setPartial()
+    {
+        status.partial = true;
+    }
+
+    boolean partial()
+    {
+        return status.partial;
+    }
+
+    boolean isValid()
+    {
+        return !status.hasError() && type != Type.UNKNOWN;
+    }
+
+    boolean isInvalid()
+    {
+        return !isValid();
+    }
+
+    boolean isInvalidOrPartial()
+    {
+        return isInvalid() || partial();
     }
 
     private String format()
@@ -236,10 +287,6 @@ final class LogRecord
         return raw;
     }
 
-    /**
-     * Compute the checksum. We could add the folder to the computation but
-     * that would break compatibility with 3.0 rc1.
-     */
     long computeChecksum()
     {
         CRC32 crc32 = new CRC32();

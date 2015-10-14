@@ -2,7 +2,6 @@ package org.apache.cassandra.db.lifecycle;
 
 import java.io.File;
 import java.util.*;
-import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -18,7 +17,6 @@ import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.db.lifecycle.LogRecord.Type;
 import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.format.big.BigFormat;
-import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.Throwables;
 
 import static org.apache.cassandra.utils.Throwables.merge;
@@ -42,14 +40,14 @@ final class LogFile
     // cc_txn_opname_id.log (where cc is one of the sstable versions defined in BigVersion)
     static Pattern FILE_REGEX = Pattern.compile(String.format("^(.{2})_txn_(.*)_(.*)%s$", EXT));
 
-    private final Map<File, LogFileReplica> replicas = new LinkedHashMap<>();
+    private final LogReplicaSet replicas = new LogReplicaSet();
     private final Set<LogRecord> records = new LinkedHashSet<>();
     private final OperationType type;
     private final UUID id;
 
-    static LogFile make(File logFile)
+    static LogFile make(File logReplica)
     {
-        return make(logFile.getName(), Collections.singletonList(logFile));
+        return make(logReplica.getName(), Collections.singletonList(logReplica));
     }
 
     static LogFile make(String fileName, List<File> logReplicas)
@@ -68,14 +66,9 @@ final class LogFile
         return new LogFile(operationType, id, logReplicas);
     }
 
-    private Collection<LogFileReplica> replicas()
-    {
-        return replicas.values();
-    }
-
     Throwable sync(Throwable accumulate)
     {
-        return Throwables.perform(accumulate, replicas().stream().map(s -> s::sync));
+        return replicas.sync(accumulate);
     }
 
     OperationType type()
@@ -98,7 +91,7 @@ final class LogFile
             // to ensure there is a happens before edge between them
             Throwables.maybeFail(sync(accumulate));
 
-            accumulate = Throwables.perform(accumulate, replicas().stream().map(s -> s::delete));
+            accumulate = replicas.delete(accumulate);
         }
         catch (Throwable t)
         {
@@ -116,7 +109,7 @@ final class LogFile
     LogFile(OperationType type, UUID id, List<File> replicas)
     {
         this(type, id);
-        addReplicas(replicas);
+        this.replicas.addReplicas(replicas);
     }
 
     LogFile(OperationType type, UUID id)
@@ -125,47 +118,18 @@ final class LogFile
         this.id = id;
     }
 
-    private void addReplicas(List<File> replicas)
-    {
-        replicas.forEach(this::addReplica);
-    }
-
-    private void addReplica(File file)
-    {
-        File folder = file.getParentFile();
-        assert !replicas.containsKey(folder);
-        replicas.put(folder, LogFileReplica.open(file));
-
-        if (logger.isTraceEnabled())
-            logger.trace("Added log file segment {} ", file);
-    }
-
-    private void maybeCreateReplica(File folder)
-    {
-        if (replicas.containsKey(folder))
-            return;
-
-        final LogFileReplica replica = LogFileReplica.create(folder, getFileName(folder));
-
-        records.forEach(replica::append);
-        replicas.put(folder, replica);
-
-        if (logger.isTraceEnabled())
-            logger.trace("Created new file replica {}", replica);
-    }
-
     boolean verify()
     {
-        if (!readRecords())
+        assert records.isEmpty();
+        if (!replicas.readRecords(records))
         {
-            logger.error("Failed to read records for txn {} with {}", id, replicas());
+            logger.error("Failed to read records from {}", replicas);
             return false;
         }
 
-        Optional<LogRecord> firstInvalid = records.stream()
-                                                  .filter(LogFile::isInvalid)
-                                                  .findFirst();
+        records.forEach(LogFile::verifyRecord);
 
+        Optional<LogRecord> firstInvalid = records.stream().filter(LogRecord::isInvalidOrPartial).findFirst();
         if (!firstInvalid.isPresent())
             return true;
 
@@ -176,9 +140,10 @@ final class LogFile
             return false;
         }
 
+        records.stream().filter((r) -> r != failedOn).forEach(LogFile::verifyRecordWithCorruptedLastRecord);
         if (records.stream()
                    .filter((r) -> r != failedOn)
-                   .filter(LogFile::isInvalidWithCorruptedLastRecord)
+                   .filter(LogRecord::isInvalid)
                    .map(LogFile::logError)
                    .findFirst().isPresent())
         {
@@ -191,97 +156,18 @@ final class LogFile
         logger.warn(String.format("Last record of transaction %s is corrupt or incomplete [%s], " +
                                   "but all previous records match state on disk; continuing",
                                   id,
-                                  failedOn.error.orElse("")));
-        return true;
-    }
-
-    private boolean readRecords()
-    {
-        records.clear();
-
-        Map<File, List<String>> linesByReplica = replicas().stream()
-                                                           .map(LogFileReplica::file)
-                                                           .collect(Collectors.toMap(Function.<File>identity(), FileUtils::readLines));
-        int maxNumLines = linesByReplica.values().stream().map(List::size).reduce(0, Integer::max);
-        for (int i = 0; i < maxNumLines; i++)
-        {
-            String firstLine = null;
-            String error = null;
-            for (Map.Entry<File, List<String>> entry : linesByReplica.entrySet())
-            {
-                List<String> currentLines = entry.getValue();
-                if (i >= currentLines.size())
-                    continue;
-
-                String currentLine = currentLines.get(i);
-                if (firstLine == null)
-                {
-                    firstLine = currentLine;
-                    continue;
-                }
-
-                if (!firstLine.startsWith(currentLine))
-                { // not a prefix match
-                    logger.error("Mismatched line in file {}: got [{}] expected [{}], giving up",
-                                 entry.getKey().getName(),
-                                 currentLine,
-                                 firstLine);
-                    return false;
-                }
-
-                if (!firstLine.equals(currentLine))
-                {
-                    if (i == currentLines.size() - 1)
-                    { // last record, just set record as invalid and move on
-                        error = String.format("Mismatched last line in file %s: %s not the same as %s",
-                                              entry.getKey().getName(),
-                                              currentLine,
-                                              firstLine);
-                    }
-                    else
-                    {   // mismatched entry file has more lines, giving up
-                        logger.error("Mismatched line in file {}: got [{}] expected [{}], giving up",
-                                     entry.getKey().getName(),
-                                     currentLine,
-                                     firstLine);
-                        return false;
-                    }
-                }
-            }
-
-            LogRecord record = LogRecord.make(firstLine);
-            if (error != null)
-                record.setError(error);
-
-            if (records.contains(record))
-            { // duplicate records
-                logger.error("Found duplicate record {} for {}, giving up", record, record.fileName());
-                return false;
-            }
-
-            records.add(record);
-
-            if (record.isFinal() && i != (maxNumLines - 1))
-            { // too many final records
-                logger.error("Found too many lines for {}, giving up", record.fileName());
-                return false;
-            }
-        }
-
+                                  failedOn.error()));
         return true;
     }
 
     static LogRecord logError(LogRecord record)
     {
-        logger.error("{}", record.error);
+        logger.error("{}", record.error());
         return record;
     }
 
-    static boolean isInvalid(LogRecord record)
+    static void verifyRecord(LogRecord record)
     {
-        if (!record.isValid())
-            return true;
-
         if (record.checksum != record.computeChecksum())
         {
             record.setError(String.format("Invalid checksum for sstable [%s], record [%s]: [%d] should have been [%d]",
@@ -289,11 +175,11 @@ final class LogFile
                                           record,
                                           record.checksum,
                                           record.computeChecksum()));
-            return true;
+            return;
         }
 
         if (record.type != Type.REMOVE)
-            return false;
+            return;
 
         // Paranoid sanity checks: we create another record by looking at the files as they are
         // on disk right now and make sure the information still matches. We don't want to delete
@@ -301,25 +187,22 @@ final class LogFile
         // file that obsoleted the very same files. So we check the latest update time and make sure
         // it matches. Because we delete files from oldest to newest, the latest update time should
         // always match.
-        LogRecord onDiskRecord = record.withChangedFiles(record.getExistingFiles());
-        if (record.updateTime != onDiskRecord.updateTime && onDiskRecord.numFiles > 0)
+        record.status.onDiskRecord = record.withExistingFiles();
+        if (record.updateTime != record.status.onDiskRecord.updateTime && record.status.onDiskRecord.numFiles > 0)
         {
             record.setError(String.format("Unexpected files detected for sstable [%s], " +
                                           "record [%s]: last update time [%tT] should have been [%tT]",
                                           record.fileName(),
                                           record,
-                                          onDiskRecord.updateTime,
+                                          record.status.onDiskRecord.updateTime,
                                           record.updateTime));
-            return true;
-        }
 
-        return false;
+        }
     }
 
-    static boolean isInvalidWithCorruptedLastRecord(LogRecord record)
+    static void verifyRecordWithCorruptedLastRecord(LogRecord record)
     {
-        LogRecord onDiskRecord = record.withChangedFiles(record.getExistingFiles());
-        if (record.type == Type.REMOVE && onDiskRecord.numFiles < record.numFiles)
+        if (record.type == Type.REMOVE && record.status.onDiskRecord.numFiles < record.numFiles)
         { // if we found a corruption in the last record, then we continue only
           // if the number of files matches exactly for all previous records.
             record.setError(String.format("Incomplete fileset detected for sstable [%s], record [%s]: " +
@@ -327,12 +210,9 @@ final class LogFile
                                           "due to corruption of the final record.",
                                           record.fileName(),
                                           record.raw,
-                                          onDiskRecord.numFiles,
+                                          record.status.onDiskRecord.numFiles,
                                           record.numFiles));
-            return true;
         }
-
-        return false;
     }
 
     void commit()
@@ -352,7 +232,7 @@ final class LogFile
         LogRecord lastRecord = getLastRecord();
         return lastRecord != null &&
                lastRecord.type == type &&
-               !isInvalid(lastRecord);
+               lastRecord.isValid();
     }
 
     boolean committed()
@@ -381,7 +261,7 @@ final class LogFile
         assert type == Type.ADD || type == Type.REMOVE;
 
         File folder = table.descriptor.directory;
-        maybeCreateReplica(folder);
+        replicas.maybeCreateReplica(folder, getFileName(folder), records);
         return LogRecord.make(type, table);
     }
 
@@ -390,17 +270,7 @@ final class LogFile
         if (!records.add(record))
             return false;
 
-        // write the record to multiple files: if it is a final record then throw only if we fail to write it
-        // to all files, otherwise throw if we fail to write it to any file, see CASSANDRA-10421 for details
-        Throwable err = Throwables.perform(null, replicas().stream().map(s -> () -> s.append(record)));
-        if (err != null)
-        {
-            if (!record.isFinal() || err.getSuppressed().length == replicas().size() -1)
-                Throwables.maybeFail(err);
-
-            logger.error("Failed to add record {} to some replicas [{}]", record, replicas());
-        }
-
+        replicas.append(record);
         return true;
     }
 
@@ -420,7 +290,6 @@ final class LogFile
 
     void deleteRecords(Type type)
     {
-        assert !replicas.isEmpty() : "Expected at least one log file to exist";
         records.stream()
                .filter(type::matches)
                .forEach(LogFile::deleteRecord);
@@ -463,18 +332,30 @@ final class LogFile
 
     boolean exists()
     {
-        return !replicas.isEmpty() && replicas().stream().map(LogFileReplica::exists).reduce(Boolean::logicalAnd).get();
+        return replicas.exists();
     }
 
     void close()
     {
-        replicas().forEach(LogFileReplica::close);
+        replicas.close();
     }
 
     @Override
     public String toString()
     {
-        return id.toString();
+        return replicas.toString();
+    }
+
+    @VisibleForTesting
+    List<File> getFiles()
+    {
+        return replicas.getFiles();
+    }
+
+    @VisibleForTesting
+    List<String> getFilePaths()
+    {
+        return replicas.getFilePaths();
     }
 
     private String getFileName(File folder)
@@ -488,17 +369,5 @@ final class LogFile
                                            id.toString(),
                                            LogFile.EXT);
         return StringUtils.join(folder, File.separator, fileName);
-    }
-
-    @VisibleForTesting
-    List<File> getFiles()
-    {
-        return replicas().stream().map(LogFileReplica::file).collect(Collectors.toList());
-    }
-
-    @VisibleForTesting
-    List<String> getFilePaths()
-    {
-        return replicas().stream().map(LogFileReplica::file).map(File::getPath).collect(Collectors.toList());
     }
 }

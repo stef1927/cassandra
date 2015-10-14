@@ -25,32 +25,31 @@ import org.apache.cassandra.utils.CLibrary;
 
 /**
  * Because a column family may have sstables on different disks and disks can
- * be removed, we split a LogFile into segments and store each segment in the
- * same folder as the sstables that it managed.
+ * be removed, we duplicate log files into many replicas so as to have a file
+ * in each folder where sstables exist.
  *
- * This class is the abstraction for log file segments.
- *
- * Each segment contains the transaction records for the sstables located
- * in the same folder as well as the final commit or abort records.
+ * Each replica contains the exact same content but we do allow for final
+ * partial records in case we crashed after writing to one replica but
+ * before compliting the write to another replica.
  *
  * @see LogFile
  */
-final class LogFileReplica
+final class LogReplica
 {
     private final int folderDescriptor;
     private final File file;
 
-    static LogFileReplica create(File folder, String fileName)
+    static LogReplica create(File folder, String fileName)
     {
-        return new LogFileReplica(CLibrary.tryOpenDirectory(folder.getPath()), new File(fileName));
+        return new LogReplica(CLibrary.tryOpenDirectory(folder.getPath()), new File(fileName));
     }
 
-    static LogFileReplica open(File file)
+    static LogReplica open(File file)
     {
-        return new LogFileReplica(CLibrary.tryOpenDirectory(file.getParentFile().getPath()), file);
+        return new LogReplica(CLibrary.tryOpenDirectory(file.getParentFile().getPath()), file);
     }
 
-    LogFileReplica(int folderDescriptor, File file)
+    LogReplica(int folderDescriptor, File file)
     {
         this.folderDescriptor = folderDescriptor;
         this.file = file;
@@ -92,6 +91,6 @@ final class LogFileReplica
     @Override
     public String toString()
     {
-        return file.toString();
+        return String.format("[%s] ", file);
     }
 }
