@@ -18,7 +18,10 @@
 
 package org.apache.cassandra.db.lifecycle;
 
+import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
 
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.CLibrary;
@@ -36,23 +39,26 @@ import org.apache.cassandra.utils.CLibrary;
  */
 final class LogReplica
 {
-    private final int folderDescriptor;
+    private static final String LINE_SEPARATOR = System.getProperty("line.separator");
+
     private final File file;
+    private int folderDescriptor;
+    private BufferedWriter writer;
 
     static LogReplica create(File folder, String fileName)
     {
-        return new LogReplica(CLibrary.tryOpenDirectory(folder.getPath()), new File(fileName));
+        return new LogReplica(new File(fileName), CLibrary.tryOpenDirectory(folder.getPath()));
     }
 
     static LogReplica open(File file)
     {
-        return new LogReplica(CLibrary.tryOpenDirectory(file.getParentFile().getPath()), file);
+        return new LogReplica(file, CLibrary.tryOpenDirectory(file.getParentFile().getPath()));
     }
 
-    LogReplica(int folderDescriptor, File file)
+    LogReplica(File file, int folderDescriptor)
     {
-        this.folderDescriptor = folderDescriptor;
         this.file = file;
+        this.folderDescriptor = folderDescriptor;
     }
 
     File file()
@@ -62,8 +68,22 @@ final class LogReplica
 
     void append(LogRecord record)
     {
-        FileUtils.append(file, record.toString());
-        sync();
+        try
+        {
+            if (writer == null)
+            {
+                writer = new BufferedWriter(new FileWriter(file, true));
+                sync();
+            }
+
+            writer.append(record.toString());
+            writer.append(LINE_SEPARATOR);
+            writer.flush();
+        }
+        catch (IOException ex)
+        {
+            throw new RuntimeException(ex);
+        }
     }
 
     void sync()
@@ -74,7 +94,11 @@ final class LogReplica
 
     void delete()
     {
+        FileUtils.closeQuietly(writer);
+        writer = null;
+
         LogTransaction.delete(file);
+        sync();
     }
 
     boolean exists()
@@ -84,8 +108,14 @@ final class LogReplica
 
     void close()
     {
+        FileUtils.closeQuietly(writer);
+        writer = null;
+
         if (folderDescriptor >= 0)
+        {
             CLibrary.tryCloseFD(folderDescriptor);
+            folderDescriptor = -1;
+        }
     }
 
     @Override

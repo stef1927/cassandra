@@ -40,9 +40,16 @@ final class LogFile
     // cc_txn_opname_id.log (where cc is one of the sstable versions defined in BigVersion)
     static Pattern FILE_REGEX = Pattern.compile(String.format("^(.{2})_txn_(.*)_(.*)%s$", EXT));
 
+    // A set of physical files on disk, each file is an identical replica
     private final LogReplicaSet replicas = new LogReplicaSet();
-    private final Set<LogRecord> records = new LinkedHashSet<>();
+
+    // The transaction records, this set must be ORDER PRESERVING
+    private final LinkedHashSet<LogRecord> records = new LinkedHashSet<>();
+
+    // The type of the transaction
     private final OperationType type;
+
+    // The unique id of the transaction
     private final UUID id;
 
     static LogFile make(File logReplica)
@@ -85,7 +92,7 @@ final class LogFile
     {
         try
         {
-            deleteRecords(committed() ? Type.REMOVE : Type.ADD);
+            deleteFilesForRecordsOfType(committed() ? Type.REMOVE : Type.ADD);
 
             // we sync the parent file descriptors between contents and log deletion
             // to ensure there is a happens before edge between them
@@ -280,7 +287,7 @@ final class LogFile
         assert records.contains(record) : String.format("[%s] is not tracked by %s", record, id);
 
         records.remove(record);
-        deleteRecord(record);
+        deleteRecordFiles(record);
     }
 
     boolean contains(Type type, SSTable table)
@@ -288,15 +295,15 @@ final class LogFile
         return records.contains(makeRecord(type, table));
     }
 
-    void deleteRecords(Type type)
+    void deleteFilesForRecordsOfType(Type type)
     {
         records.stream()
                .filter(type::matches)
-               .forEach(LogFile::deleteRecord);
+               .forEach(LogFile::deleteRecordFiles);
         records.clear();
     }
 
-    private static void deleteRecord(LogRecord record)
+    private static void deleteRecordFiles(LogRecord record)
     {
         List<File> files = record.getExistingFiles();
 
