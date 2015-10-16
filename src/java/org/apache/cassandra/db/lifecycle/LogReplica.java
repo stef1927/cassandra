@@ -18,10 +18,7 @@
 
 package org.apache.cassandra.db.lifecycle;
 
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
 
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.CLibrary;
@@ -39,11 +36,8 @@ import org.apache.cassandra.utils.CLibrary;
  */
 final class LogReplica
 {
-    private static final String LINE_SEPARATOR = System.getProperty("line.separator");
-
     private final File file;
     private int folderDescriptor;
-    private BufferedWriter writer;
 
     static LogReplica create(File folder, String fileName)
     {
@@ -68,26 +62,16 @@ final class LogReplica
 
     void append(LogRecord record)
     {
-        try
-        {
-            if (writer == null)
-                writer = new BufferedWriter(new FileWriter(file, true));
+        boolean existed = exists();
+        FileUtils.appendAndSync(file, record.toString());
 
-            writer.append(record.toString());
-            writer.append(LINE_SEPARATOR);
-            writer.flush();
-
-            // make sure any changes to the physical files are recoverable
-            // in case of a power-cut
-            sync();
-        }
-        catch (IOException ex)
-        {
-            throw new RuntimeException(ex);
-        }
+        // If the file did not exist before appending the first
+        // line, then sync the folder as well since now it must exist
+        if (!existed)
+            syncFolder();
     }
 
-    void sync()
+    void syncFolder()
     {
         if (folderDescriptor >= 0)
             CLibrary.trySync(folderDescriptor);
@@ -95,11 +79,8 @@ final class LogReplica
 
     void delete()
     {
-        FileUtils.closeQuietly(writer);
-        writer = null;
-
         LogTransaction.delete(file);
-        sync();
+        syncFolder();
     }
 
     boolean exists()
@@ -109,9 +90,6 @@ final class LogReplica
 
     void close()
     {
-        FileUtils.closeQuietly(writer);
-        writer = null;
-
         if (folderDescriptor >= 0)
         {
             CLibrary.tryCloseFD(folderDescriptor);

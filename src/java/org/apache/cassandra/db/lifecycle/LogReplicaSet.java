@@ -81,9 +81,9 @@ public class LogReplicaSet
             logger.trace("Created new file replica {}", replica);
     }
 
-    Throwable sync(Throwable accumulate)
+    Throwable syncFolder(Throwable accumulate)
     {
-        return Throwables.perform(accumulate, replicas().stream().map(s -> s::sync));
+        return Throwables.perform(accumulate, replicas().stream().map(s -> s::syncFolder));
     }
 
     Throwable delete(Throwable accumulate)

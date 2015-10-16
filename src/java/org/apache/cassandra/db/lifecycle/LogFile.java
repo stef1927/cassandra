@@ -73,9 +73,9 @@ final class LogFile
         return new LogFile(operationType, id, logReplicas);
     }
 
-    Throwable sync(Throwable accumulate)
+    Throwable syncFolder(Throwable accumulate)
     {
-        return replicas.sync(accumulate);
+        return replicas.syncFolder(accumulate);
     }
 
     OperationType type()
@@ -94,9 +94,9 @@ final class LogFile
         {
             deleteFilesForRecordsOfType(committed() ? Type.REMOVE : Type.ADD);
 
-            // we sync the parent file descriptors between contents and log deletion
+            // we sync the parent folders between contents and log deletion
             // to ensure there is a happens before edge between them
-            Throwables.maybeFail(sync(accumulate));
+            Throwables.maybeFail(syncFolder(accumulate));
 
             accumulate = replicas.delete(accumulate);
         }
