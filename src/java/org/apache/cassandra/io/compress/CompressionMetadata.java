@@ -412,6 +412,7 @@ public class CompressionMetadata
                 for (int i = 0 ; i < count ; i++)
                     out.writeLong(offsets.getLong(i * 8L));
 
+                out.flush();
                 fos.getFD().sync();
             }
             finally
