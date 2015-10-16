@@ -71,14 +71,15 @@ final class LogReplica
         try
         {
             if (writer == null)
-            {
                 writer = new BufferedWriter(new FileWriter(file, true));
-                sync();
-            }
 
             writer.append(record.toString());
             writer.append(LINE_SEPARATOR);
             writer.flush();
+
+            // make sure any changes to the physical files are recoverable
+            // in case of a power-cut
+            sync();
         }
         catch (IOException ex)
         {

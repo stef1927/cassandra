@@ -424,6 +424,9 @@ public class LogTransactionTest extends AbstractTransactionalTest
 
         Assert.assertEquals(tmpFiles, LogAwareFileLister.getTemporaryFiles(sstableNew.descriptor.directory));
 
+        // must close file to keep windows happy during unit tests
+        log.txnFile().close();
+
         // normally called at startup
         LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
 
@@ -463,6 +466,9 @@ public class LogTransactionTest extends AbstractTransactionalTest
         sstableOld.selfRef().release();
 
         Assert.assertEquals(tmpFiles, LogAwareFileLister.getTemporaryFiles(sstableOld.descriptor.directory));
+
+        // must close file to keep windows happy during unit tests
+        log.txnFile().close();
 
         // normally called at startup
         LogTransaction.removeUnfinishedLeftovers(cfs.metadata);
@@ -518,6 +524,9 @@ public class LogTransactionTest extends AbstractTransactionalTest
         Assert.assertEquals(sstables[2].getAllFilePaths().stream().map(File::new).collect(Collectors.toSet()),
                             LogAwareFileLister.getTemporaryFiles(dataFolder2));
 
+        // must close file to keep windows happy during unit tests
+        log.txnFile().close();
+
         // normally called at startup
         LogTransaction.removeUnfinishedLeftovers(Arrays.asList(dataFolder1, dataFolder2));
 
@@ -562,6 +571,9 @@ public class LogTransactionTest extends AbstractTransactionalTest
         log.txnFile().abort();
 
         Arrays.stream(sstables).forEach(s -> s.selfRef().release());
+
+        // must close file to keep windows happy during unit tests
+        log.txnFile().close();
 
         // test listing
         Assert.assertEquals(sstables[1].getAllFilePaths().stream().map(File::new).collect(Collectors.toSet()),
@@ -732,6 +744,9 @@ public class LogTransactionTest extends AbstractTransactionalTest
 
         // fake some error condition on the txn logs
         modifier.accept(log);
+
+        // must close file to keep windows happy during unit tests
+        log.txnFile().close();
 
         Arrays.stream(sstables).forEach(s -> s.selfRef().release());
 
@@ -953,6 +968,9 @@ public class LogTransactionTest extends AbstractTransactionalTest
         //This should filter as in progress since the last record is corrupt
         assertFiles(newFiles, LogAwareFileLister.getTemporaryFiles(dataFolder));
         assertFiles(oldFiles, LogAwareFileLister.getFinalFiles(dataFolder));
+
+        // must close file to keep windows happy during unit tests
+        log.txnFile().close();
 
         if (isRecoverable)
         { // the corruption is recoverable but the commit record is unreadable so the transaction is still in progress
