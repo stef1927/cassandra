@@ -50,12 +50,14 @@ try:
 except ImportError:
     from io import StringIO
 
-from collections import deque
+from collections import deque, OrderedDict
 from contextlib import contextmanager
 from functools import partial
 from glob import glob
 from multiprocessing import Pipe, Process, cpu_count
+from random import randrange
 from select import select
+from threading import Lock
 from uuid import UUID
 
 description = "CQL Shell for Apache Cassandra"
@@ -117,7 +119,7 @@ except ImportError, e:
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, PagedResult
 from cassandra.metadata import protect_name, protect_names, protect_value
-from cassandra.policies import WhiteListRoundRobinPolicy
+from cassandra.policies import RetryPolicy, WhiteListRoundRobinPolicy, TokenAwarePolicy
 from cassandra.protocol import QueryMessage, ResultMessage
 from cassandra.query import SimpleStatement, ordered_dict_factory, tuple_factory
 
@@ -418,7 +420,8 @@ def complete_copy_column_names(ctxt, cqlsh):
     return set(colnames[1:]) - set(existcols)
 
 
-COPY_OPTIONS = ('DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'ENCODING', 'TIMEFORMAT', 'NULL')
+COPY_OPTIONS = ['DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'NULL', 'ENCODING',
+                'TIME_FORMAT', 'JOBS', 'PAGESIZE', 'MAXATTEMPTS']
 
 
 @cqlsh_syntax_completer('copyOption', 'optnames')
@@ -427,8 +430,7 @@ def complete_copy_options(ctxt, cqlsh):
     direction = ctxt.get_binding('dir').upper()
     opts = set(COPY_OPTIONS) - set(optnames)
     if direction == 'FROM':
-        opts -= ('ENCODING',)
-        opts -= ('TIMEFORMAT',)
+        opts -= set(['ENCODING', 'TIME_FORMAT', 'JOBS', 'PAGESIZE', 'MAXATTEMPTS'])
     return opts
 
 
@@ -1512,6 +1514,8 @@ class Shell(cmd.Cmd):
           ENCODING='utf8'         - encoding for CSV output (COPY TO only)
           TIMEFORMAT=             - timestamp strftime format (COPY TO only)
             '%Y-%m-%d %H:%M:%S%z'   defaults to time_format value in cqlshrc
+          PAGESIZE='1000'         - the page size for fetching results (COPY TO only)
+          MAXATTEMPTS='5'         - the maximum number of attempts for errors (COPY TO only)
 
         When entering CSV data on STDIN, you can use the sequence "\."
         on a line by itself to end the data input.
@@ -2151,6 +2155,10 @@ class Shell(cmd.Cmd):
             text = '%s:%d:%s' % (self.stdin.name, self.lineno, text)
         self.writeresult(text, color, newline=newline, out=sys.stderr)
 
+    def printmsg(self, text):
+        if self.debug:
+            sys.stderr.write(text + os.linesep)
+
 
 def parse_import_export_options(shell, opts):
     """
@@ -2175,6 +2183,8 @@ def parse_import_export_options(shell, opts):
     csv_options['header'] = bool(opts.pop('header', '').lower() == 'true')
     csv_options['encoding'] = opts.pop('encoding', 'utf8')
     csv_options['jobs'] = int(opts.pop('jobs', 12))
+    csv_options['pagesize'] = int(opts.pop('pagesize', 1000))
+    csv_options['maxattempts'] = int(opts.pop('maxattempts', 5))
     csv_options['dtformats'] = opts.pop('timeformat', shell.display_time_format)
     csv_options['float_precision'] = shell.display_float_precision
 
@@ -2216,8 +2226,6 @@ class ExportTask(object):
         """
         shell = self.shell
         fname = self.fname
-        ks = self.ks
-        cf = self.cf
 
         if fname is None:
             do_close = False
@@ -2238,14 +2246,17 @@ class ExportTask(object):
         num_processes = get_import_export_processes(cap=min(16, len(ranges)))
 
         pipes = []
+        processes = []
         for i in xrange(num_processes):
             parent_conn, child_conn = Pipe()
             pipes.append(parent_conn)
+
             process = ExportProcess(self, child_conn)
             process.start()
+            processes.append(process)
 
         try:
-            return self.check_processes(csvdest, ranges, pipes)
+            return self.check_processes(csvdest, ranges, pipes, processes)
         finally:
             for pipe in pipes:
                 pipe.send((None, None))
@@ -2267,17 +2278,21 @@ class ExportTask(object):
         """
         shell = self.shell
         hostname = shell.hostname
+        ranges = OrderedDict()
+
+        def make_range(hosts):
+            return {'hosts': tuple(hosts), 'attempts': 0, 'rows': 0}
 
         min_token = self.get_min_token()
         if shell.conn.metadata.token_map is None or min_token is None:
-            return deque([((None, None), tuple([hostname]))])
+            ranges[(None, None)] = make_range([hostname])
+            return ranges
 
-        ranges = deque([])
         local_dc = shell.conn.metadata.get_host(hostname).datacenter
-
         ring = shell.get_ring(self.ks).items()
         ring.sort()
 
+        previous_previous = None
         previous = None
         for token, replicas in ring:
             if previous is None and token.value == min_token:
@@ -2289,16 +2304,17 @@ class ExportTask(object):
                     hosts.append(host.address)
             if len(hosts) == 0:
                 hosts.append(hostname)  # fallback to default host if no replicas in current dc
-            ranges.append(((previous, token.value), tuple(hosts)))
+            ranges[(previous, token.value)] = make_range(hosts)
+            previous_previous = previous
             previous = token.value
 
-        #  If the ring is empty (previous is None) we get the entire ring from the
+        #  If the ring is empty we get the entire ring from the
         #  host we are currently connected to, otherwise for the last ring interval
         #  we query the same replicas that hold the last token in the ring
         if len(ranges) == 0:
-            ranges.append(((None, None), tuple([hostname])))
+            ranges[(None, None)] = make_range([hostname])
         else:
-            ranges.append(((previous, None), ranges[-1][1]))
+            ranges[(previous, None)] = ranges[(previous_previous, previous)]
 
         return ranges
 
@@ -2318,26 +2334,29 @@ class ExportTask(object):
         else:
             return None
 
-    def send_initial_work(self, ranges, pipes):
+    def send_initial_work(self, ranges, pending_ranges, pipes):
         """
         We send up to the maximum number of parallel jobs to each pipe.
         """
-        num_jobs_per_process = len(ranges) / len(pipes)
+        num_jobs_per_process = len(pending_ranges) / len(pipes)
         num_parallel_jobs = min(self.csv_options['jobs'], num_jobs_per_process)
         for _ in xrange(num_parallel_jobs):
             for pipe in pipes:
-                if not self.send_work(ranges, pipe):
+                if not self.send_work(ranges, pending_ranges, pipe):
                     return
 
-    def send_work(self, ranges, pipe):
+    def send_work(self, ranges, pending_ranges, pipe):
         """
         We send to the pipe a range by removing it from the ranges.
         """
-        if len(ranges) > 0:
-            pipe.send(ranges.popleft())
-        return len(ranges) > 0
+        if len(pending_ranges) > 0:
+            token_range = pending_ranges.popleft()
+            pipe.send((token_range, ranges[token_range]['hosts']))
+            ranges[token_range]['attempts'] += 1
 
-    def check_processes(self, csvdest, ranges, pipes):
+        return len(pending_ranges) > 0
+
+    def check_processes(self, csvdest, ranges, pipes, processes):
         """
         Here we monitor all child processes by collecting their results
         or any errors. As soon as a process completes a job we send some more,
@@ -2349,37 +2368,101 @@ class ExportTask(object):
         """
         shell = self.shell
         meter = RateMeter(10000)
-        total_jobs = len(ranges)
+        pending_ranges = deque(ranges.keys())
+        total_jobs = len(pending_ranges)
+        max_attempts = self.csv_options['maxattempts']
 
-        self.send_initial_work(ranges, pipes)
+        self.send_initial_work(ranges, pending_ranges, pipes)
 
-        count = 0
-        while count < total_jobs and len(pipes) > 0:
-            readable, _, _ = select(pipes, [], [])
+        succeeded = 0
+        failed = 0
+        while (failed + succeeded) < total_jobs and len(processes) > 0:
+            readable, _, _ = select(pipes, [], [], 1.0)
 
             for pipe in readable:
                 try:
                     token_range, result = pipe.recv()
-                    if token_range is None and result is None:
-                        count += 1  # a job has finished
-                        self.send_work(ranges, pipe)
+                    if token_range is None and result is None:  # a job has finished
+                        succeeded += 1
+                        self.send_work(ranges, pending_ranges, pipe)
                     elif isinstance(result, Exception):  # an error occurred
-                        shell.printerr('Error exporting from token range {}: {}'.format(token_range, result))
-                        if token_range is None:
-                            pipes.remove(pipe)
+                        if token_range is None:  # the entire process failed
+                            shell.printerr('Error from worker process: {}'.format(result))
+                        else:   # only this token_range failed, retry up to max_attempts if no rows received yet,
+                                # if rows are receive we risk duplicating data, there is a back-off policy in place
+                                # in the worker process as well, see ExpBackoffRetryPolicy
+                            if ranges[token_range]['attempts'] < max_attempts and ranges[token_range]['rows'] == 0:
+                                shell.printerr('Error for {}: {} (will try again later attempt {} of {})'
+                                               .format(token_range, result, ranges[token_range]['attempts'],
+                                                       max_attempts))
+                                pending_ranges.append(token_range)
+                            else:
+                                shell.printerr('Error for {}: {} (permanently given up after {} rows and {} attempts)'
+                                               .format(token_range, result, ranges[token_range]['rows'],
+                                                       ranges[token_range]['attempts']))
+                                failed += 1
+                            self.send_work(ranges, pending_ranges, pipe)
                     else:  # partial result received
                         data, num = result
                         csvdest.write(data)
                         meter.increment(n=num)
+                        ranges[token_range]['rows'] += num
                 except EOFError:
-                    shell.printerr('Got EOF in child pipe')
-                    pipes.remove(pipe)
+                    shell.printerr('Got EOF in child process')
 
-        if count < total_jobs:
+            for process in processes:
+                if not process.is_alive():
+                    shell.printerr('Child process {} died with exit code {}'.format(process.pid, process.exitcode))
+                    processes.remove(process)
+
+        shell.printmsg("Finished {} jobs out of {}, {} succeeded and {} failed"
+                       .format(succeeded + failed, total_jobs, succeeded, failed))
+        if succeeded < total_jobs:
             shell.printerr('Exported {} ranges out of {} total ranges, some records might be missing'
-                           .format(count, total_jobs))
+                           .format(succeeded, total_jobs))
 
         return meter.get_total_records()
+
+
+class ExpBackoffRetryPolicy(RetryPolicy):
+    """
+    A retry policy with exponential back-off for read timeouts,
+    see ExportProcess.
+    """
+    def __init__(self, export_process):
+        RetryPolicy.__init__(self)
+        self.max_attempts = export_process.csv_options['maxattempts']
+        self.printmsg = lambda txt: export_process.printmsg(txt)
+
+    def on_read_timeout(self, query, consistency, required_responses,
+                        received_responses, data_retrieved, retry_num):
+        delay = self.backoff(retry_num)
+        if delay > 0:
+            self.printmsg("Timeout received, retrying after {} seconds".format(delay))
+            time.sleep(delay)
+            return self.RETRY, consistency
+        elif delay == 0:
+            self.printmsg("Timeout received, retrying immediately")
+            return self.RETRY, consistency
+        else:
+            self.printmsg("Timeout received, giving up after {} attempts".format(retry_num + 1))
+            return self.RETHROW, None
+
+    def backoff(self, retry_num):
+        """
+        Perform exponential back-off up to a maximum number of times, where
+        this maximum is per query.
+        To back-off we should wait a random number of seconds
+        between 0 and 2^c - 1, where c is the number of total failures.
+        randrange() excludes the last value, so we drop the -1.
+
+        :return : the number of seconds to wait for, -1 if we should not retry
+        """
+        if retry_num >= self.max_attempts:
+            return -1
+
+        delay = randrange(0, pow(2, retry_num + 1))
+        return delay
 
 
 class ExportSession(object):
@@ -2388,12 +2471,31 @@ class ExportSession(object):
     of jobs that this connection is processing. It wraps the methods
     for executing a query asynchronously and for shutting down the
     connection to the cluster.
+
+    We set the timeout to 10 seconds for each 1000 entries in the request page size,
+    or 10 seconds total if the page size is smaller than 1000.
     """
-    def __init__(self, cluster, ks):
+    def __init__(self, cluster, export_process):
+        session = cluster.connect(export_process.ks)
+        session.row_factory = tuple_factory
+        session.default_fetch_size = export_process.csv_options['pagesize']
+        session.default_timeout = max(10, 10 * (session.default_fetch_size / 1000))
+
+        export_process.printmsg("Created connection to {} with page size {} and timeout {} seconds per page"
+                                .format(session.hosts, session.default_fetch_size, session.default_timeout))
+
         self.cluster = cluster
-        self.session = cluster.connect(ks)
-        self.session.row_factory = tuple_factory
+        self.session = session
         self.jobs = 1
+        self.lock = Lock()
+
+    def add_job(self):
+        with self.lock:
+            self.jobs += 1
+
+    def complete_job(self):
+        with self.lock:
+            self.jobs -= 1
 
     def execute_async(self, query):
         return self.session.execute_async(query)
@@ -2418,6 +2520,7 @@ class ExportProcess(Process):
         self.dialect_options = parent.dialect_options
         self.csv_options = parent.csv_options
         self.hosts_to_sessions = dict()
+        self.printmsg = lambda txt: self.shell.printmsg(txt)
 
     def run(self):
         try:
@@ -2443,12 +2546,19 @@ class ExportProcess(Process):
 
                 self.start_job(token_range, hosts)
             except EOFError:
-                self.shell.printerr("Parent has closed the pipe, aborting")
+                self.report_error("Parent has closed the pipe, aborting")
                 break
             except:
-                err = sys.exc_info()[0]
-                self.pipe.send((None, Exception('Unexpected exception: {}'.format(err))))
+                self.report_error(sys.exc_info()[0])
                 break
+
+    def report_error(self, err, token_range=None):
+        if isinstance(err, Exception):
+            msg = "{} - {}".format(err.__class__.__name__, err)
+        else:
+            msg = str(err)
+        self.printmsg(msg)
+        self.pipe.send((token_range, Exception(msg)))
 
     def start_job(self, token_range, hosts):
         """
@@ -2479,16 +2589,17 @@ class ExportProcess(Process):
                 protocol_version=DEFAULT_PROTOCOL_VERSION,
                 auth_provider=shell.auth_provider,
                 ssl_options=sslhandling.ssl_settings(host, CONFIG_FILE) if shell.ssl else None,
-                load_balancing_policy=WhiteListRoundRobinPolicy(hosts),
+                load_balancing_policy=TokenAwarePolicy(WhiteListRoundRobinPolicy(hosts)),
+                default_retry_policy=ExpBackoffRetryPolicy(self),
                 compression=None)
 
-            session = ExportSession(new_cluster, self.ks)
+            session = ExportSession(new_cluster, self)
             self.hosts_to_sessions[host] = session
             return session
         else:
             host = min(hosts, key=lambda h: self.hosts_to_sessions[h].jobs)
             session = self.hosts_to_sessions[host]
-            session.jobs += 1
+            session.add_job()
             return session
 
     def attach_callbacks(self, token_range, future, session):
@@ -2499,12 +2610,11 @@ class ExportProcess(Process):
             else:
                 self.write_rows_to_csv(token_range, rows)
                 self.pipe.send((None, None))
-                session.jobs -= 1
+                session.complete_job()
 
         def err_callback(err):
-            self.pipe.send((token_range, Exception(err.message)))
-            self.pipe.send((None, None))
-            session.jobs -= 1
+            self.report_error(err, token_range)
+            session.complete_job()
 
         future.add_callbacks(callback=result_callback, errback=err_callback)
 
@@ -2527,9 +2637,11 @@ class ExportProcess(Process):
             float_precision=csv_options['float_precision']).strval
 
     def close(self):
+        self.shell.printmsg("Export process terminating...")
         self.pipe.close()
         for session in self.hosts_to_sessions.values():
             session.shutdown()
+        self.shell.printmsg("Export process terminated")
 
     def prepare_export_query(self, token_range):
         """
