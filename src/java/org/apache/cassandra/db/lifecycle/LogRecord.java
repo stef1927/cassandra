@@ -240,7 +240,9 @@ final class LogRecord
     public static List<File> getExistingFiles(String absoluteFilePath)
     {
         Path path = Paths.get(absoluteFilePath);
-        return Arrays.asList(path.getParent().toFile().listFiles((dir, name) -> name.startsWith(path.getFileName().toString())));
+        File[] files = path.getParent().toFile().listFiles((dir, name) -> name.startsWith(path.getFileName().toString()));
+        // files may be null if the directory does not exist yet, e.g. when tracking new files
+        return files == null ? Collections.emptyList() : Arrays.asList(files);
     }
 
     public boolean isFinal()

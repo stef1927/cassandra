@@ -240,7 +240,13 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
             if (logger.isTraceEnabled())
                 logger.trace("Removing files for transaction {}", name());
 
-            assert data.completed() : "Expected a completed transaction: " + data;
+            if (!data.completed())
+            { // this happens if we forget to close a txn and the garbage collector closes it for us
+                logger.error("{} was not completed, trying to abort it now", data);
+                Throwable err = Throwables.perform((Throwable)null, data::abort);
+                if (err != null)
+                    logger.error("Failed to abort {}", data, err);
+            }
 
             Throwable err = data.removeUnfinishedLeftovers(null);
 
