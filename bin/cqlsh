@@ -45,12 +45,8 @@ import time
 import traceback
 import warnings
 
-try:
-    from cStringIO import StringIO
-except ImportError:
-    from io import StringIO
-
-from collections import deque, OrderedDict
+from StringIO import StringIO
+from collections import deque
 from contextlib import contextmanager
 from functools import partial
 from glob import glob
@@ -2278,7 +2274,7 @@ class ExportTask(object):
         """
         shell = self.shell
         hostname = shell.hostname
-        ranges = OrderedDict()
+        ranges = dict()
 
         def make_range(hosts):
             return {'hosts': tuple(hosts), 'attempts': 0, 'rows': 0}
@@ -2387,19 +2383,18 @@ class ExportTask(object):
                         self.send_work(ranges, pending_ranges, pipe)
                     elif isinstance(result, Exception):  # an error occurred
                         if token_range is None:  # the entire process failed
-                            shell.printerr('Error from worker process: {}'.format(result))
+                            shell.printerr('Error from worker process: %s' % (result))
                         else:   # only this token_range failed, retry up to max_attempts if no rows received yet,
                                 # if rows are receive we risk duplicating data, there is a back-off policy in place
                                 # in the worker process as well, see ExpBackoffRetryPolicy
                             if ranges[token_range]['attempts'] < max_attempts and ranges[token_range]['rows'] == 0:
-                                shell.printerr('Error for {}: {} (will try again later attempt {} of {})'
-                                               .format(token_range, result, ranges[token_range]['attempts'],
-                                                       max_attempts))
+                                shell.printerr('Error for %s: %s (will try again later attempt %d of %d)'
+                                               % (token_range, result, ranges[token_range]['attempts'], max_attempts))
                                 pending_ranges.append(token_range)
                             else:
-                                shell.printerr('Error for {}: {} (permanently given up after {} rows and {} attempts)'
-                                               .format(token_range, result, ranges[token_range]['rows'],
-                                                       ranges[token_range]['attempts']))
+                                shell.printerr('Error for %s: %s (permanently given up after %d rows and %d attempts)'
+                                               % (token_range, result, ranges[token_range]['rows'],
+                                                  ranges[token_range]['attempts']))
                                 failed += 1
                             self.send_work(ranges, pending_ranges, pipe)
                     else:  # partial result received
@@ -2412,14 +2407,14 @@ class ExportTask(object):
 
             for process in processes:
                 if not process.is_alive():
-                    shell.printerr('Child process {} died with exit code {}'.format(process.pid, process.exitcode))
+                    shell.printerr('Child process %d died with exit code %d' % (process.pid, process.exitcode))
                     processes.remove(process)
 
-        shell.printmsg("Finished {} jobs out of {}, {} succeeded and {} failed"
-                       .format(succeeded + failed, total_jobs, succeeded, failed))
+        shell.printmsg("Finished %d jobs out of %d, %d succeeded and %d failed"
+                       % (succeeded + failed, total_jobs, succeeded, failed))
         if succeeded < total_jobs:
-            shell.printerr('Exported {} ranges out of {} total ranges, some records might be missing'
-                           .format(succeeded, total_jobs))
+            shell.printerr('Exported %d ranges out of %d total ranges, some records might be missing'
+                           % (succeeded, total_jobs))
 
         return meter.get_total_records()
 
@@ -2438,14 +2433,14 @@ class ExpBackoffRetryPolicy(RetryPolicy):
                         received_responses, data_retrieved, retry_num):
         delay = self.backoff(retry_num)
         if delay > 0:
-            self.printmsg("Timeout received, retrying after {} seconds".format(delay))
+            self.printmsg("Timeout received, retrying after %d seconds" % (delay))
             time.sleep(delay)
             return self.RETRY, consistency
         elif delay == 0:
             self.printmsg("Timeout received, retrying immediately")
             return self.RETRY, consistency
         else:
-            self.printmsg("Timeout received, giving up after {} attempts".format(retry_num + 1))
+            self.printmsg("Timeout received, giving up after %d attempts" % (retry_num + 1))
             return self.RETHROW, None
 
     def backoff(self, retry_num):
@@ -2481,8 +2476,8 @@ class ExportSession(object):
         session.default_fetch_size = export_process.csv_options['pagesize']
         session.default_timeout = max(10, 10 * (session.default_fetch_size / 1000))
 
-        export_process.printmsg("Created connection to {} with page size {} and timeout {} seconds per page"
-                                .format(session.hosts, session.default_fetch_size, session.default_timeout))
+        export_process.printmsg("Created connection to %s with page size %d and timeout %d seconds per page"
+                                % (session.hosts, session.default_fetch_size, session.default_timeout))
 
         self.cluster = cluster
         self.session = session
@@ -2554,7 +2549,7 @@ class ExportProcess(Process):
 
     def report_error(self, err, token_range=None):
         if isinstance(err, Exception):
-            msg = "{} - {}".format(err.__class__.__name__, err)
+            msg = "%s - %s" % (err.__class__.__name__, err)
         else:
             msg = str(err)
         self.printmsg(msg)
@@ -2650,15 +2645,15 @@ class ExportProcess(Process):
         pk_cols = ", ".join(protect_names(col.name for col in self.table_meta.partition_key))
         columnlist = ', '.join(protect_names(self.columns))
         start_token, end_token = token_range
-        query = 'SELECT {} FROM {}.{}'.format(columnlist, protect_name(self.ks), protect_name(self.cf))
+        query = 'SELECT %s FROM %s.%s' % (columnlist, protect_name(self.ks), protect_name(self.cf))
         if start_token is not None or end_token is not None:
             query += ' WHERE'
         if start_token is not None:
-            query += ' token({}) > {}'.format(pk_cols, start_token)
+            query += ' token(%s) > %s' % (pk_cols, start_token)
         if start_token is not None and end_token is not None:
             query += ' AND'
         if end_token is not None:
-            query += ' token({}) <= {}'.format(pk_cols, end_token)
+            query += ' token(%s) <= %s' % (pk_cols, end_token)
         return query
 
 
@@ -2698,7 +2693,7 @@ class RateMeter(object):
             return (self.current_rate + new_rate) / 2.0
 
     def log(self):
-        output = 'Processed {} rows; Written: {} rows/s\r'.format(self.total_records, self.current_rate)
+        output = 'Processed %d rows; Written: %f rows/s\r' % (self.total_records, self.current_rate,)
         sys.stdout.write(output)
         sys.stdout.flush()
 
