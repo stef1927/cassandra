@@ -127,9 +127,9 @@ if os.path.isdir(cqlshlibdir):
 
 from cqlshlib import cql3handling, cqlhandling, pylexotron, sslhandling
 from cqlshlib.displaying import (ANSI_RESET, BLUE, COLUMN_NAME_COLORS, CYAN,
-                                 RED, FormattedValue, colorme)
-from cqlshlib.formatting import (format_by_type, format_value_utype,
-                                 formatter_for)
+                                 RED, NO_COLOR_MAP, FormattedValue, colorme)
+from cqlshlib.formatting import (format_by_type, format_value_default, format_value_utype,
+                                 EMPTY, formatter_for, get_formatter)
 from cqlshlib.tracing import print_trace, print_trace_session
 from cqlshlib.util import get_file_encoding_bomsize, trim_if_present
 
@@ -2513,9 +2513,16 @@ class ExportProcess(Process):
         self.table_meta = parent.shell.get_table_meta(parent.ks, parent.cf)
         self.columns = parent.columns
         self.dialect_options = parent.dialect_options
-        self.csv_options = parent.csv_options
         self.hosts_to_sessions = dict()
         self.printmsg = lambda txt: self.shell.printmsg(txt)
+
+        csv_options = parent.csv_options
+        self.encoding = csv_options['encoding'],
+        self.time_format = csv_options['dtformats'],
+        self.float_precision = csv_options['float_precision'],
+        self.nullval = csv_options['nullval'],
+        self.csv_options = csv_options
+        self.formatters = None
 
     def run(self):
         try:
@@ -2586,7 +2593,8 @@ class ExportProcess(Process):
                 ssl_options=sslhandling.ssl_settings(host, CONFIG_FILE) if shell.ssl else None,
                 load_balancing_policy=TokenAwarePolicy(WhiteListRoundRobinPolicy(hosts)),
                 default_retry_policy=ExpBackoffRetryPolicy(self),
-                compression=None)
+                compression=None,
+                executor_threads=max(2, self.csv_options['jobs'] / 2))
 
             session = ExportSession(new_cluster, self)
             self.hosts_to_sessions[host] = session
@@ -2616,20 +2624,25 @@ class ExportProcess(Process):
     def write_rows_to_csv(self, token_range, rows):
         output = StringIO()
         writer = csv.writer(output, **self.dialect_options)
+
+        if not self.formatters:
+            self.formatters = [get_formatter(type(cval)) for cval in rows[0]]
+
         for row in rows:
-            writer.writerow(map(self.fmt, row))
+            writer.writerow(map(self.format_value, self.formatters, row))
+
         data = (output.getvalue(), len(rows))
         self.pipe.send((token_range, data))
         output.close()
 
-    def fmt(self, v):
-        csv_options = self.csv_options
-        return format_value(
-            v,
-            output_encoding=csv_options['encoding'],
-            nullval=csv_options['nullval'],
-            time_format=csv_options['dtformats'],
-            float_precision=csv_options['float_precision']).strval
+    def format_value(self, formatter, val):
+        if val == EMPTY:
+            return format_value_default('', colormap=NO_COLOR_MAP, encoding=self.encoding,
+                                        time_format=self.time_format, float_precision=self.float_precision,
+                                        nullval=self.nullval, quote=True)
+
+        return formatter(val, colormap=NO_COLOR_MAP, encoding=self.encoding, time_format=self.time_format,
+                         float_precision=self.float_precision, nullval=self.nullval, quote=True)
 
     def close(self):
         self.shell.printmsg("Export process terminating...")

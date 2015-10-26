@@ -28,6 +28,8 @@ ANSI_RESET = '\033[0m'
 
 
 def colorme(bval, colormap, colorkey):
+    if colormap is NO_COLOR_MAP:
+        return bval
     if colormap is None:
         colormap = DEFAULT_VALUE_COLORS
     return FormattedValue(bval, colormap[colorkey] + bval + colormap['reset'])
@@ -112,3 +114,5 @@ COLUMN_NAME_COLORS = defaultdict(lambda: MAGENTA,
                                  blob=DARK_MAGENTA,
                                  reset=ANSI_RESET,
                                  )
+
+NO_COLOR_MAP = dict()

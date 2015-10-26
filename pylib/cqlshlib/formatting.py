@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import binascii
 import sys
 import re
 import calendar
@@ -111,6 +112,10 @@ def format_value(type, val, **kwargs):
     return formatter(val, **kwargs)
 
 
+def get_formatter(type):
+    return _formatters.get(type.__name__, format_value_default)
+
+
 def formatter_for(typname):
     def registrator(f):
         _formatters[typname] = f
@@ -120,7 +125,7 @@ def formatter_for(typname):
 
 @formatter_for('bytearray')
 def format_value_blob(val, colormap, **_):
-    bval = '0x' + ''.join('%02x' % c for c in val)
+    bval = '0x' + binascii.hexlify(val)
     return colorme(bval, colormap, 'blob')
 formatter_for('buffer')(format_value_blob)
 
