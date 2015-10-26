@@ -19,6 +19,7 @@ package org.apache.cassandra.gms;
 
 import java.io.*;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,8 +27,6 @@ import org.slf4j.LoggerFactory;
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
-
-import org.cliffc.high_scale_lib.NonBlockingHashMap;
 
 /**
  * This abstraction represents both the HeartBeatState and the ApplicationState in an EndpointState
@@ -42,7 +41,7 @@ public class EndpointState
     public final static IVersionedSerializer<EndpointState> serializer = new EndpointStateSerializer();
 
     private volatile HeartBeatState hbState;
-    final Map<ApplicationState, VersionedValue> applicationState = new NonBlockingHashMap<ApplicationState, VersionedValue>();
+    final Map<ApplicationState, VersionedValue> applicationState = new ConcurrentHashMap<>();
 
     /* fields below do not get serialized */
     private volatile long updateTimestamp;
