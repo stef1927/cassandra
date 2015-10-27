@@ -35,6 +35,12 @@ def colorme(bval, colormap, colorkey):
     return FormattedValue(bval, colormap[colorkey] + bval + colormap['reset'])
 
 
+def get_str(val):
+    if isinstance(val, FormattedValue):
+        return val.strval
+    return val
+
+
 class FormattedValue:
 
     def __init__(self, strval, coloredval=None, displaywidth=None):
