@@ -37,22 +37,21 @@ import ConfigParser
 import csv
 import getpass
 import locale
+import multiprocessing as mp
 import optparse
 import os
 import platform
+import Queue
 import sys
 import time
 import traceback
 import warnings
 
 from StringIO import StringIO
-from collections import deque
 from contextlib import contextmanager
 from functools import partial
 from glob import glob
-from multiprocessing import Pipe, Process, cpu_count
 from random import randrange
-from select import select
 from threading import Lock
 from uuid import UUID
 
@@ -1583,10 +1582,10 @@ class Shell(cmd.Cmd):
             num_processes = get_import_export_processes(cap=4)
 
             for i in range(num_processes):
-                parent_conn, child_conn = Pipe()
+                parent_conn, child_conn = mp.Pipe()
                 pipes.append(parent_conn)
                 proc_args = (child_conn, ks, cf, columns, nullval)
-                processes.append(Process(target=self.multiproc_import, args=proc_args))
+                processes.append(mp.Process(target=self.multiproc_import, args=proc_args))
 
             for process in processes:
                 process.start()
@@ -2200,7 +2199,7 @@ def get_import_export_processes(cap):
     Eventually this parameter will become an option.
     """
     try:
-        return max(1, min(cap, cpu_count() - 1))
+        return max(1, min(cap, mp.cpu_count() - 1))
     except NotImplementedError:
         return 1
 
@@ -2208,7 +2207,6 @@ def get_import_export_processes(cap):
 class ExportTask(object):
     """
     A class that exports data to .csv by instantiating one or more processes that work in parallel (ExportProcess).
-    We communicate with these processes via pipes.
     """
     def __init__(self, shell, ks, cf, columns, fname, csv_options, dialect_options):
         self.shell = shell
@@ -2244,22 +2242,24 @@ class ExportTask(object):
         ranges = self.get_ranges()
         num_processes = get_import_export_processes(cap=min(16, len(ranges)))
 
-        pipes = []
+        inmsg = mp.Queue()
+        outmsg = mp.Queue()
         processes = []
         for i in xrange(num_processes):
-            parent_conn, child_conn = Pipe()
-            pipes.append(parent_conn)
-
-            process = ExportProcess(self, child_conn)
+            process = ExportProcess(outmsg, inmsg, self.ks, self.cf, self.columns, self.dialect_options, self.csv_options,
+                                    shell.debug, shell.port, shell.conn.cql_version,
+                                    shell.auth_provider, shell.ssl)
             process.start()
             processes.append(process)
 
         try:
-            return self.check_processes(csvdest, ranges, pipes, processes)
+            return self.check_processes(csvdest, ranges, inmsg, outmsg, processes)
         finally:
-            for pipe in pipes:
-                pipe.send((None, None))
-                pipe.close()
+            for process in processes:
+                process.terminate()
+
+            inmsg.close()
+            outmsg.close()
             if do_close:
                 csvdest.close()
 
@@ -2333,80 +2333,53 @@ class ExportTask(object):
         else:
             return None
 
-    def send_initial_work(self, ranges, pending_ranges, pipes):
-        """
-        We send up to the maximum number of parallel jobs to each pipe.
-        """
-        num_jobs_per_process = len(pending_ranges) / len(pipes)
-        num_parallel_jobs = min(self.csv_options['jobs'], num_jobs_per_process)
-        for _ in xrange(num_parallel_jobs):
-            for pipe in pipes:
-                if not self.send_work(ranges, pending_ranges, pipe):
-                    return
-
-    def send_work(self, ranges, pending_ranges, pipe):
-        """
-        We send to the pipe a range by removing it from the ranges.
-        """
-        if len(pending_ranges) > 0:
-            token_range = pending_ranges.popleft()
-            pipe.send((token_range, ranges[token_range]['hosts']))
+    def send_work(self, ranges, tokens_to_send, queue):
+        for token_range in tokens_to_send:
+            queue.put((token_range, ranges[token_range]['hosts']))
             ranges[token_range]['attempts'] += 1
 
-        return len(pending_ranges) > 0
-
-    def check_processes(self, csvdest, ranges, pipes, processes):
+    def check_processes(self, csvdest, ranges, inmsg, outmsg, processes):
         """
         Here we monitor all child processes by collecting their results
-        or any errors. As soon as a process completes a job we send some more,
-        if we still have ranges to process. In case of exceptions or permanent
-        error returned by the processes we exclude that pipe from the candicate pipes.
-        A process can signal a permanent error by sending None as the range for which the
-        error occurred. We terminate when we have processed all the ranges or when there
-        are no more pipes to continue working with.
+        or any errors. We terminate when we have processed all the ranges or when there
+        are no more processes.
         """
         shell = self.shell
         meter = RateMeter(10000)
-        pending_ranges = deque(ranges.keys())
-        total_jobs = len(pending_ranges)
+        total_jobs = len(ranges)
         max_attempts = self.csv_options['maxattempts']
 
-        self.send_initial_work(ranges, pending_ranges, pipes)
+        self.send_work(ranges, ranges.keys(), outmsg)
 
         succeeded = 0
         failed = 0
         while (failed + succeeded) < total_jobs and len(processes) > 0:
-            readable, _, _ = select(pipes, [], [], 1.0)
-
-            for pipe in readable:
-                try:
-                    token_range, result = pipe.recv()
-                    if token_range is None and result is None:  # a job has finished
-                        succeeded += 1
-                        self.send_work(ranges, pending_ranges, pipe)
-                    elif isinstance(result, Exception):  # an error occurred
-                        if token_range is None:  # the entire process failed
-                            shell.printerr('Error from worker process: %s' % (result))
-                        else:   # only this token_range failed, retry up to max_attempts if no rows received yet,
-                                # if rows are receive we risk duplicating data, there is a back-off policy in place
-                                # in the worker process as well, see ExpBackoffRetryPolicy
-                            if ranges[token_range]['attempts'] < max_attempts and ranges[token_range]['rows'] == 0:
-                                shell.printerr('Error for %s: %s (will try again later attempt %d of %d)'
-                                               % (token_range, result, ranges[token_range]['attempts'], max_attempts))
-                                pending_ranges.append(token_range)
-                            else:
-                                shell.printerr('Error for %s: %s (permanently given up after %d rows and %d attempts)'
-                                               % (token_range, result, ranges[token_range]['rows'],
-                                                  ranges[token_range]['attempts']))
-                                failed += 1
-                            self.send_work(ranges, pending_ranges, pipe)
-                    else:  # partial result received
-                        data, num = result
-                        csvdest.write(data)
-                        meter.increment(n=num)
-                        ranges[token_range]['rows'] += num
-                except EOFError:
-                    shell.printerr('Got EOF in child process')
+            try:
+                token_range, result = inmsg.get(timeout=1.0)
+                if token_range is None and result is None:  # a job has finished
+                    succeeded += 1
+                elif isinstance(result, Exception):  # an error occurred
+                    if token_range is None:  # the entire process failed
+                        shell.printerr('Error from worker process: %s' % (result))
+                    else:   # only this token_range failed, retry up to max_attempts if no rows received yet,
+                            # if rows are receive we risk duplicating data, there is a back-off policy in place
+                            # in the worker process as well, see ExpBackoffRetryPolicy
+                        if ranges[token_range]['attempts'] < max_attempts and ranges[token_range]['rows'] == 0:
+                            shell.printerr('Error for %s: %s (will try again later attempt %d of %d)'
+                                           % (token_range, result, ranges[token_range]['attempts'], max_attempts))
+                            self.send_work(ranges, [token_range], outmsg)
+                        else:
+                            shell.printerr('Error for %s: %s (permanently given up after %d rows and %d attempts)'
+                                           % (token_range, result, ranges[token_range]['rows'],
+                                              ranges[token_range]['attempts']))
+                            failed += 1
+                else:  # partial result received
+                    data, num = result
+                    csvdest.write(data)
+                    meter.increment(n=num)
+                    ranges[token_range]['rows'] += num
+            except Queue.Empty:
+                pass
 
             for process in processes:
                 if not process.is_alive():
@@ -2492,6 +2465,10 @@ class ExportSession(object):
         with self.lock:
             self.jobs -= 1
 
+    def num_jobs(self):
+        with self.lock:
+            return self.jobs
+
     def execute_async(self, query):
         return self.session.execute_async(query)
 
@@ -2499,30 +2476,39 @@ class ExportSession(object):
         self.cluster.shutdown()
 
 
-class ExportProcess(Process):
+class ExportProcess(mp.Process):
     """
     An child worker process for the export task, ExportTask.
     """
 
-    def __init__(self, parent, pipe):
-        Process.__init__(self, target=self.run)
-        self.shell = parent.shell
-        self.pipe = pipe
-        self.ks = parent.ks
-        self.cf = parent.cf
-        self.table_meta = parent.shell.get_table_meta(parent.ks, parent.cf)
-        self.columns = parent.columns
-        self.dialect_options = parent.dialect_options
+    def __init__(self, inmsg, outmsg, ks, cf, columns, dialect_options, csv_options,
+                 debug, port, cql_version, auth_provider, ssl):
+        mp.Process.__init__(self, target=self.run)
+        self.inmsg = inmsg
+        self.outmsg = outmsg
+        self.ks = ks
+        self.cf = cf
+        self.columns = columns
+        self.dialect_options = dialect_options
         self.hosts_to_sessions = dict()
-        self.printmsg = lambda txt: self.shell.printmsg(txt)
 
-        csv_options = parent.csv_options
+        self.debug = debug
+        self.port = port
+        self.cql_version = cql_version
+        self.auth_provider = auth_provider
+        self.ssl = ssl
+
         self.encoding = csv_options['encoding']
         self.time_format = csv_options['dtformats']
         self.float_precision = csv_options['float_precision']
         self.nullval = csv_options['nullval']
+        self.maxjobs = csv_options['jobs']
         self.csv_options = csv_options
         self.formatters = dict()
+
+    def printmsg(self, text):
+        if self.debug:
+            sys.stderr.write(text + os.linesep)
 
     def run(self):
         try:
@@ -2532,48 +2518,47 @@ class ExportProcess(Process):
 
     def inner_run(self):
         """
-        The parent sends us (range, hosts) on the pipe to request
-        us to process a range, for which we can select any of the
-        hosts on the right.
-        We keep on working until we receive (None, None) from the
-        parent task. In case of exception we signal a permanent
-        error to the parent by sending (None, error) - rather than
-        (range, error).
+        The parent sends us (range, hosts) on the inbound queue (inmsg)
+        in order to request us to process a range, for which we can
+        select any of the hosts on the right. We can signal errors
+        on the outbound queue (outmsg) by sending (range, error) or
+        we can signal a global error by sending (None, error).
+        We terminate when the inbound queue is closed.
         """
         while True:
-            try:
-                token_range, hosts = self.pipe.recv()
-                if token_range is None and hosts is None:
-                    break
+            if self.num_jobs() > self.maxjobs:
+                time.sleep(0.001)  # 1 millisecond
+                continue
 
-                self.start_job(token_range, hosts)
-            except EOFError:
-                self.report_error("Parent has closed the pipe, aborting")
-                break
-            except:
-                self.report_error(sys.exc_info()[0])
-                break
+            token_range, hosts = self.inmsg.get()
+            self.start_job(token_range, hosts)
 
     def report_error(self, err, token_range=None):
-        if isinstance(err, Exception):
+        if isinstance(err, str):
+            msg = err
+        elif issubclass(err, BaseException):
             msg = "%s - %s" % (err.__class__.__name__, err)
-            if self.shell.debug:
+            if self.debug:
                 traceback.print_exc(err)
         else:
             msg = str(err)
 
         self.printmsg(msg)
-        self.pipe.send((token_range, Exception(msg)))
+        self.outmsg.put((token_range, Exception(msg)))
 
     def start_job(self, token_range, hosts):
         """
         Begin querying a range by executing an async query that
         will later on invoke the callbacks attached in attach_callbacks.
         """
-        query = self.prepare_export_query(token_range)
         session = self.get_session(hosts)
+        metadata = session.cluster.metadata.keyspaces[self.ks].tables[self.cf]
+        query = self.prepare_export_query(metadata.partition_key, token_range)
         future = session.execute_async(query)
         self.attach_callbacks(token_range, future, session)
+
+    def num_jobs(self):
+        return sum(session.num_jobs() for session in self.hosts_to_sessions.values())
 
     def get_session(self, hosts):
         """
@@ -2586,14 +2571,13 @@ class ExportProcess(Process):
         new_hosts = [h for h in hosts if h not in self.hosts_to_sessions]
         if new_hosts:
             host = new_hosts[0]
-            shell = self.shell
             new_cluster = Cluster(
                 contact_points=(host,),
-                port=shell.port,
-                cql_version=shell.conn.cql_version,
+                port=self.port,
+                cql_version=self.cql_version,
                 protocol_version=DEFAULT_PROTOCOL_VERSION,
-                auth_provider=shell.auth_provider,
-                ssl_options=sslhandling.ssl_settings(host, CONFIG_FILE) if shell.ssl else None,
+                auth_provider=self.auth_provider,
+                ssl_options=sslhandling.ssl_settings(host, CONFIG_FILE) if self.ssl else None,
                 load_balancing_policy=TokenAwarePolicy(WhiteListRoundRobinPolicy(hosts)),
                 default_retry_policy=ExpBackoffRetryPolicy(self),
                 compression=None,
@@ -2615,7 +2599,7 @@ class ExportProcess(Process):
                 self.write_rows_to_csv(token_range, rows)
             else:
                 self.write_rows_to_csv(token_range, rows)
-                self.pipe.send((None, None))
+                self.outmsg.put((None, None))
                 session.complete_job()
 
         def err_callback(err):
@@ -2628,15 +2612,19 @@ class ExportProcess(Process):
         if len(rows) == 0:
             return  # no rows in this range
 
-        output = StringIO()
-        writer = csv.writer(output, **self.dialect_options)
+        try:
+            output = StringIO()
+            writer = csv.writer(output, **self.dialect_options)
 
-        for row in rows:
-            writer.writerow(map(self.format_value, row))
+            for row in rows:
+                writer.writerow(map(self.format_value, row))
 
-        data = (output.getvalue(), len(rows))
-        self.pipe.send((token_range, data))
-        output.close()
+            data = (output.getvalue(), len(rows))
+            self.outmsg.put((token_range, data))
+            output.close()
+
+        except:
+            self.report_error(sys.exc_info()[0], token_range)
 
     def format_value(self, val):
         if val is None or val == EMPTY:
@@ -2652,17 +2640,18 @@ class ExportProcess(Process):
                          float_precision=self.float_precision, nullval=self.nullval, quote=False)
 
     def close(self):
-        self.shell.printmsg("Export process terminating...")
-        self.pipe.close()
+        self.printmsg("Export process terminating...")
+        self.inmsg.close()
+        self.outmsg.close()
         for session in self.hosts_to_sessions.values():
             session.shutdown()
-        self.shell.printmsg("Export process terminated")
+        self.printmsg("Export process terminated")
 
-    def prepare_export_query(self, token_range):
+    def prepare_export_query(self, partition_key, token_range):
         """
         Return a query where we select all the data for this token range
         """
-        pk_cols = ", ".join(protect_names(col.name for col in self.table_meta.partition_key))
+        pk_cols = ", ".join(protect_names(col.name for col in partition_key))
         columnlist = ', '.join(protect_names(self.columns))
         start_token, end_token = token_range
         query = 'SELECT %s FROM %s.%s' % (columnlist, protect_name(self.ks), protect_name(self.cf))
