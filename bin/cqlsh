@@ -417,7 +417,7 @@ def complete_copy_column_names(ctxt, cqlsh):
 
 
 COPY_OPTIONS = ['DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'NULL', 'ENCODING',
-                'TIME_FORMAT', 'JOBS', 'PAGESIZE', 'MAXATTEMPTS']
+                'TIME_FORMAT', 'JOBS', 'PAGESIZE', 'PAGETIMEOUT', 'MAXATTEMPTS']
 
 
 @cqlsh_syntax_completer('copyOption', 'optnames')
@@ -426,7 +426,7 @@ def complete_copy_options(ctxt, cqlsh):
     direction = ctxt.get_binding('dir').upper()
     opts = set(COPY_OPTIONS) - set(optnames)
     if direction == 'FROM':
-        opts -= set(['ENCODING', 'TIME_FORMAT', 'JOBS', 'PAGESIZE', 'MAXATTEMPTS'])
+        opts -= set(['ENCODING', 'TIME_FORMAT', 'JOBS', 'PAGESIZE', 'PAGETIMEOUT', 'MAXATTEMPTS'])
     return opts
 
 
@@ -1511,6 +1511,7 @@ class Shell(cmd.Cmd):
           TIMEFORMAT=             - timestamp strftime format (COPY TO only)
             '%Y-%m-%d %H:%M:%S%z'   defaults to time_format value in cqlshrc
           PAGESIZE='1000'         - the page size for fetching results (COPY TO only)
+          PAGETIMEOUT=10          - the page timeout for fetching results (COPY TO only)
           MAXATTEMPTS='5'         - the maximum number of attempts for errors (COPY TO only)
 
         When entering CSV data on STDIN, you can use the sequence "\."
@@ -2180,6 +2181,8 @@ def parse_import_export_options(shell, opts):
     csv_options['encoding'] = opts.pop('encoding', 'utf8')
     csv_options['jobs'] = int(opts.pop('jobs', 12))
     csv_options['pagesize'] = int(opts.pop('pagesize', 1000))
+    # by default the page timeout is 10 seconds per 1000 entries in the page size or 10 seconds if pagesize is smaller
+    csv_options['pagetimeout'] = int(opts.pop('pagetimeout', max(10, 10 * (csv_options['pagesize'] / 1000))))
     csv_options['maxattempts'] = int(opts.pop('maxattempts', 5))
     csv_options['dtformats'] = opts.pop('timeformat', shell.display_time_format)
     csv_options['float_precision'] = shell.display_float_precision
@@ -2466,15 +2469,12 @@ class ExportSession(object):
     of jobs that this connection is processing. It wraps the methods
     for executing a query asynchronously and for shutting down the
     connection to the cluster.
-
-    We set the timeout to 10 seconds for each 1000 entries in the request page size,
-    or 10 seconds total if the page size is smaller than 1000.
     """
     def __init__(self, cluster, export_process):
         session = cluster.connect(export_process.ks)
         session.row_factory = tuple_factory
         session.default_fetch_size = export_process.csv_options['pagesize']
-        session.default_timeout = max(10, 10 * (session.default_fetch_size / 1000))
+        session.default_timeout = export_process.csv_options['pagetimeout']
 
         export_process.printmsg("Created connection to %s with page size %d and timeout %d seconds per page"
                                 % (session.hosts, session.default_fetch_size, session.default_timeout))
