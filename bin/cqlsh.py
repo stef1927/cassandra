@@ -558,6 +558,19 @@ def describe_interval(seconds):
     return words
 
 
+def insert_driver_hooks():
+    extend_cql_deserialization()
+    auto_format_udts()
+
+
+def extend_cql_deserialization():
+    """
+    The python driver returns BLOBs as string, but we expect them as bytearrays
+    """
+    cassandra.cqltypes.BytesType.deserialize = staticmethod(lambda byts, protocol_version: bytearray(byts))
+    cassandra.cqltypes.CassandraType.support_empty_values = True
+
+
 def auto_format_udts():
     # when we see a new user defined type, set up the shell formatting for it
     udt_apply_params = cassandra.cqltypes.UserType.apply_parameters
@@ -709,11 +722,6 @@ class Shell(cmd.Cmd):
         self.query_out = sys.stdout
         self.consistency_level = cassandra.ConsistencyLevel.ONE
         self.serial_consistency_level = cassandra.ConsistencyLevel.SERIAL
-        # the python driver returns BLOBs as string, but we expect them as bytearrays
-        cassandra.cqltypes.BytesType.deserialize = staticmethod(lambda byts, protocol_version: bytearray(byts))
-        cassandra.cqltypes.CassandraType.support_empty_values = True
-
-        auto_format_udts()
 
         self.empty_lines = 0
         self.statement_error = False
@@ -2656,6 +2664,9 @@ def main(options, hostname, port):
     if batch_mode and shell.statement_error:
         sys.exit(2)
 
+# always call this regardless of module name: when a sub-process is spawned
+# on Windows then the module name is not __main__, see CASSANDRA-9304
+insert_driver_hooks()
 
 if __name__ == '__main__':
     main(*read_options(sys.argv[1:], os.environ))
