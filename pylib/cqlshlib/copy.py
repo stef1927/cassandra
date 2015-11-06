@@ -384,7 +384,7 @@ class ExportProcess(mp.Process):
         self.config_file = config_file
 
         self.encoding = csv_options['encoding']
-        self.time_format = csv_options['dtformats']
+        self.date_time_format = csv_options['dtformats']
         self.float_precision = csv_options['float_precision']
         self.nullval = csv_options['nullval']
         self.maxjobs = csv_options['jobs']
@@ -521,7 +521,7 @@ class ExportProcess(mp.Process):
             formatter = get_formatter(ctype)
             self.formatters[ctype] = formatter
 
-        return formatter(val, encoding=self.encoding, colormap=NO_COLOR_MAP, time_format=self.time_format,
+        return formatter(val, encoding=self.encoding, colormap=NO_COLOR_MAP, date_time_format=self.date_time_format,
                          float_precision=self.float_precision, nullval=self.nullval, quote=False)
 
     def close(self):
