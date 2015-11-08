@@ -413,7 +413,7 @@ def complete_copy_column_names(ctxt, cqlsh):
 
 
 COPY_OPTIONS = ['DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'NULL', 'ENCODING',
-                'TIME_FORMAT', 'JOBS', 'PAGESIZE', 'PAGETIMEOUT', 'MAXATTEMPTS']
+                'TIMEFORMAT', 'JOBS', 'PAGESIZE', 'PAGETIMEOUT', 'MAXATTEMPTS']
 
 
 @cqlsh_syntax_completer('copyOption', 'optnames')
@@ -422,7 +422,7 @@ def complete_copy_options(ctxt, cqlsh):
     direction = ctxt.get_binding('dir').upper()
     opts = set(COPY_OPTIONS) - set(optnames)
     if direction == 'FROM':
-        opts -= set(['ENCODING', 'TIME_FORMAT', 'JOBS', 'PAGESIZE', 'PAGETIMEOUT', 'MAXATTEMPTS'])
+        opts -= set(['ENCODING', 'TIMEFORMAT', 'JOBS', 'PAGESIZE', 'PAGETIMEOUT', 'MAXATTEMPTS'])
     return opts
 
 

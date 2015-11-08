@@ -249,6 +249,9 @@ def format_value_set(val, encoding, colormap, time_format, float_precision, null
     return format_simple_collection(sorted(val), '{', '}', encoding, colormap,
                                     time_format, float_precision, nullval)
 formatter_for('frozenset')(format_value_set)
+# This code is used by cqlsh (bundled driver version 2.7.2 using sortedset),
+# and the dtests, which use whichever driver on the machine, i.e. 3.0.0 (SortedSet)
+formatter_for('SortedSet')(format_value_set)
 formatter_for('sortedset')(format_value_set)
 
 

@@ -64,7 +64,7 @@ def parse_options(shell, opts):
     # by default the page timeout is 10 seconds per 1000 entries in the page size or 10 seconds if pagesize is smaller
     csv_options['pagetimeout'] = int(opts.pop('pagetimeout', max(10, 10 * (csv_options['pagesize'] / 1000))))
     csv_options['maxattempts'] = int(opts.pop('maxattempts', 5))
-    csv_options['dtformats'] = shell.display_time_format
+    csv_options['dtformats'] = opts.pop('timeformat', shell.display_time_format)
     csv_options['float_precision'] = shell.display_float_precision
 
     return csv_options, dialect_options, opts
