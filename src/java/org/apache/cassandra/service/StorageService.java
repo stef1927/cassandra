@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -768,7 +769,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
     {
         if (!joined)
         {
-            Map<ApplicationState, VersionedValue> appStates = new HashMap<>();
+            Map<ApplicationState, VersionedValue> appStates = new EnumMap<>(ApplicationState.class);
 
             if (DatabaseDescriptor.isReplacing() && !(Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true"))))
                 throw new ConfigurationException("Cannot set both join_ring=false and attempt to replace a node");
@@ -1587,7 +1588,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
     private void updatePeerInfo(InetAddress endpoint)
     {
         EndpointState epState = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
-        for (Map.Entry<ApplicationState, VersionedValue> entry : epState.getApplicationStateMap().entrySet())
+        for (Map.Entry<ApplicationState, VersionedValue> entry : epState.states())
         {
             switch (entry.getKey())
             {
@@ -2157,7 +2158,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
     public void onJoin(InetAddress endpoint, EndpointState epState)
     {
-        for (Map.Entry<ApplicationState, VersionedValue> entry : epState.getApplicationStateMap().entrySet())
+        for (Map.Entry<ApplicationState, VersionedValue> entry : epState.states())
         {
             onChange(endpoint, entry.getKey(), entry.getValue());
         }
