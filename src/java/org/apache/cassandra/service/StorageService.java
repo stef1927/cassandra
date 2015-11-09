@@ -1508,8 +1508,10 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                     handleStateBootstrap(endpoint);
                     break;
                 case VersionedValue.STATUS_NORMAL:
+                    handleStateNormal(endpoint, VersionedValue.STATUS_NORMAL);
+                    break;
                 case VersionedValue.SHUTDOWN:
-                    handleStateNormal(endpoint);
+                    handleStateNormal(endpoint, VersionedValue.SHUTDOWN);
                     break;
                 case VersionedValue.REMOVING_TOKEN:
                 case VersionedValue.REMOVED_TOKEN:
@@ -1683,21 +1685,20 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
      *
      * @param endpoint node
      */
-    private void handleStateNormal(final InetAddress endpoint)
+    private void handleStateNormal(final InetAddress endpoint, final String status)
     {
         Collection<Token> tokens = getTokensFor(endpoint);
         Set<Token> tokensToUpdateInMetadata = new HashSet<>();
         Set<Token> tokensToUpdateInSystemKeyspace = new HashSet<>();
         Set<InetAddress> endpointsToRemove = new HashSet<>();
 
-
         if (logger.isDebugEnabled())
-            logger.debug("Node {} state normal, token {}", endpoint, tokens);
+            logger.debug("Node {} state {}, token {}", endpoint, status, tokens);
 
         if (tokenMetadata.isMember(endpoint))
-            logger.info("Node {} state jump to normal", endpoint);
+            logger.info("Node {} state jump to {}", endpoint, status);
 
-        if (tokens.isEmpty())
+        if (tokens.isEmpty() && status.equals(VersionedValue.STATUS_NORMAL))
             logger.error("Node {} is in state normal but it has no tokens, state: {}",
                          endpoint,
                          Gossiper.instance.getEndpointStateForEndpoint(endpoint));
