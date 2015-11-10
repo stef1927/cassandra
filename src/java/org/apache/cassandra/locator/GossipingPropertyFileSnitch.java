@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -45,14 +45,14 @@ public class GossipingPropertyFileSnitch extends AbstractNetworkTopologySnitch//
     private volatile String myDC;
     private volatile String myRack;
     private volatile boolean preferLocal;
-    private AtomicReference<ReconnectableSnitchHelper> snitchHelperReference;
+    private final AtomicReference<ReconnectableSnitchHelper> snitchHelperReference;
     private volatile boolean gossipStarted;
 
     private Map<InetAddress, Map<String, String>> savedEndpoints;
     private static final String DEFAULT_DC = "UNKNOWN_DC";
     private static final String DEFAULT_RACK = "UNKNOWN_RACK";
 
-    private static final int DEFAULT_REFRESH_PERIOD_IN_SECONDS = 60;
+    private static final int DEFAULT_REFRESH_PERIOD_IN_SECONDS = 5;
     
     public GossipingPropertyFileSnitch() throws ConfigurationException
     {
@@ -61,7 +61,7 @@ public class GossipingPropertyFileSnitch extends AbstractNetworkTopologySnitch//
 
     public GossipingPropertyFileSnitch(int refreshPeriodInSeconds) throws ConfigurationException
     {
-        snitchHelperReference = new AtomicReference<ReconnectableSnitchHelper>();
+        snitchHelperReference = new AtomicReference<>();
 
         reloadConfiguration(false);
 
@@ -174,25 +174,52 @@ public class GossipingPropertyFileSnitch extends AbstractNetworkTopologySnitch//
         newRack = newRack.trim();
         final boolean newPreferLocal = Boolean.parseBoolean(properties.get("prefer_local", "false"));
 
-        if (!newDc.equals(myDC) || !newRack.equals(myRack) || (preferLocal != newPreferLocal))
+        if (newDc.equals(myDC) && newRack.equals(myRack) && (preferLocal == newPreferLocal))
+            return; // nothing to do
+
+        if (isUpdate && !livenessCheck(newDc, newRack))
+            return;
+
+        myDC = newDc;
+        myRack = newRack;
+        preferLocal = newPreferLocal;
+
+        reloadGossiperState();
+
+        if (StorageService.instance != null)
         {
-            myDC = newDc;
-            myRack = newRack;
-            preferLocal = newPreferLocal;
-
-            reloadGossiperState();
-
-            if (StorageService.instance != null)
-            {
-                if (isUpdate)
-                    StorageService.instance.updateTopology(FBUtilities.getBroadcastAddress());
-                else
-                    StorageService.instance.getTokenMetadata().invalidateCachedRings();
-            }
-
-            if (gossipStarted)
-                StorageService.instance.gossipSnitchInfo();
+            if (isUpdate)
+                StorageService.instance.updateTopology(FBUtilities.getBroadcastAddress());
+            else
+                StorageService.instance.getTokenMetadata().invalidateCachedRings();
         }
+
+        if (gossipStarted)
+            StorageService.instance.gossipSnitchInfo();
+    }
+
+    /**
+     * We cannot update rack or data-center for a live node, see CASSANDRA-10243.
+     * @param newDc - the new data center
+     * @param newRack - the new rack
+     * @return true if we can continue updating (local host not live or dc and rack unchanged)
+     */
+    private boolean livenessCheck(String newDc, String newRack)
+    {
+        InetAddress host = FBUtilities.getBroadcastAddress();
+        if (!Gossiper.instance.isLiveTokenOwner(host))
+            return true;
+
+        if (!newDc.equals(myDC) || !newRack.equals(myRack))
+        {
+            logger.error("Cannot update data center or rack from {} to {} for live host {}, property file NOT RELOADED",
+                         new String[] { myDC, myRack }, // same format as error in PropertyFileSnitch
+                         new String[] { newDc, newRack },
+                         host);
+            return false;
+        }
+
+        return true;
     }
 
     private void reloadGossiperState()

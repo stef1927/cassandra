@@ -269,11 +269,26 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
         Set<InetAddress> tokenOwners = new HashSet<InetAddress>();
         for (InetAddress member : getLiveMembers())
         {
-            EndpointState epState = endpointStateMap.get(member);
-            if (epState != null && !isDeadState(epState) && StorageService.instance.getTokenMetadata().isMember(member))
+            if (isTokenOwner(member))
                 tokenOwners.add(member);
         }
         return tokenOwners;
+    }
+
+    public boolean isLiveTokenOwner(InetAddress ep)
+    {
+        if (!liveEndpoints.contains(ep) && !ep.equals(FBUtilities.getBroadcastAddress()))
+            return false;
+
+        return isTokenOwner(ep);
+    }
+
+    private boolean isTokenOwner(InetAddress ep)
+    {
+        EndpointState epState = endpointStateMap.get(ep);
+        return epState != null &&
+               !isDeadState(epState) &&
+               StorageService.instance.getTokenMetadata().isMember(ep);
     }
 
     /**
@@ -981,7 +996,8 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
         MessagingService.instance().sendRR(echoMessage, addr, echoHandler);
     }
 
-    private void realMarkAlive(final InetAddress addr, final EndpointState localState)
+    @VisibleForTesting
+    public void realMarkAlive(final InetAddress addr, final EndpointState localState)
     {
         if (logger.isTraceEnabled())
             logger.trace("marking as alive {}", addr);
@@ -998,7 +1014,8 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
             logger.trace("Notified " + subscribers);
     }
 
-    private void markDead(InetAddress addr, EndpointState localState)
+    @VisibleForTesting
+    public void markDead(InetAddress addr, EndpointState localState)
     {
         if (logger.isTraceEnabled())
             logger.trace("marking as down {}", addr);
