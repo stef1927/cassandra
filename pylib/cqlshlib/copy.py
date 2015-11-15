@@ -18,6 +18,7 @@ import csv
 import multiprocessing as mp
 import os
 import Queue
+import random
 import sys
 import time
 import traceback
@@ -196,7 +197,7 @@ class ExportTask(object):
         if len(ranges) == 0:
             ranges[(None, None)] = make_range([hostname])
         else:
-            ranges[(previous, None)] = ranges[(previous_previous, previous)]
+            ranges[(previous, None)] = ranges[(previous_previous, previous)].copy()
 
         return ranges
 
@@ -234,9 +235,10 @@ class ExportTask(object):
 
         self.send_work(ranges, ranges.keys(), outmsg)
 
+        num_processes = len(processes)
         succeeded = 0
         failed = 0
-        while (failed + succeeded) < total_jobs and len(processes) > 0:
+        while (failed + succeeded) < total_jobs and self.num_live_processes(processes) == num_processes:
             try:
                 token_range, result = inmsg.get(timeout=1.0)
                 if token_range is None and result is None:  # a job has finished
@@ -264,16 +266,20 @@ class ExportTask(object):
             except Queue.Empty:
                 pass
 
+        if self.num_live_processes(processes) < len(processes):
             for process in processes:
                 if not process.is_alive():
                     shell.printerr('Child process %d died with exit code %d' % (process.pid, process.exitcode))
-                    processes.remove(process)
 
         if succeeded < total_jobs:
             shell.printerr('Exported %d ranges out of %d total ranges, some records might be missing'
                            % (succeeded, total_jobs))
 
         return meter.get_total_records()
+
+    @staticmethod
+    def num_live_processes(processes):
+        return sum(1 for p in processes if p.is_alive())
 
 
 class ExpBackoffRetryPolicy(RetryPolicy):
@@ -419,7 +425,7 @@ class ExportProcess(mp.Process):
     def report_error(self, err, token_range=None):
         if isinstance(err, str):
             msg = err
-        elif issubclass(err, BaseException):
+        elif isinstance(err, BaseException):
             msg = "%s - %s" % (err.__class__.__name__, err)
             if self.debug:
                 traceback.print_exc(err)
@@ -437,8 +443,24 @@ class ExportProcess(mp.Process):
         session = self.get_session(hosts)
         metadata = session.cluster.metadata.keyspaces[self.ks].tables[self.cf]
         query = self.prepare_export_query(metadata.partition_key, token_range)
-        future = session.execute_async(query)
+        future = self.execute_query(session, query)
         self.attach_callbacks(token_range, future, session)
+
+    def execute_query(self, session, query):
+        """
+        Execute a query. If the environment variable CQLSH_COPY_TEST_FAILURES
+        is set, then randomly inject two types of failures: a query to a non-existent
+        table that will fail or an exit of the process.
+        """
+        if not os.environ.get('CQLSH_COPY_TEST_FAILURES', ''):
+            return session.execute_async(query)
+
+        if random.random() > 0.7:
+            return session.execute_async("SELECT * FROM badtable")
+        elif random.random() > 0.99:
+            sys.exit(1)
+        else:
+            return session.execute_async(query)
 
     def num_jobs(self):
         return sum(session.num_jobs() for session in self.hosts_to_sessions.values())
@@ -506,8 +528,8 @@ class ExportProcess(mp.Process):
             self.outmsg.put((token_range, data))
             output.close()
 
-        except:
-            self.report_error(sys.exc_info()[0], token_range)
+        except Exception, e:
+            self.report_error(e, token_range)
 
     def format_value(self, val):
         if val is None or val == EMPTY:
