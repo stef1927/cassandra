@@ -15,10 +15,10 @@
 # limitations under the License.
 
 import csv
+import json
 import multiprocessing as mp
 import os
 import Queue
-import random
 import sys
 import time
 import traceback
@@ -217,9 +217,10 @@ class ExportTask(object):
         else:
             return None
 
-    def send_work(self, ranges, tokens_to_send, queue):
+    @staticmethod
+    def send_work(ranges, tokens_to_send, queue):
         for token_range in tokens_to_send:
-            queue.put((token_range, ranges[token_range]['hosts']))
+            queue.put((token_range, ranges[token_range]))
             ranges[token_range]['attempts'] += 1
 
     def check_processes(self, csvdest, ranges, inmsg, outmsg, processes):
@@ -395,6 +396,12 @@ class ExportProcess(mp.Process):
         self.csv_options = csv_options
         self.formatters = dict()
 
+        # Here we inject some failures for testing purposes, only if this environment variable is set
+        if os.environ.get('CQLSH_COPY_TEST_FAILURES', ''):
+            self.test_failures = json.loads(os.environ.get('CQLSH_COPY_TEST_FAILURES', ''))
+        else:
+            self.test_failures = None
+
     def printmsg(self, text):
         if self.debug:
             sys.stderr.write(text + os.linesep)
@@ -407,9 +414,10 @@ class ExportProcess(mp.Process):
 
     def inner_run(self):
         """
-        The parent sends us (range, hosts) on the inbound queue (inmsg)
+        The parent sends us (range, info) on the inbound queue (inmsg)
         in order to request us to process a range, for which we can
-        select any of the hosts on the right. We can signal errors
+        select any of the hosts in info, which also contains other information for this
+        range such as the number of attempts already performed. We can signal errors
         on the outbound queue (outmsg) by sending (range, error) or
         we can signal a global error by sending (None, error).
         We terminate when the inbound queue is closed.
@@ -419,8 +427,8 @@ class ExportProcess(mp.Process):
                 time.sleep(0.001)  # 1 millisecond
                 continue
 
-            token_range, hosts = self.inmsg.get()
-            self.start_job(token_range, hosts)
+            token_range, info = self.inmsg.get()
+            self.start_job(token_range, info)
 
     def report_error(self, err, token_range=None):
         if isinstance(err, str):
@@ -435,32 +443,16 @@ class ExportProcess(mp.Process):
         self.printmsg(msg)
         self.outmsg.put((token_range, Exception(msg)))
 
-    def start_job(self, token_range, hosts):
+    def start_job(self, token_range, info):
         """
         Begin querying a range by executing an async query that
         will later on invoke the callbacks attached in attach_callbacks.
         """
-        session = self.get_session(hosts)
+        session = self.get_session(info['hosts'])
         metadata = session.cluster.metadata.keyspaces[self.ks].tables[self.cf]
-        query = self.prepare_export_query(metadata.partition_key, token_range)
-        future = self.execute_query(session, query)
+        query = self.prepare_query(metadata.partition_key, token_range, info['attempts'])
+        future = session.execute_async(query)
         self.attach_callbacks(token_range, future, session)
-
-    def execute_query(self, session, query):
-        """
-        Execute a query. If the environment variable CQLSH_COPY_TEST_FAILURES
-        is set, then randomly inject two types of failures: a query to a non-existent
-        table that will fail or an exit of the process.
-        """
-        if not os.environ.get('CQLSH_COPY_TEST_FAILURES', ''):
-            return session.execute_async(query)
-
-        if random.random() > 0.7:
-            return session.execute_async("SELECT * FROM badtable")
-        elif random.random() > 0.99:
-            sys.exit(1)
-        else:
-            return session.execute_async(query)
 
     def num_jobs(self):
         return sum(session.num_jobs() for session in self.hosts_to_sessions.values())
@@ -551,6 +543,41 @@ class ExportProcess(mp.Process):
         for session in self.hosts_to_sessions.values():
             session.shutdown()
         self.printmsg("Export process terminated")
+
+    def prepare_query(self, partition_key, token_range, attempts):
+        """
+        Return the export query or a fake query with some failure injected.
+        """
+        if self.test_failures:
+            return self.maybe_inject_failures(partition_key, token_range, attempts)
+        else:
+            return self.prepare_export_query(partition_key, token_range)
+
+    def maybe_inject_failures(self, partition_key, token_range, attempts):
+        """
+        Examine self.test_failures and see if token_range is either a token range
+        supposed to cause a failure (failing_range) or to terminate the worker process
+        (exit_range). If not then call prepare_export_query(), which implements the
+        normal behavior.
+        """
+        start_token, end_token = token_range
+
+        if not start_token or not end_token:
+            # exclude first and last ranges to make things simpler
+            return self.prepare_export_query(partition_key, token_range)
+
+        if 'failing_range' in self.test_failures:
+            failing_range = self.test_failures['failing_range']
+            if start_token >= failing_range['start'] and end_token <= failing_range['end']:
+                if attempts < failing_range['num_failures']:
+                    return 'SELECT * from bad_table'
+
+        if 'exit_range' in self.test_failures:
+            exit_range = self.test_failures['exit_range']
+            if start_token >= exit_range['start'] and end_token <= exit_range['end']:
+                sys.exit(1)
+
+        return self.prepare_export_query(partition_key, token_range)
 
     def prepare_export_query(self, partition_key, token_range):
         """
