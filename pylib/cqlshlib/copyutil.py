@@ -81,6 +81,7 @@ def parse_options(shell, opts):
     csv_options['maxbatchsize'] = int(opts.pop('maxbatchsize', 20))
     csv_options['minbatchsize'] = int(opts.pop('minbatchsize', 2))
     csv_options['reportfrequency'] = float(opts.pop('reportfrequency', 0.25))
+    csv_options['ttl'] = int(opts.pop('ttl', -1))
 
     return csv_options, dialect_options, opts
 
@@ -1061,6 +1062,7 @@ class ImportProcess(ChildProcess):
         self.max_attempts = csv_options['maxattempts']
         self.min_batch_size = csv_options['minbatchsize']
         self.max_batch_size = csv_options['maxbatchsize']
+        self.ttl = csv_options['ttl']
         self._session = None
 
     @property
@@ -1138,6 +1140,9 @@ class ImportProcess(ChildProcess):
                                                         protect_name(self.cf),
                                                         ', '.join(protect_names(self.columns),),
                                                         ', '.join(['?' for _ in self.columns]))
+        if self.ttl >= 0:
+            query += 'USING TTL %s' % (self.ttl,)
+
         query_statement = self.session.prepare(query)
         conv = ImportConversion(self, table_meta, query_statement)
 
