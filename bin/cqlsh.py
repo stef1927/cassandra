@@ -2340,7 +2340,7 @@ class ImportProcess(mp.Process):
             query = 'INSERT INTO %s.%s (%s) VALUES (%%s)' % (
                 protect_name(table_meta.keyspace_name),
                 protect_name(table_meta.name),
-            ', '.join(protect_names(self.columns)))
+                ', '.join(protect_names(self.columns)))
 
         # we need to handle some types specially
         should_escape = [t in ('ascii', 'text', 'timestamp', 'date', 'time', 'inet') for t in cqltypes]
