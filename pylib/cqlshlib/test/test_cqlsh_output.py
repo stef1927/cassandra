@@ -375,7 +375,7 @@ class TestCqlshOutput(BaseTestCase):
              MMMMMMMMMMMM
             --------------------------
 
-             2012-05-14 07:53:20-0500
+             2012-05-14 12:53:20+0000
              GGGGGGGGGGGGGGGGGGGGGGGG
 
 

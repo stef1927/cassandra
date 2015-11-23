@@ -654,7 +654,8 @@ class TestCqlshCompletion(CqlshCompletionCase):
                             choices=['base_time_seconds', 'max_sstable_age_days',
                                     'timestamp_resolution', 'min_threshold', 'class', 'max_threshold',
                                     'tombstone_compaction_interval', 'tombstone_threshold',
-                                    'enabled', 'unchecked_tombstone_compaction'])
+                                    'enabled', 'unchecked_tombstone_compaction',
+                                    'max_window_size_seconds'])
 
     def test_complete_in_create_columnfamily(self):
         self.trycompletions('CREATE C', choices=['COLUMNFAMILY', 'CUSTOM'])

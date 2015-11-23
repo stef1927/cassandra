@@ -830,16 +830,16 @@ def insert_newval_completer(ctxt, cass):
     if len(valuesdone) >= len(insertcols):
         return []
     curcol = insertcols[len(valuesdone)]
-    cqltype = layout.columns[curcol].data_type
-    coltype = cqltype.typename
+    coltype = layout.columns[curcol].cql_type
     if coltype in ('map', 'set'):
         return ['{']
     if coltype == 'list':
         return ['[']
     if coltype == 'boolean':
         return ['true', 'false']
+
     return [Hint('<value for %s (%s)>' % (maybe_escape_name(curcol),
-                                          cqltype.cql_parameterized_type()))]
+                                          coltype))]
 
 
 @completer_for('insertStatement', 'valcomma')
@@ -899,29 +899,28 @@ def update_col_completer(ctxt, cass):
 def update_countername_completer(ctxt, cass):
     layout = get_table_meta(ctxt, cass)
     curcol = dequote_name(ctxt.get_binding('updatecol', ''))
-    cqltype = layout.columns[curcol].data_type
-    coltype = cqltype.typename
+    coltype = layout.columns[curcol].cql_type
     if coltype == 'counter':
         return [maybe_escape_name(curcol)]
     if coltype in ('map', 'set'):
         return ["{"]
     if coltype == 'list':
         return ["["]
-    return [Hint('<term (%s)>' % cqltype.cql_parameterized_type())]
+    return [Hint('<term (%s)>' % coltype)]
 
 
 @completer_for('assignment', 'counterop')
 def update_counterop_completer(ctxt, cass):
     layout = get_table_meta(ctxt, cass)
     curcol = dequote_name(ctxt.get_binding('updatecol', ''))
-    return ['+', '-'] if layout.columns[curcol].data_type.typename == 'counter' else []
+    return ['+', '-'] if layout.columns[curcol].cql_type == 'counter' else []
 
 
 @completer_for('assignment', 'inc')
 def update_counter_inc_completer(ctxt, cass):
     layout = get_table_meta(ctxt, cass)
     curcol = dequote_name(ctxt.get_binding('updatecol', ''))
-    if layout.columns[curcol].data_type.typename == 'counter':
+    if layout.columns[curcol].cql_type == 'counter':
         return [Hint('<wholenumber>')]
     return []
 
@@ -947,7 +946,7 @@ def update_listcol_completer(ctxt, cass):
 def update_indexbracket_completer(ctxt, cass):
     layout = get_table_meta(ctxt, cass)
     curcol = dequote_name(ctxt.get_binding('updatecol', ''))
-    coltype = layout.columns[curcol].data_type.typename
+    coltype = layout.columns[curcol].cql_type
     if coltype in ('map', 'list'):
         return ['[']
     return []
