@@ -42,18 +42,17 @@ public class GossipingPropertyFileSnitch extends AbstractNetworkTopologySnitch//
 
     private PropertyFileSnitch psnitch;
 
-    private volatile String myDC;
-    private volatile String myRack;
-    private volatile boolean preferLocal;
+    private final String myDC;
+    private final String myRack;
+    private final boolean preferLocal;
     private final AtomicReference<ReconnectableSnitchHelper> snitchHelperReference;
-    private volatile boolean gossipStarted;
 
     private Map<InetAddress, Map<String, String>> savedEndpoints;
     private static final String DEFAULT_DC = "UNKNOWN_DC";
     private static final String DEFAULT_RACK = "UNKNOWN_RACK";
 
     private static final int DEFAULT_REFRESH_PERIOD_IN_SECONDS = 5;
-    
+
     public GossipingPropertyFileSnitch() throws ConfigurationException
     {
         this(DEFAULT_REFRESH_PERIOD_IN_SECONDS);
@@ -61,9 +60,24 @@ public class GossipingPropertyFileSnitch extends AbstractNetworkTopologySnitch//
 
     public GossipingPropertyFileSnitch(int refreshPeriodInSeconds) throws ConfigurationException
     {
+        SnitchProperties properties = loadConfiguration();
+
+        myDC = properties.get("dc", DEFAULT_DC).trim();
+        myRack = properties.get("rack", DEFAULT_RACK).trim();
+        preferLocal = Boolean.parseBoolean(properties.get("prefer_local", "false"));
         snitchHelperReference = new AtomicReference<>();
 
-        reloadConfiguration(false);
+        FBUtilities.resourceToFile(SnitchProperties.RACKDC_PROPERTY_FILENAME);
+        Runnable runnable = new WrappedRunnable()
+        {
+            protected void runMayThrow()
+            {
+                logger.error("Configuration update of GossipingPropertyFileSnitch is no longer supported, " +
+                             "please restart this node.");
+            }
+        };
+        ResourceWatcher.watch(SnitchProperties.RACKDC_PROPERTY_FILENAME, runnable, refreshPeriodInSeconds * 1000);
+
 
         try
         {
@@ -74,23 +88,15 @@ public class GossipingPropertyFileSnitch extends AbstractNetworkTopologySnitch//
         {
             logger.info("Unable to load {}; compatibility mode disabled", PropertyFileSnitch.SNITCH_PROPERTIES_FILENAME);
         }
+    }
 
-        try
-        {
-            FBUtilities.resourceToFile(SnitchProperties.RACKDC_PROPERTY_FILENAME);
-            Runnable runnable = new WrappedRunnable()
-            {
-                protected void runMayThrow() throws ConfigurationException
-                {
-                    reloadConfiguration(true);
-                }
-            };
-            ResourceWatcher.watch(SnitchProperties.RACKDC_PROPERTY_FILENAME, runnable, refreshPeriodInSeconds * 1000);
-        }
-        catch (ConfigurationException ex)
-        {
-            logger.error("{} found, but does not look like a plain file. Will not watch it for changes", SnitchProperties.RACKDC_PROPERTY_FILENAME);
-        }
+    private static SnitchProperties loadConfiguration() throws ConfigurationException
+    {
+        final SnitchProperties properties = new SnitchProperties();
+        if (!properties.contains("dc") || !properties.contains("rack"))
+            throw new ConfigurationException("DC or rack not found in snitch properties, check your configuration in: " + SnitchProperties.RACKDC_PROPERTY_FILENAME);
+
+        return properties;
     }
 
     /**
@@ -156,83 +162,18 @@ public class GossipingPropertyFileSnitch extends AbstractNetworkTopologySnitch//
         Gossiper.instance.addLocalApplicationState(ApplicationState.INTERNAL_IP,
                 StorageService.instance.valueFactory.internalIP(FBUtilities.getLocalAddress().getHostAddress()));
 
-        reloadGossiperState();
-
-        gossipStarted = true;
-    }
-    
-    private void reloadConfiguration(boolean isUpdate) throws ConfigurationException
-    {
-        final SnitchProperties properties = new SnitchProperties();
-
-        String newDc = properties.get("dc", null);
-        String newRack = properties.get("rack", null);
-        if (newDc == null || newRack == null)
-            throw new ConfigurationException("DC or rack not found in snitch properties, check your configuration in: " + SnitchProperties.RACKDC_PROPERTY_FILENAME);
-
-        newDc = newDc.trim();
-        newRack = newRack.trim();
-        final boolean newPreferLocal = Boolean.parseBoolean(properties.get("prefer_local", "false"));
-
-        if (newDc.equals(myDC) && newRack.equals(myRack) && (preferLocal == newPreferLocal))
-            return; // nothing to do
-
-        if (isUpdate && !livenessCheck(newDc, newRack))
-            return;
-
-        myDC = newDc;
-        myRack = newRack;
-        preferLocal = newPreferLocal;
-
-        reloadGossiperState();
-
-        if (StorageService.instance != null)
-        {
-            if (isUpdate)
-                StorageService.instance.updateTopology(FBUtilities.getBroadcastAddress());
-            else
-                StorageService.instance.getTokenMetadata().invalidateCachedRings();
-        }
-
-        if (gossipStarted)
-            StorageService.instance.gossipSnitchInfo();
+        loadGossiperState();
     }
 
-    /**
-     * We cannot update rack or data-center for a live node, see CASSANDRA-10243.
-     * @param newDc - the new data center
-     * @param newRack - the new rack
-     * @return true if we can continue updating (local host not live or dc and rack unchanged)
-     */
-    private boolean livenessCheck(String newDc, String newRack)
+    private void loadGossiperState()
     {
-        InetAddress host = FBUtilities.getBroadcastAddress();
-        if (!Gossiper.instance.isLiveTokenOwner(host))
-            return true;
+        assert Gossiper.instance != null;
 
-        if (!newDc.equals(myDC) || !newRack.equals(myRack))
-        {
-            logger.error("Cannot update data center or rack from {} to {} for live host {}, property file NOT RELOADED",
-                         new String[] { myDC, myRack }, // same format as error in PropertyFileSnitch
-                         new String[] { newDc, newRack },
-                         host);
-            return false;
-        }
+        ReconnectableSnitchHelper pendingHelper = new ReconnectableSnitchHelper(this, myDC, preferLocal);
+        Gossiper.instance.register(pendingHelper);
 
-        return true;
-    }
-
-    private void reloadGossiperState()
-    {
-        if (Gossiper.instance != null)
-        {
-            ReconnectableSnitchHelper pendingHelper = new ReconnectableSnitchHelper(this, myDC, preferLocal);
-            Gossiper.instance.register(pendingHelper);
-            
-            pendingHelper = snitchHelperReference.getAndSet(pendingHelper);
-            if (pendingHelper != null)
-                Gossiper.instance.unregister(pendingHelper);
-        }
-        // else this will eventually rerun at gossiperStarting()
+        pendingHelper = snitchHelperReference.getAndSet(pendingHelper);
+        if (pendingHelper != null)
+            Gossiper.instance.unregister(pendingHelper);
     }
 }

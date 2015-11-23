@@ -2306,6 +2306,18 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         return stringify(Gossiper.instance.getLiveMembers());
     }
 
+    public Set<InetAddress> getLiveMembers()
+    {
+        Set<InetAddress> ret = new HashSet<>();
+        for (InetAddress ep : Gossiper.instance.getLiveMembers())
+        {
+            if (tokenMetadata.isMember(ep))
+                ret.add(ep);
+        }
+        return ret;
+    }
+
+
     public List<String> getUnreachableNodes()
     {
         return stringify(Gossiper.instance.getUnreachableMembers());

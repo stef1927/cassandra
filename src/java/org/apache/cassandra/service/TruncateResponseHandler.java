@@ -66,6 +66,11 @@ public class TruncateResponseHandler implements IAsyncCallback
         }
     }
 
+    public void skip()
+    {
+        responses.incrementAndGet();
+    }
+
     public void response(MessageIn message)
     {
         responses.incrementAndGet();

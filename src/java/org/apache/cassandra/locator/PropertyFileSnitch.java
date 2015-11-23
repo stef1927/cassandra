@@ -238,9 +238,9 @@ public class PropertyFileSnitch extends AbstractNetworkTopologySnitch
         // host quickly and interrupt the loop. Otherwise we only check the live hosts that were either
         // in the old set or in the new set
         Set<InetAddress> hosts = Arrays.equals(defaultDCRack, reloadedDefaultDCRack)
-                                 ? Sets.intersection(Gossiper.instance.getLiveTokenOwners(), // same default
+                                 ? Sets.intersection(StorageService.instance.getLiveMembers(), // same default
                                                      Sets.union(endpointMap.keySet(), reloadedMap.keySet()))
-                                 : Gossiper.instance.getLiveTokenOwners(); // default updated
+                                 : StorageService.instance.getLiveMembers(); // default updated
 
         for (InetAddress host : hosts)
         {

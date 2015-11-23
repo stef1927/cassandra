@@ -264,33 +264,6 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
         return liveMembers;
     }
 
-    public Set<InetAddress> getLiveTokenOwners()
-    {
-        Set<InetAddress> tokenOwners = new HashSet<InetAddress>();
-        for (InetAddress member : getLiveMembers())
-        {
-            if (isTokenOwner(member))
-                tokenOwners.add(member);
-        }
-        return tokenOwners;
-    }
-
-    public boolean isLiveTokenOwner(InetAddress ep)
-    {
-        if (!liveEndpoints.contains(ep) && !ep.equals(FBUtilities.getBroadcastAddress()))
-            return false;
-
-        return isTokenOwner(ep);
-    }
-
-    private boolean isTokenOwner(InetAddress ep)
-    {
-        EndpointState epState = endpointStateMap.get(ep);
-        return epState != null &&
-               !isDeadState(epState) &&
-               StorageService.instance.getTokenMetadata().isMember(ep);
-    }
-
     /**
      * @return a list of unreachable gossip participants, including fat clients
      */
