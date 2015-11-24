@@ -32,8 +32,6 @@ import org.apache.cassandra.gms.EndpointState;
 import org.apache.cassandra.gms.Gossiper;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.ResourceWatcher;
-import org.apache.cassandra.utils.WrappedRunnable;
 
 
 public class GossipingPropertyFileSnitch extends AbstractNetworkTopologySnitch// implements IEndpointStateChangeSubscriber
@@ -51,14 +49,7 @@ public class GossipingPropertyFileSnitch extends AbstractNetworkTopologySnitch//
     private static final String DEFAULT_DC = "UNKNOWN_DC";
     private static final String DEFAULT_RACK = "UNKNOWN_RACK";
 
-    private static final int DEFAULT_REFRESH_PERIOD_IN_SECONDS = 5;
-
     public GossipingPropertyFileSnitch() throws ConfigurationException
-    {
-        this(DEFAULT_REFRESH_PERIOD_IN_SECONDS);
-    }
-
-    public GossipingPropertyFileSnitch(int refreshPeriodInSeconds) throws ConfigurationException
     {
         SnitchProperties properties = loadConfiguration();
 
@@ -66,18 +57,6 @@ public class GossipingPropertyFileSnitch extends AbstractNetworkTopologySnitch//
         myRack = properties.get("rack", DEFAULT_RACK).trim();
         preferLocal = Boolean.parseBoolean(properties.get("prefer_local", "false"));
         snitchHelperReference = new AtomicReference<>();
-
-        FBUtilities.resourceToFile(SnitchProperties.RACKDC_PROPERTY_FILENAME);
-        Runnable runnable = new WrappedRunnable()
-        {
-            protected void runMayThrow()
-            {
-                logger.error("Configuration update of GossipingPropertyFileSnitch is no longer supported, " +
-                             "please restart this node.");
-            }
-        };
-        ResourceWatcher.watch(SnitchProperties.RACKDC_PROPERTY_FILENAME, runnable, refreshPeriodInSeconds * 1000);
-
 
         try
         {

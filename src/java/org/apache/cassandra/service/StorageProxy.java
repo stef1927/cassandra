@@ -31,8 +31,6 @@ import com.google.common.base.Predicate;
 import com.google.common.cache.CacheLoader;
 import com.google.common.collect.*;
 import com.google.common.util.concurrent.Uninterruptibles;
-
-import org.apache.cassandra.gms.EndpointState;
 import org.apache.cassandra.metrics.*;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
@@ -1865,7 +1863,7 @@ public class StorageProxy implements StorageProxyMBean
     {
         final String myVersion = Schema.instance.getVersion().toString();
         final Map<InetAddress, UUID> versions = new ConcurrentHashMap<InetAddress, UUID>();
-        final Set<InetAddress> liveHosts = Gossiper.instance.getLiveMembers();
+        final Set<InetAddress> liveHosts = Gossiper.instance.getLiveEndpoints();
         final CountDownLatch latch = new CountDownLatch(liveHosts.size());
 
         IAsyncCallback<UUID> cb = new IAsyncCallback<UUID>()
@@ -1899,7 +1897,7 @@ public class StorageProxy implements StorageProxyMBean
 
         // maps versions to hosts that are on that version.
         Map<String, List<String>> results = new HashMap<String, List<String>>();
-        Iterable<InetAddress> allHosts = Iterables.concat(Gossiper.instance.getLiveMembers(), Gossiper.instance.getUnreachableMembers());
+        Iterable<InetAddress> allHosts = Iterables.concat(Gossiper.instance.getLiveEndpoints(), Gossiper.instance.getUnreachableMembers());
         for (InetAddress host : allHosts)
         {
             UUID version = versions.get(host);
@@ -2127,11 +2125,11 @@ public class StorageProxy implements StorageProxyMBean
             // Since the truncate operation is so aggressive and is typically only
             // invoked by an admin, for simplicity we require that all nodes are up
             // to perform the operation.
-            int liveMembers = Gossiper.instance.getLiveMembers().size();
+            int liveMembers = Gossiper.instance.getLiveEndpoints().size();
             throw new UnavailableException(ConsistencyLevel.ALL, liveMembers + Gossiper.instance.getUnreachableMembers().size(), liveMembers);
         }
 
-        Set<InetAddress> allEndpoints = StorageService.instance.getLiveMembers();
+        Set<InetAddress> allEndpoints = StorageService.instance.getLiveMembers(true);
 
         int blockFor = allEndpoints.size();
         final TruncateResponseHandler responseHandler = new TruncateResponseHandler(blockFor);
@@ -2141,13 +2139,7 @@ public class StorageProxy implements StorageProxyMBean
         final Truncation truncation = new Truncation(keyspace, cfname);
         MessageOut<Truncation> message = truncation.createMessage();
         for (InetAddress endpoint : allEndpoints)
-        {
-            EndpointState epState = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
-            if (epState != null && !Gossiper.instance.isDeadState(epState))
-                MessagingService.instance().sendRR(message, endpoint, responseHandler);
-            else
-                responseHandler.skip();
-        }
+            MessagingService.instance().sendRR(message, endpoint, responseHandler);
 
         // Wait for all
         try

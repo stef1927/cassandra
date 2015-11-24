@@ -17,10 +17,6 @@
  */
 package org.apache.cassandra.locator;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-
 import org.junit.Test;
 
 import org.apache.cassandra.utils.FBUtilities;
@@ -38,34 +34,5 @@ public class GossipingPropertyFileSnitchTest
                                                         FBUtilities.getBroadcastAddress().getHostAddress(),
                                                         "DC1",
                                                         "RAC1");
-    }
-
-    @Test
-    public void testReloadConfig() throws Exception
-    {
-        String confFile = FBUtilities.resourceToFile(SnitchProperties.RACKDC_PROPERTY_FILENAME);
-        final GossipingPropertyFileSnitch snitch = new GossipingPropertyFileSnitch(1);
-
-        final Path effectiveFile = Paths.get(confFile);
-        final Path backupFile = Paths.get(confFile + ".bak");
-        final Path modifiedFile = Paths.get(confFile + ".mod");
-
-        try
-        {
-            Files.copy(effectiveFile, backupFile);
-            Files.copy(modifiedFile, effectiveFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-
-            Thread.sleep(1500);
-
-            YamlFileNetworkTopologySnitchTest.checkEndpoint(snitch, // this should be unchanged
-                                                            FBUtilities.getBroadcastAddress().getHostAddress(),
-                                                            "DC1",
-                                                            "RAC1");
-        }
-        finally
-        {
-            Files.copy(backupFile, effectiveFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            Files.delete(backupFile);
-        }
     }
 }

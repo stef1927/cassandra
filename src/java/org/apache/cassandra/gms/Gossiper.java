@@ -256,12 +256,12 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
         subscribers.remove(subscriber);
     }
 
-    public Set<InetAddress> getLiveMembers()
+    public Set<InetAddress> getLiveEndpoints()
     {
-        Set<InetAddress> liveMembers = new HashSet<InetAddress>(liveEndpoints);
-        if (!liveMembers.contains(FBUtilities.getBroadcastAddress()))
-            liveMembers.add(FBUtilities.getBroadcastAddress());
-        return liveMembers;
+        Set<InetAddress> liveEndpoints = new HashSet<InetAddress>(this.liveEndpoints);
+        if (!liveEndpoints.contains(FBUtilities.getBroadcastAddress()))
+            liveEndpoints.add(FBUtilities.getBroadcastAddress());
+        return liveEndpoints;
     }
 
     /**
