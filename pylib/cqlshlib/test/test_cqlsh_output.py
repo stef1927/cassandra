@@ -369,21 +369,6 @@ class TestCqlshOutput(BaseTestCase):
             """),
         ), env={'TZ': 'Etc/UTC'})
 
-        self.assertQueriesGiveColoredOutput((
-            ('''select timestampcol from has_all_types where num = 0;''', """
-             timestampcol
-             MMMMMMMMMMMM
-            --------------------------
-
-             2012-05-14 12:53:20+0000
-             GGGGGGGGGGGGGGGGGGGGGGGG
-
-
-            (1 rows)
-            nnnnnnnn
-            """),
-        ), env={'TZ': 'EST'})
-
     def test_boolean_output(self):
         self.assertCqlverQueriesGiveColoredOutput((
             ('select num, booleancol from has_all_types where num in (0, 1, 2, 3);', """
