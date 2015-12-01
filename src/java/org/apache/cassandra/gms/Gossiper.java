@@ -256,7 +256,7 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
         subscribers.remove(subscriber);
     }
 
-    public Set<InetAddress> getLiveEndpoints()
+    public Set<InetAddress> getLiveMembers()
     {
         Set<InetAddress> liveEndpoints = new HashSet<InetAddress>(this.liveEndpoints);
         if (!liveEndpoints.contains(FBUtilities.getBroadcastAddress()))
