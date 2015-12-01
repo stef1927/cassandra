@@ -2304,12 +2304,12 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         return stringify(Gossiper.instance.getLiveMembers());
     }
 
-    public Set<InetAddress> getLiveMembers()
+    public Set<InetAddress> getLiveRingMembers()
     {
-        return getLiveMembers(false);
+        return getLiveRingMembers(false);
     }
 
-    public Set<InetAddress> getLiveMembers(boolean excludeDeadStates)
+    public Set<InetAddress> getLiveRingMembers(boolean excludeDeadStates)
     {
         Set<InetAddress> ret = new HashSet<>();
         for (InetAddress ep : Gossiper.instance.getLiveMembers())
