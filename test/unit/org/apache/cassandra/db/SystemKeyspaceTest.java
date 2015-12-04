@@ -156,36 +156,22 @@ public class SystemKeyspaceTest
     public void testMigrateEmptyDataDirs() throws IOException
     {
         File dataDir = Paths.get(DatabaseDescriptor.getAllDataFileLocations()[0]).toFile();
-        if (dataDir.exists())
-            FileUtils.cleanDirectory(dataDir);
-        else
-            assertTrue(dataDir.mkdir());
 
-        try
-        {
-            assertEquals(0, numLegacyFiles());
-            SystemKeyspace.migrateDataDirs();
-            assertEquals(0, numLegacyFiles());
+        assertTrue(new File(dataDir, "Emptykeyspace1").mkdir());
+        assertEquals(0, numLegacyFiles());
+        SystemKeyspace.migrateDataDirs();
+        assertEquals(0, numLegacyFiles());
 
-            assertTrue(new File(dataDir, "keyspace1").mkdir());
-            assertEquals(0, numLegacyFiles());
-            SystemKeyspace.migrateDataDirs();
-            assertEquals(0, numLegacyFiles());
+        assertTrue(new File(dataDir, "Emptykeyspace1/table1").mkdirs());
+        assertEquals(0, numLegacyFiles());
+        SystemKeyspace.migrateDataDirs();
+        assertEquals(0, numLegacyFiles());
 
-            assertTrue(new File(dataDir, "keyspace1/table1").mkdirs());
-            assertEquals(0, numLegacyFiles());
-            SystemKeyspace.migrateDataDirs();
-            assertEquals(0, numLegacyFiles());
+        assertTrue(new File(dataDir, "Emptykeyspace1/wrong_file").createNewFile());
+        assertEquals(0, numLegacyFiles());
+        SystemKeyspace.migrateDataDirs();
+        assertEquals(0, numLegacyFiles());
 
-            assertTrue(new File(dataDir, "keyspace1/wrong_file").createNewFile());
-            assertEquals(0, numLegacyFiles());
-            SystemKeyspace.migrateDataDirs();
-            assertEquals(0, numLegacyFiles());
-        }
-        finally
-        {
-            FileUtils.cleanDirectory(dataDir);
-        }
     }
 
     @Test
