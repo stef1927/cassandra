@@ -19,16 +19,21 @@ package org.apache.cassandra.db;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Random;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 
 import org.junit.Assert;
+import org.junit.BeforeClass;
 import org.junit.Test;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.cql3.ColumnIdentifier;
 import org.apache.cassandra.db.marshal.BytesType;
 import org.apache.cassandra.db.marshal.SetType;
+import org.apache.cassandra.db.marshal.UTF8Type;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.utils.concurrent.OpOrder;
 import org.apache.cassandra.utils.memory.HeapAllocator;
@@ -38,18 +43,27 @@ import org.apache.cassandra.utils.memory.NativePool;
 public class NativeCellTest
 {
 
+    private static final Logger logger = LoggerFactory.getLogger(NativeCellTest.class);
     private static final NativeAllocator nativeAllocator = new NativePool(Integer.MAX_VALUE, Integer.MAX_VALUE, 1f, null).newAllocator();
     private static final OpOrder.Group group = new OpOrder().start();
+    private static Random rand;
+
+    @BeforeClass
+    public static void setUp()
+    {
+        long seed = System.currentTimeMillis();
+        logger.info("Seed : {}", seed);
+        rand = new Random(seed);
+    }
 
     @Test
     public void testCells() throws IOException
     {
-        ThreadLocalRandom rand = ThreadLocalRandom.current();
         for (int run = 0 ; run < 1000 ; run++)
         {
             Row.Builder builder = BTreeRow.unsortedBuilder(1);
             builder.newRow(rndclustering());
-            int count = rand.nextInt(1, 10);
+            int count = 1 + rand.nextInt(10);
             for (int i = 0 ; i < count ; i++)
                 rndcd(builder);
             test(builder.build());
@@ -58,14 +72,13 @@ public class NativeCellTest
 
     private static Clustering rndclustering()
     {
-        ThreadLocalRandom rand = ThreadLocalRandom.current();
-        int count = rand.nextInt(1, 100);
+        int count = 1 + rand.nextInt(100);
         ByteBuffer[] values = new ByteBuffer[count];
-        int size = rand.nextInt(0, 65535);
+        int size = rand.nextInt(65535);
         for (int i = 0 ; i < count ; i++)
         {
             int twiceShare = 1 + (2 * size) / (count - i);
-            int nextSize = Math.min(size, rand.nextInt(0, twiceShare));
+            int nextSize = Math.min(size, rand.nextInt(twiceShare));
             if (nextSize < 10 && rand.nextBoolean())
                 continue;
 
@@ -74,12 +87,11 @@ public class NativeCellTest
             values[i] = ByteBuffer.wrap(bytes);
             size -= nextSize;
         }
-        return new BufferClustering(values);
+        return Clustering.make(values);
     }
 
     private static void rndcd(Row.Builder builder)
     {
-        ThreadLocalRandom rand = ThreadLocalRandom.current();
         ColumnDefinition col = rndcol();
         if (!col.isComplex())
         {
@@ -87,7 +99,7 @@ public class NativeCellTest
         }
         else
         {
-            int count = rand.nextInt(1, 100);
+            int count = 1 + rand.nextInt(100);
             for (int i = 0 ; i < count ; i++)
                 builder.addCell(rndcell(col));
         }
@@ -95,26 +107,27 @@ public class NativeCellTest
 
     private static ColumnDefinition rndcol()
     {
-        ThreadLocalRandom rand = ThreadLocalRandom.current();
         UUID uuid = new UUID(rand.nextLong(), rand.nextLong());
         boolean isComplex = rand.nextBoolean();
-        return new ColumnDefinition("", "", ColumnIdentifier.getInterned(uuid.toString(), false), isComplex ? new SetType<>(BytesType.instance, true)
-                                                                                                    : BytesType.instance,
-                                    -1, ColumnDefinition.Kind.REGULAR);
+        return new ColumnDefinition("",
+                                    "",
+                                    ColumnIdentifier.getInterned(uuid.toString(), false),
+                                    isComplex ? new SetType<>(BytesType.instance, true) : BytesType.instance,
+                                    -1,
+                                    ColumnDefinition.Kind.REGULAR);
     }
 
     private static Cell rndcell(ColumnDefinition col)
     {
-        ThreadLocalRandom rand = ThreadLocalRandom.current();
         long timestamp = rand.nextLong();
         int ttl = rand.nextInt();
         int localDeletionTime = rand.nextInt();
-        byte[] value = new byte[rand.nextInt(0, sanesize(expdecay()))];
+        byte[] value = new byte[rand.nextInt(sanesize(expdecay()))];
         rand.nextBytes(value);
         CellPath path = null;
         if (col.isComplex())
         {
-            byte[] pathbytes = new byte[rand.nextInt(0, sanesize(expdecay()))];
+            byte[] pathbytes = new byte[rand.nextInt(sanesize(expdecay()))];
             rand.nextBytes(value);
             path = CellPath.create(ByteBuffer.wrap(pathbytes));
         }
@@ -124,7 +137,6 @@ public class NativeCellTest
 
     private static int expdecay()
     {
-        ThreadLocalRandom rand = ThreadLocalRandom.current();
         return 1 << Integer.numberOfTrailingZeros(Integer.lowestOneBit(rand.nextInt()));
     }
 
@@ -139,22 +151,21 @@ public class NativeCellTest
         Row brow = clone(row, HeapAllocator.instance.cloningBTreeRowBuilder());
         Assert.assertEquals(row, nrow);
         Assert.assertEquals(row, brow);
+        Assert.assertEquals(nrow, brow);
+
+        Assert.assertEquals(row.clustering(), nrow.clustering());
+        Assert.assertEquals(row.clustering(), brow.clustering());
+        Assert.assertEquals(nrow.clustering(), brow.clustering());
+
+        ClusteringComparator comparator = new ClusteringComparator(UTF8Type.instance);
+        Assert.assertTrue(comparator.compare(row.clustering(), nrow.clustering()) == 0);
+        Assert.assertTrue(comparator.compare(row.clustering(), brow.clustering()) == 0);
+        Assert.assertTrue(comparator.compare(nrow.clustering(), brow.clustering()) == 0);
     }
 
     private static Row clone(Row row, Row.Builder builder)
     {
-        builder.newRow(row.clustering());
-        if (!row.deletion().isLive())
-            builder.addRowDeletion(row.deletion());
-        builder.addPrimaryKeyLivenessInfo(row.primaryKeyLivenessInfo());
-        for (ColumnData cd : row)
-        {
-            if (cd instanceof Cell)
-                builder.addCell((Cell) cd);
-            else for (Cell cell : (ComplexColumnData) cd)
-                builder.addCell(cell);
-        }
-        return builder.build();
+        return Rows.copy(row, builder).build();
     }
 
 }

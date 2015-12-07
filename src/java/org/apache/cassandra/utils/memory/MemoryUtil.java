@@ -153,12 +153,22 @@ public abstract class MemoryUtil
 
     public static ByteBuffer getByteBuffer(long address, int length)
     {
-        ByteBuffer instance = getHollowDirectByteBuffer();
+        return getByteBuffer(address, length, ByteOrder.nativeOrder());
+    }
+
+    public static ByteBuffer getByteBuffer(long address, int length, ByteOrder order)
+    {
+        ByteBuffer instance = getHollowDirectByteBuffer(order);
         setByteBuffer(instance, address, length);
         return instance;
     }
 
     public static ByteBuffer getHollowDirectByteBuffer()
+    {
+        return getHollowDirectByteBuffer(ByteOrder.nativeOrder());
+    }
+
+    public static ByteBuffer getHollowDirectByteBuffer(ByteOrder order)
     {
         ByteBuffer instance;
         try
@@ -169,7 +179,7 @@ public abstract class MemoryUtil
         {
             throw new AssertionError(e);
         }
-        instance.order(ByteOrder.nativeOrder());
+        instance.order(order);
         return instance;
     }
 

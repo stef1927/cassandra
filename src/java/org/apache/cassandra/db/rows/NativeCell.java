@@ -18,6 +18,7 @@
 package org.apache.cassandra.db.rows;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.utils.ObjectSizes;
@@ -28,6 +29,7 @@ import org.apache.cassandra.utils.memory.NativeAllocator;
 public class NativeCell extends AbstractCell
 {
     private static final long EMPTY_SIZE = ObjectSizes.measure(new NativeCell());
+    private static final ByteBuffer EMPTY_BUFFER = ByteBuffer.allocateDirect(0);
 
     private static final long HAS_CELLPATH = 0;
     private static final long TIMESTAMP = 1;
@@ -38,12 +40,39 @@ public class NativeCell extends AbstractCell
 
     private final long peer;
 
-    private NativeCell(){ super(null); this.peer = 0;}
-    public NativeCell(NativeAllocator allocator, OpOrder.Group writeOp, ColumnDefinition column, long timestamp, int ttl, int localDeletionTime, ByteBuffer value, CellPath path)
+    private NativeCell()
+    {
+        super(null);
+        this.peer = 0;
+    }
+
+    public NativeCell(NativeAllocator allocator,
+                      OpOrder.Group writeOp,
+                      Cell cell)
+    {
+        this(allocator,
+             writeOp,
+             cell.column(),
+             cell.timestamp(),
+             cell.ttl(),
+             cell.localDeletionTime(),
+             cell.value(),
+             cell.path());
+    }
+
+    public NativeCell(NativeAllocator allocator,
+                      OpOrder.Group writeOp,
+                      ColumnDefinition column,
+                      long timestamp,
+                      int ttl,
+                      int localDeletionTime,
+                      ByteBuffer value,
+                      CellPath path)
     {
         super(column);
         long size = simpleSize(value.remaining());
 
+        assert value.order() == ByteOrder.BIG_ENDIAN;
         assert column.isComplex() == (path != null);
         if (path != null)
         {
@@ -66,6 +95,8 @@ public class NativeCell extends AbstractCell
         if (path != null)
         {
             ByteBuffer pathbuffer = path.get(0);
+            assert pathbuffer.order() == ByteOrder.BIG_ENDIAN;
+
             long offset = peer + VALUE + value.remaining();
             MemoryUtil.setInt(offset, pathbuffer.remaining());
             MemoryUtil.setBytes(offset + 4, pathbuffer);
@@ -79,33 +110,36 @@ public class NativeCell extends AbstractCell
 
     public long timestamp()
     {
-        return MemoryUtil.getLong(peer + TIMESTAMP);
+        return peer == 0 ? 0 : MemoryUtil.getLong(peer + TIMESTAMP);
     }
 
     public int ttl()
     {
-        return MemoryUtil.getInt(peer + TTL);
+        return peer == 0 ? 0 : MemoryUtil.getInt(peer + TTL);
     }
 
     public int localDeletionTime()
     {
-        return MemoryUtil.getInt(peer + DELETION);
+        return peer == 0 ? 0 : MemoryUtil.getInt(peer + DELETION);
     }
 
     public ByteBuffer value()
     {
+        if (peer == 0)
+            return EMPTY_BUFFER;
+
         int length = MemoryUtil.getInt(peer + LENGTH);
-        return MemoryUtil.getByteBuffer(peer + VALUE, length);
+        return MemoryUtil.getByteBuffer(peer + VALUE, length, ByteOrder.BIG_ENDIAN);
     }
 
     public CellPath path()
     {
-        if (MemoryUtil.getByte(peer+ HAS_CELLPATH) == 0)
+        if (peer == 0 || MemoryUtil.getByte(peer+ HAS_CELLPATH) == 0)
             return null;
+
         long offset = peer + VALUE + MemoryUtil.getInt(peer + LENGTH);
         int size = MemoryUtil.getInt(offset);
-        ByteBuffer value = MemoryUtil.getByteBuffer(offset + 4, size);
-        return CellPath.create(value);
+        return CellPath.create(MemoryUtil.getByteBuffer(offset + 4, size, ByteOrder.BIG_ENDIAN));
     }
 
     public Cell withUpdatedValue(ByteBuffer newValue)

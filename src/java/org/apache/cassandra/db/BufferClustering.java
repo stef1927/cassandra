@@ -37,13 +37,8 @@ import org.apache.cassandra.utils.memory.AbstractAllocator;
  */
 public class BufferClustering extends AbstractBufferClusteringPrefix implements Clustering
 {
-    public BufferClustering(ByteBuffer... values)
+    BufferClustering(ByteBuffer... values)
     {
         super(Kind.CLUSTERING, values);
-    }
-
-    public Kind kind()
-    {
-        return Kind.CLUSTERING;
     }
 }

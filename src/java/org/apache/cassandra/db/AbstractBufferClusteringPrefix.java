@@ -18,16 +18,13 @@
 package org.apache.cassandra.db;
 
 import java.nio.ByteBuffer;
-import java.security.MessageDigest;
-import java.util.Objects;
 
-import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.ObjectSizes;
 
 public abstract class AbstractBufferClusteringPrefix extends AbstractClusteringPrefix
 {
     public static final ByteBuffer[] EMPTY_VALUES_ARRAY = new ByteBuffer[0];
-    private static final long EMPTY_SIZE = ObjectSizes.measure(new BufferClustering(EMPTY_VALUES_ARRAY));
+    private static final long EMPTY_SIZE = ObjectSizes.measure(Clustering.make(EMPTY_VALUES_ARRAY));
 
     protected final Kind kind;
     protected final ByteBuffer[] values;

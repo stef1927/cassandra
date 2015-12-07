@@ -19,6 +19,7 @@
 package org.apache.cassandra.db;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 import org.apache.cassandra.utils.ObjectSizes;
 import org.apache.cassandra.utils.concurrent.OpOrder;
@@ -65,6 +66,8 @@ public class NativeClustering extends AbstractClusteringPrefix implements Cluste
                 continue;
             }
 
+            assert value.order() == ByteOrder.BIG_ENDIAN;
+
             int size = value.remaining();
             MemoryUtil.setBytes(dataStart + dataOffset, value);
             dataOffset += size;
@@ -97,7 +100,9 @@ public class NativeClustering extends AbstractClusteringPrefix implements Cluste
 
         int startOffset = MemoryUtil.getShort(peer + 2 + i * 2);
         int endOffset = MemoryUtil.getShort(peer + 4 + i * 2);
-        return MemoryUtil.getByteBuffer(bitmapStart + bitmapSize + startOffset, endOffset - startOffset);
+        return MemoryUtil.getByteBuffer(bitmapStart + bitmapSize + startOffset,
+                                        endOffset - startOffset,
+                                        ByteOrder.BIG_ENDIAN);
     }
 
     public ByteBuffer[] getRawValues()
@@ -117,5 +122,4 @@ public class NativeClustering extends AbstractClusteringPrefix implements Cluste
     {
         return EMPTY_SIZE;
     }
-
 }

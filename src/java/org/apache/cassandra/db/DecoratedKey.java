@@ -137,4 +137,16 @@ public abstract class DecoratedKey implements PartitionPosition, FilterKey
         ByteBuffer key = getKey();
         MurmurHash.hash3_x64_128(key, key.position(), key.remaining(), 0, dest);
     }
+
+    /**
+     * If required return a copy of this object on the heap. This method
+     * does nothing for implementations already on the heap but for native-memory
+     * implementations it will make a deep copy on the heap. @see NativeDecoratedKey
+     *
+     * @return this object if already on the heap or a deep copy of it on the heap
+     */
+    public DecoratedKey onHeapCopy()
+    {
+        return this;
+    }
 }

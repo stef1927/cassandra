@@ -45,6 +45,8 @@ public abstract class AbstractAllocator
 
     public abstract ByteBuffer allocate(int size);
 
+    public abstract boolean allocatingOnHeap();
+
     public Row.Builder cloningBTreeRowBuilder()
     {
         return new CloningBTreeRowBuilder(this);
@@ -70,6 +72,13 @@ public abstract class AbstractAllocator
         public void addCell(Cell cell)
         {
             super.addCell(cell.copy(allocator));
+        }
+
+        public Row buildRow(Object[] btree, int minDeletionTime)
+        {
+            return allocator.allocatingOnHeap()
+                   ? BTreeRow.create(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime)
+                   : BTreeRow.createOffHeap(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime);
         }
     }
 }

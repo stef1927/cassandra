@@ -41,9 +41,9 @@ public interface Clustering extends ClusteringPrefix
 
     public default Clustering copy(AbstractAllocator allocator)
     {
-        // Important for STATIC_CLUSTERING (but no point in being wasteful in general).
+        // Important for STATIC_CLUSTERING (but must copy empty native clustering types).
         if (size() == 0)
-            return this;
+            return kind() == Kind.STATIC_CLUSTERING ? this : new BufferClustering(EMPTY_VALUES_ARRAY);
 
         ByteBuffer[] newValues = new ByteBuffer[size()];
         for (int i = 0; i < size(); i++)
@@ -74,6 +74,11 @@ public interface Clustering extends ClusteringPrefix
             sb.append(i == 0 ? "" : ", ").append(c.type.getString(get(i)));
         }
         return sb.toString();
+    }
+
+    public static Clustering make(ByteBuffer... values)
+    {
+        return new BufferClustering(values);
     }
 
     /**
