@@ -68,7 +68,7 @@ public class Serializers
                         return Clustering.EMPTY;
 
                     if (!metadata.isCompound())
-                        return new BufferClustering(bb);
+                        return Clustering.make(bb);
 
                     List<ByteBuffer> components = CompositeType.splitName(bb);
                     byte eoc = CompositeType.lastEOC(bb);
@@ -79,7 +79,7 @@ public class Serializers
                         if (components.size() > clusteringSize)
                             components = components.subList(0, clusteringSize);
 
-                        return new BufferClustering(components.toArray(new ByteBuffer[clusteringSize]));
+                        return Clustering.make(components.toArray(new ByteBuffer[clusteringSize]));
                     }
                     else
                     {

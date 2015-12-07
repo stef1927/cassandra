@@ -24,7 +24,6 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.Clustering;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.NativeClustering;
@@ -80,7 +79,13 @@ public class NativeAllocator extends MemtableAllocator
         @Override
         public void addCell(Cell cell)
         {
-            super.addCell(new NativeCell(allocator, writeOp, cell.column(), cell.timestamp(), cell.ttl(), cell.localDeletionTime(), cell.value(), cell.path()));
+            super.addCell(new NativeCell(allocator, writeOp, cell));
+        }
+
+        @Override
+        public Row buildRow(Object[] btree, int minDeletionTime)
+        {
+            return BTreeRow.createOffHeap(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime);
         }
     }
 
@@ -98,6 +103,11 @@ public class NativeAllocator extends MemtableAllocator
     public MemtableAllocator.DataReclaimer reclaimer()
     {
         return NO_OP;
+    }
+
+    public boolean allocatingOnHeap()
+    {
+        return false;
     }
 
     public long allocate(int size, OpOrder.Group opGroup)
@@ -166,6 +176,7 @@ public class NativeAllocator extends MemtableAllocator
     {
         for (Region region : regions)
             MemoryUtil.free(region.peer);
+
         super.setDiscarded();
     }
 
@@ -211,12 +222,12 @@ public class NativeAllocator extends MemtableAllocator
          * Offset for the next allocation, or the sentinel value -1
          * which implies that the region is still uninitialized.
          */
-        private AtomicInteger nextFreeOffset = new AtomicInteger(0);
+        private final AtomicInteger nextFreeOffset = new AtomicInteger(0);
 
         /**
          * Total number of allocations satisfied from this buffer
          */
-        private AtomicInteger allocCount = new AtomicInteger();
+        private final AtomicInteger allocCount = new AtomicInteger();
 
         /**
          * Create an uninitialized region. Note that memory is not allocated yet, so

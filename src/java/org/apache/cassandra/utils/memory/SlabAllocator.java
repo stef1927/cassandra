@@ -68,6 +68,11 @@ public class SlabAllocator extends MemtableBufferAllocator
         this.allocateOnHeapOnly = allocateOnHeapOnly;
     }
 
+    public boolean allocatingOnHeap()
+    {
+        return allocateOnHeapOnly;
+    }
+
     public ByteBuffer allocate(int size)
     {
         return allocate(size, null);
