@@ -410,20 +410,21 @@ def complete_copy_column_names(ctxt, cqlsh):
     return set(colnames[1:]) - set(existcols)
 
 
-COPY_OPTIONS = ['DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'NULL', 'ENCODING',
-                'TIMEFORMAT', 'JOBS', 'PAGESIZE', 'PAGETIMEOUT', 'MAXATTEMPTS',
-                'CHUNKSIZE', 'INGESTRATE', 'MAXBATCHSIZE', 'MINBATCHSIZE', 'REPORTFREQUENCY']
+COPY_COMMON_OPTIONS = set(['DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'NULL', 'MAXREQUESTS',
+                           'MAXATTEMPTS', 'REPORTFREQUENCY'])
+COPY_FROM_OPTIONS = set(['CHUNKSIZE', 'INGESTRATE', 'MAXBATCHSIZE', 'MINBATCHSIZE'])
+COPY_TO_OPTIONS = set(['ENCODING', 'TIMEFORMAT', 'PAGESIZE', 'PAGETIMEOUT'])
 
 
 @cqlsh_syntax_completer('copyOption', 'optnames')
 def complete_copy_options(ctxt, cqlsh):
     optnames = map(str.upper, ctxt.get_binding('optnames', ()))
     direction = ctxt.get_binding('dir').upper()
-    opts = set(COPY_OPTIONS) - set(optnames)
+    opts = COPY_COMMON_OPTIONS - set(optnames)
     if direction == 'FROM':
-        opts -= set(['ENCODING', 'TIMEFORMAT', 'PAGESIZE', 'PAGETIMEOUT'])
+        opts += COPY_FROM_OPTIONS
     elif direction == 'TO':
-        opts -= set(['CHUNKSIZE', 'INGESTRATE', 'MAXBATCHSIZE', 'MINBATCHSIZE'])
+        opts += COPY_TO_OPTIONS
     return opts
 
 
@@ -1524,7 +1525,7 @@ class Shell(cmd.Cmd):
           ENCODING='utf8'         - encoding for CSV output (COPY TO)
           TIMEFORMAT=             - timestamp strftime format (COPY TO)
             '%Y-%m-%d %H:%M:%S%z'   defaults to time_format value in cqlshrc
-          JOBS='6'               - the number of jobs each process can work on at a time
+          MAXREQUESTS='6'         - the maximum number of requests each worker process can work on in parallel
           PAGESIZE='1000'         - the page size for fetching results (COPY TO)
           PAGETIMEOUT=10          - the page timeout for fetching results (COPY TO)
           MAXATTEMPTS='5'         - the maximum number of attempts for errors

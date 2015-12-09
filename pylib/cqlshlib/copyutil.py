@@ -27,7 +27,7 @@ import time
 import traceback
 
 from calendar import timegm
-from collections import deque, namedtuple
+from collections import defaultdict, deque, namedtuple
 from decimal import Decimal
 from functools import partial
 from random import randrange
@@ -70,7 +70,7 @@ def parse_options(shell, opts):
     csv_options['nullval'] = opts.pop('null', '')
     csv_options['header'] = bool(opts.pop('header', '').lower() == 'true')
     csv_options['encoding'] = opts.pop('encoding', 'utf8')
-    csv_options['jobs'] = int(opts.pop('jobs', 6))
+    csv_options['maxrequests'] = int(opts.pop('maxrequests', 6))
     csv_options['pagesize'] = int(opts.pop('pagesize', 1000))
     # by default the page timeout is 10 seconds per 1000 entries in the page size or 10 seconds if pagesize is smaller
     csv_options['pagetimeout'] = int(opts.pop('pagetimeout', max(10, 10 * (csv_options['pagesize'] / 1000))))
@@ -242,7 +242,7 @@ class ExportTask(CopyTask):
             for host in replicas:
                 if host.is_up and host.datacenter == local_dc:
                     hosts.append(host.address)
-            if len(hosts) == 0:
+            if not hosts:
                 hosts.append(hostname)  # fallback to default host if no replicas in current dc
             ranges[(previous, token.value)] = make_range(hosts)
             previous_previous = previous
@@ -251,7 +251,7 @@ class ExportTask(CopyTask):
         #  If the ring is empty we get the entire ring from the
         #  host we are currently connected to, otherwise for the last ring interval
         #  we query the same replicas that hold the last token in the ring
-        if len(ranges) == 0:
+        if not ranges:
             ranges[(None, None)] = make_range([hostname])
         else:
             ranges[(previous, None)] = ranges[(previous_previous, previous)].copy()
@@ -288,7 +288,7 @@ class ExportTask(CopyTask):
         shell = self.shell
         processes = self.processes
         meter = RateMeter(self.csv_options['reportfrequency'])
-        total_jobs = len(ranges)
+        total_requests = len(ranges)
         max_attempts = self.csv_options['maxattempts']
 
         self.send_work(ranges, ranges.keys())
@@ -296,10 +296,10 @@ class ExportTask(CopyTask):
         num_processes = len(processes)
         succeeded = 0
         failed = 0
-        while (failed + succeeded) < total_jobs and self.num_live_processes() == num_processes:
+        while (failed + succeeded) < total_requests and self.num_live_processes() == num_processes:
             try:
                 token_range, result = self.inmsg.get(timeout=1.0)
-                if token_range is None and result is None:  # a job has finished
+                if token_range is None and result is None:  # a request has finished
                     succeeded += 1
                 elif isinstance(result, Exception):  # an error occurred
                     if token_range is None:  # the entire process failed
@@ -329,9 +329,9 @@ class ExportTask(CopyTask):
                 if not process.is_alive():
                     shell.printerr('Child process %d died with exit code %d' % (process.pid, process.exitcode))
 
-        if succeeded < total_jobs:
+        if succeeded < total_requests:
             shell.printerr('Exported %d ranges out of %d total ranges, some records might be missing'
-                           % (succeeded, total_jobs))
+                           % (succeeded, total_requests))
 
         return meter.get_total_records()
 
@@ -351,14 +351,8 @@ class ImportReader(object):
         if self.exhausted:
             return []
 
-        rows = [None] * self.chunksize
-        for i in xrange(self.chunksize):
-            try:
-                rows[i] = self.reader.next()
-            except StopIteration:
-                self.exhausted = True
-                return filter(None, rows)
-
+        rows = list(next(self.reader) for _ in xrange(self.chunksize))
+        self.exhausted = len(rows) < self.chunksize
         return rows
 
 
@@ -372,7 +366,7 @@ class ImportTask(CopyTask):
                           csv_options, dialect_options, protocol_version, config_file)
 
         self.num_processes = get_num_processes(cap=4)
-        self.maxjobs = csv_options['jobs']
+        self.max_requests = csv_options['maxrequests']
         self.chunk_size = csv_options['chunksize']
         self.ingest_rate = csv_options['ingestrate']
         self.report_frequency = csv_options['reportfrequency']
@@ -432,7 +426,7 @@ class ImportTask(CopyTask):
     def process_records(self, reader):
         """
         Keep on running until we have stuff to receive or send and until all processes are running.
-        Send data (batches ore retries) up to the max ingest rate. If we are waiting for stuff to
+        Send data (batches or retries) up to the max ingest rate. If we are waiting for stuff to
         receive check the incoming queue.
         """
         while (self.has_more_to_send(reader) or self.has_more_to_receive()) and self.all_processes_running():
@@ -454,7 +448,7 @@ class ImportTask(CopyTask):
         return (self.succeeded + self.failed) < self.sent
 
     def has_more_to_send(self, reader):
-        return (not reader.exhausted) or len(self.retries) > 0
+        return (not reader.exhausted) or self.retries
 
     def all_processes_running(self):
         return self.num_live_processes() == self.num_processes
@@ -463,7 +457,7 @@ class ImportTask(CopyTask):
         shell = self.shell
         start_time = time.time()
 
-        while not self.inmsg.empty() and (time.time() - start_time < 0.1):  # 10 millis
+        while time.time() - start_time < 0.01:  # 10 millis
             try:
                 batch, err = self.inmsg.get(timeout=0.001)  # 1 millisecond
 
@@ -473,7 +467,7 @@ class ImportTask(CopyTask):
                 else:
                     err = str(err)
 
-                    if err.startswith('ValueError') or err.startswith('TypeError') \
+                    if err.startswith('ValueError') or err.startswith('TypeError') or err.startswith('IndexError') \
                             or batch['attempts'] >= self.max_attempts:
                         shell.printerr("Failed to import %d rows: %s -  given up after %d attempts"
                                        % (len(batch['rows']), err, batch['attempts']))
@@ -484,23 +478,23 @@ class ImportTask(CopyTask):
                                           self.max_attempts))
                         self.retries.append(self.reset_batch(batch))
             except Queue.Empty:
-                pass
+                break
 
     def send_batches(self, reader):
         """
-        Send maxjobs*num_processes batches to the queue. In the export case we queue
+        Send max_requests*num_processes batches to the queue. In the export case we queue
         everything and let the worker processes throttle, here we throttle in the parent
         process because of memory usage.
 
         When we have finished reading the csv file, then send any retries.
         """
-        num_jobs = self.maxjobs * len(self.processes)
-        for _ in xrange(num_jobs):
+        num_requests = self.max_requests * len(self.processes)
+        for _ in xrange(num_requests):
             if not reader.exhausted:
                 rows = reader.read_rows()
-                if len(rows) > 0:
+                if rows:
                     self.sent += self.send_batch(self.new_batch(rows))
-            elif len(self.retries) > 0:
+            elif self.retries:
                 batch = self.retries.popleft()
                 self.send_batch(batch)
             else:
@@ -519,7 +513,8 @@ class ImportTask(CopyTask):
 
     @staticmethod
     def reset_batch(batch):
-        return dict([(k, v) if k != 'imported' else (k, 0) for k, v in batch.iteritems()])
+        batch['imported'] = 0
+        return batch
 
     @staticmethod
     def make_batch(batch_id, rows, attempts):
@@ -615,7 +610,7 @@ class ExpBackoffRetryPolicy(RetryPolicy):
 class ExportSession(object):
     """
     A class for connecting to a cluster and storing the number
-    of jobs that this connection is processing. It wraps the methods
+    of requests that this connection is processing. It wraps the methods
     for executing a query asynchronously and for shutting down the
     connection to the cluster.
     """
@@ -630,20 +625,20 @@ class ExportSession(object):
 
         self.cluster = cluster
         self.session = session
-        self.jobs = 1
+        self.requests = 1
         self.lock = Lock()
 
-    def add_job(self):
+    def add_request(self):
         with self.lock:
-            self.jobs += 1
+            self.requests += 1
 
-    def complete_job(self):
+    def complete_request(self):
         with self.lock:
-            self.jobs -= 1
+            self.requests -= 1
 
-    def num_jobs(self):
+    def num_requests(self):
         with self.lock:
-            return self.jobs
+            return self.requests
 
     def execute_async(self, query):
         return self.session.execute_async(query)
@@ -668,7 +663,7 @@ class ExportProcess(ChildProcess):
         self.float_precision = csv_options['float_precision']
         self.nullval = csv_options['nullval']
         self.max_attempts = csv_options['maxattempts']
-        self.maxjobs = csv_options['jobs']
+        self.max_requests = csv_options['maxrequests']
         self.csv_options = csv_options
         self.formatters = dict()
 
@@ -689,12 +684,12 @@ class ExportProcess(ChildProcess):
         We terminate when the inbound queue is closed.
         """
         while True:
-            if self.num_jobs() > self.maxjobs:
+            if self.num_requests() > self.max_requests:
                 time.sleep(0.001)  # 1 millisecond
                 continue
 
             token_range, info = self.inmsg.get()
-            self.start_job(token_range, info)
+            self.start_request(token_range, info)
 
     def report_error(self, err, token_range=None):
         if isinstance(err, str):
@@ -709,7 +704,7 @@ class ExportProcess(ChildProcess):
         self.printmsg(msg)
         self.outmsg.put((token_range, Exception(msg)))
 
-    def start_job(self, token_range, info):
+    def start_request(self, token_range, info):
         """
         Begin querying a range by executing an async query that
         will later on invoke the callbacks attached in attach_callbacks.
@@ -720,14 +715,14 @@ class ExportProcess(ChildProcess):
         future = session.execute_async(query)
         self.attach_callbacks(token_range, future, session)
 
-    def num_jobs(self):
-        return sum(session.num_jobs() for session in self.hosts_to_sessions.values())
+    def num_requests(self):
+        return sum(session.num_requests() for session in self.hosts_to_sessions.values())
 
     def get_session(self, hosts):
         """
         We select a host to connect to. If we have no connections to one of the hosts
         yet then we select this host, else we pick the one with the smallest number
-        of jobs.
+        of requests.
 
         :return: An ExportSession connected to the chosen host.
         """
@@ -743,16 +738,15 @@ class ExportProcess(ChildProcess):
                 ssl_options=ssl_settings(host, self.config_file) if self.ssl else None,
                 load_balancing_policy=TokenAwarePolicy(WhiteListRoundRobinPolicy(hosts)),
                 default_retry_policy=ExpBackoffRetryPolicy(self),
-                compression=None,
-                executor_threads=max(2, self.csv_options['jobs'] / 2))
+                compression=None)
 
             session = ExportSession(new_cluster, self)
             self.hosts_to_sessions[host] = session
             return session
         else:
-            host = min(hosts, key=lambda h: self.hosts_to_sessions[h].jobs)
+            host = min(hosts, key=lambda h: self.hosts_to_sessions[h].requests)
             session = self.hosts_to_sessions[host]
-            session.add_job()
+            session.add_request()
             return session
 
     def attach_callbacks(self, token_range, future, session):
@@ -763,16 +757,16 @@ class ExportProcess(ChildProcess):
             else:
                 self.write_rows_to_csv(token_range, rows)
                 self.outmsg.put((None, None))
-                session.complete_job()
+                session.complete_request()
 
         def err_callback(err):
             self.report_error(err, token_range)
-            session.complete_job()
+            session.complete_request()
 
         future.add_callbacks(callback=result_callback, errback=err_callback)
 
     def write_rows_to_csv(self, token_range, rows):
-        if len(rows) == 0:
+        if not rows:
             return  # no rows in this range
 
         try:
@@ -1071,6 +1065,8 @@ class ImportProcess(ChildProcess):
         self.max_attempts = csv_options['maxattempts']
         self.min_batch_size = csv_options['minbatchsize']
         self.max_batch_size = csv_options['maxbatchsize']
+        # each process has a randomized preferred replica index
+        self.replica_idx = random.randint(0, 100)
         self.sessions = dict()
 
     def get_session(self, host):
@@ -1238,15 +1234,12 @@ class ImportProcess(ChildProcess):
         create a sub-batch with that partition key value, else
         aggregate all remaining rows in a single 'left-overs' batch
         """
-        rows_by_replica = dict()
+        rows_by_replica = defaultdict(list)
 
         for row in batch['rows']:
             replica = self.get_replica(session.cluster.metadata,
                                        conv.get_row_partition_key_values(row))
-            if replica in rows_by_replica:
-                rows_by_replica[replica].append(row)
-            else:
-                rows_by_replica[replica] = [row]
+            rows_by_replica[replica].append(row)
 
         ret = dict()
         remaining_rows = []
@@ -1257,20 +1250,24 @@ class ImportProcess(ChildProcess):
             else:
                 remaining_rows.extend(rows)
 
-        if len(remaining_rows) > 0:
+        if remaining_rows:
             ret[self.hostname] = self.batches(remaining_rows, batch)
 
         return ret
 
     def get_replica(self, metadata, pk):
         """
-        Return a random replica or the host we are already connected to if there are no local
-        replicas that are up. TODO: DC locality
+        Return a replica for this primary key or the host we are already connected to
+        if there are no local replicas that are up. To chose a replica we use a randomized
+        index, self.replica_idx, modulo the length of the replicas available.
         """
         local_dc = metadata.get_host(self.hostname).datacenter
         replicas = filter(lambda r: r.is_up and r.datacenter == local_dc, metadata.get_replicas(self.ks, pk))
-        ret = random.choice(replicas).address if len(replicas) > 0 else self.hostname
-        return ret
+        if replicas:
+            idx = self.replica_idx % len(replicas)
+            return replicas[idx].address
+        else:
+            return self.hostname
 
     def batches(self, rows, batch):
         for i in xrange(0, len(rows), self.max_batch_size):
