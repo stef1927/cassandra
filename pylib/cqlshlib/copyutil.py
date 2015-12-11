@@ -29,7 +29,6 @@ import traceback
 from calendar import timegm
 from collections import defaultdict, deque, namedtuple
 from decimal import Decimal
-from functools import partial
 from random import randrange
 from StringIO import StringIO
 from threading import Lock
@@ -38,7 +37,7 @@ from uuid import UUID
 from cassandra.cluster import Cluster
 from cassandra.cqltypes import ReversedType, UserType
 from cassandra.metadata import protect_name, protect_names
-from cassandra.policies import RetryPolicy, WhiteListRoundRobinPolicy, TokenAwarePolicy
+from cassandra.policies import RetryPolicy, WhiteListRoundRobinPolicy, TokenAwarePolicy, DCAwareRoundRobinPolicy
 from cassandra.query import BatchStatement, BatchType, SimpleStatement, tuple_factory
 from cassandra.util import Date, Time
 
@@ -1067,38 +1066,36 @@ class ImportProcess(ChildProcess):
         self.max_batch_size = csv_options['maxbatchsize']
         # each process has a randomized preferred replica index
         self.replica_idx = random.randint(0, 100)
-        self.sessions = dict()
+        self._session = None
 
-    def get_session(self, host):
-        if host in self.sessions:
-            return self.sessions[host]
+    @property
+    def session(self):
+        if not self._session:
+            cluster = Cluster(
+                contact_points=(self.hostname,),
+                port=self.port,
+                cql_version=self.cql_version,
+                protocol_version=self.protocol_version,
+                auth_provider=self.auth_provider,
+                load_balancing_policy=TokenAwarePolicy(DCAwareRoundRobinPolicy()),
+                ssl_options=ssl_settings(self.hostname, self.config_file) if self.ssl else None,
+                default_retry_policy=ExpBackoffRetryPolicy(self),
+                compression=None,
+                connect_timeout=self.connect_timeout)
 
-        cluster = Cluster(
-            contact_points=(host,),
-            port=self.port,
-            cql_version=self.cql_version,
-            protocol_version=self.protocol_version,
-            auth_provider=self.auth_provider,
-            ssl_options=ssl_settings(self.hostname, self.config_file) if self.ssl else None,
-            default_retry_policy=ExpBackoffRetryPolicy(self),
-            compression=None,
-            connect_timeout=self.connect_timeout)
-
-        session = cluster.connect(self.ks)
-        session.default_timeout = None
-        self.sessions[host] = session
-        return session
+            self._session = cluster.connect(self.ks)
+            self._session.default_timeout = None
+        return self._session
 
     def run(self):
         try:
-            session = self.get_session(self.hostname)
-            table_meta = session.cluster.metadata.keyspaces[self.ks].tables[self.cf]
+            table_meta = self.session.cluster.metadata.keyspaces[self.ks].tables[self.cf]
             is_counter = ("counter" in [table_meta.columns[name].typestring for name in self.columns])
 
             if is_counter:
-                self.run_counter(session, table_meta)
+                self.run_counter(table_meta)
             else:
-                self.run_normal(session, table_meta)
+                self.run_normal(table_meta)
 
         except Exception, exc:
             if self.debug:
@@ -1108,15 +1105,13 @@ class ImportProcess(ChildProcess):
             self.close()
 
     def close(self):
-        for session in self.sessions.itervalues():
-            session.cluster.shutdown()
+        if self._session:
+            self._session.cluster.shutdown()
         ChildProcess.close(self)
 
-    def run_counter(self, session, table_meta):
+    def run_counter(self, table_meta):
         """
         Main run method for tables that contain counter columns.
-        :param session:
-        :param table_meta:
         """
         query = 'UPDATE %s.%s SET %%s WHERE %%s' % (protect_name(self.ks), protect_name(self.cf))
 
@@ -1125,22 +1120,22 @@ class ImportProcess(ChildProcess):
         # way to find out the types of the partition columns, we will never use this prepared statement
         where_clause = ' AND '.join(['%s = ?' % (protect_name(c.name)) for c in table_meta.partition_key])
         select_query = 'SELECT * FROM %s.%s WHERE %s' % (protect_name(self.ks), protect_name(self.cf), where_clause)
-        conv = ImportConversion(self, table_meta, session.prepare(select_query))
+        conv = ImportConversion(self, table_meta, self.session.prepare(select_query))
 
         while True:
             try:
                 batch = self.inmsg.get()
 
-                for replica, batches in self.split_batches(batch, session, conv).iteritems():
+                for batches in self.split_batches(batch, conv):
                     for b in batches:
-                        self.send_counter_batch(self.get_session(replica), query, conv, b)
+                        self.send_counter_batch(query, conv, b)
 
             except Exception, exc:
                 self.outmsg.put((batch, '%s - %s' % (exc.__class__.__name__, exc.message)))
                 if self.debug:
                     traceback.print_exc(exc)
 
-    def run_normal(self, session, table_meta):
+    def run_normal(self, table_meta):
         """
         Main run method for normal tables, i.e. tables that do not contain counter columns.
         """
@@ -1148,24 +1143,24 @@ class ImportProcess(ChildProcess):
                                                         protect_name(self.cf),
                                                         ', '.join(protect_names(self.columns),),
                                                         ', '.join(['?' for _ in self.columns]))
-        query_statement = session.prepare(query)
+        query_statement = self.session.prepare(query)
         conv = ImportConversion(self, table_meta, query_statement)
 
         while True:
             try:
                 batch = self.inmsg.get()
 
-                for replica, batches in self.split_batches(batch, session, conv).iteritems():
+                for batches in self.split_batches(batch, conv):
                     for b in batches:
-                        self.send_normal_batch(conv, self.get_session(replica), query_statement, b)
+                        self.send_normal_batch(conv, query_statement, b)
 
             except Exception, exc:
                 self.outmsg.put((batch, '%s - %s' % (exc.__class__.__name__, exc.message)))
                 if self.debug:
                     traceback.print_exc(exc)
 
-    def send_counter_batch(self, session, query_text, conv, batch):
-        if self.test_failures and self.maybe_inject_failures(session, batch):
+    def send_counter_batch(self, query_text, conv, batch):
+        if self.test_failures and self.maybe_inject_failures(batch):
             return
 
         columns = self.columns
@@ -1182,23 +1177,23 @@ class ImportProcess(ChildProcess):
             full_query_text = query_text % (','.join(set_clause), ' AND '.join(where_clause))
             batch_statement.add(full_query_text)
 
-        self.execute_statement(session, batch_statement, batch)
+        self.execute_statement(batch_statement, batch)
 
-    def send_normal_batch(self, conv, session, query_statement, batch):
+    def send_normal_batch(self, conv, query_statement, batch):
         try:
-            if self.test_failures and self.maybe_inject_failures(session, batch):
+            if self.test_failures and self.maybe_inject_failures(batch):
                 return
 
             batch_statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
             for row in batch['rows']:
                 batch_statement.add(query_statement, conv.get_row_values(row))
 
-            self.execute_statement(session, batch_statement, batch)
+            self.execute_statement(batch_statement, batch)
 
         except Exception, exc:
-            self.err_callback(batch, exc)
+            self.err_callback(exc, batch)
 
-    def maybe_inject_failures(self, session, batch):
+    def maybe_inject_failures(self, batch):
         """
         Examine self.test_failures and see if token_range is either a token range
         supposed to cause a failure (failing_range) or to terminate the worker process
@@ -1211,7 +1206,7 @@ class ImportProcess(ChildProcess):
                 if batch['attempts'] < failing_batch['failures']:
                     statement = SimpleStatement("INSERT INTO badtable (a, b) VALUES (1, 2)",
                                                 consistency_level=self.consistency_level)
-                    self.execute_statement(session, statement, batch)
+                    self.execute_statement(statement, batch)
                     return True
 
         if 'exit_batch' in self.test_failures:
@@ -1221,12 +1216,12 @@ class ImportProcess(ChildProcess):
 
         return False  # carry on as normal
 
-    def execute_statement(self, session, statement, batch):
-        future = session.execute_async(statement)
-        future.add_callbacks(callback=partial(self.result_callback, batch),
-                             errback=partial(self.err_callback, batch))
+    def execute_statement(self, statement, batch):
+        future = self.session.execute_async(statement)
+        future.add_callbacks(callback=self.result_callback, callback_args=(batch, ),
+                             errback=self.err_callback, errback_args=(batch, ))
 
-    def split_batches(self, batch, session, conv):
+    def split_batches(self, batch, conv):
         """
         Split a batch into sub-batches with the same
         partition key, if possible. If there are at least
@@ -1237,8 +1232,7 @@ class ImportProcess(ChildProcess):
         rows_by_replica = defaultdict(list)
 
         for row in batch['rows']:
-            replica = self.get_replica(session.cluster.metadata,
-                                       conv.get_row_partition_key_values(row))
+            replica = self.get_replica(conv.get_row_partition_key_values(row))
             rows_by_replica[replica].append(row)
 
         ret = dict()
@@ -1253,14 +1247,15 @@ class ImportProcess(ChildProcess):
         if remaining_rows:
             ret[self.hostname] = self.batches(remaining_rows, batch)
 
-        return ret
+        return ret.itervalues()
 
-    def get_replica(self, metadata, pk):
+    def get_replica(self, pk):
         """
         Return a replica for this primary key or the host we are already connected to
         if there are no local replicas that are up. To chose a replica we use a randomized
         index, self.replica_idx, modulo the length of the replicas available.
         """
+        metadata = self.session.cluster.metadata
         local_dc = metadata.get_host(self.hostname).datacenter
         replicas = filter(lambda r: r.is_up and r.datacenter == local_dc, metadata.get_replicas(self.ks, pk))
         if replicas:
@@ -1273,12 +1268,12 @@ class ImportProcess(ChildProcess):
         for i in xrange(0, len(rows), self.max_batch_size):
             yield ImportTask.make_batch(batch['id'], rows[i:i + self.max_batch_size], batch['attempts'])
 
-    def result_callback(self, batch, _):
+    def result_callback(self, result, batch):
         batch['imported'] = len(batch['rows'])
         batch['rows'] = []  # no need to resend these
         self.outmsg.put((batch, None))
 
-    def err_callback(self, batch, response):
+    def err_callback(self, response, batch):
         batch['imported'] = len(batch['rows'])
         self.outmsg.put((batch, '%s - %s' % (response.__class__.__name__, response.message)))
         if self.debug:

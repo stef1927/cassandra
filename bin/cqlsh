@@ -410,21 +410,20 @@ def complete_copy_column_names(ctxt, cqlsh):
     return set(colnames[1:]) - set(existcols)
 
 
-COPY_COMMON_OPTIONS = set(['DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'NULL', 'MAXREQUESTS',
-                           'MAXATTEMPTS', 'REPORTFREQUENCY'])
-COPY_FROM_OPTIONS = set(['CHUNKSIZE', 'INGESTRATE', 'MAXBATCHSIZE', 'MINBATCHSIZE'])
-COPY_TO_OPTIONS = set(['ENCODING', 'TIMEFORMAT', 'PAGESIZE', 'PAGETIMEOUT'])
+COPY_COMMON_OPTIONS = ['DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'NULL', 'MAXREQUESTS',
+                       'MAXATTEMPTS', 'REPORTFREQUENCY']
+COPY_FROM_OPTIONS = ['CHUNKSIZE', 'INGESTRATE', 'MAXBATCHSIZE', 'MINBATCHSIZE']
+COPY_TO_OPTIONS = ['ENCODING', 'TIMEFORMAT', 'PAGESIZE', 'PAGETIMEOUT']
 
 
 @cqlsh_syntax_completer('copyOption', 'optnames')
 def complete_copy_options(ctxt, cqlsh):
     optnames = map(str.upper, ctxt.get_binding('optnames', ()))
     direction = ctxt.get_binding('dir').upper()
-    opts = COPY_COMMON_OPTIONS - set(optnames)
     if direction == 'FROM':
-        opts += COPY_FROM_OPTIONS
+        opts = set(COPY_COMMON_OPTIONS + COPY_FROM_OPTIONS) - set(optnames)
     elif direction == 'TO':
-        opts += COPY_TO_OPTIONS
+        opts = set(COPY_COMMON_OPTIONS + COPY_TO_OPTIONS) - set(optnames)
     return opts
 
 
