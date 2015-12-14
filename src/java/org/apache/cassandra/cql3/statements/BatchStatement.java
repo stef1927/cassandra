@@ -48,7 +48,7 @@ import static org.apache.cassandra.cql3.statements.RequestValidations.checkFalse
  */
 public class BatchStatement implements CQLStatement
 {
-    public static enum Type
+    public enum Type
     {
         LOGGED, UNLOGGED, COUNTER
     }
@@ -258,7 +258,7 @@ public class BatchStatement implements CQLStatement
     /**
      * Checks batch size to ensure threshold is met. If not, a warning is logged.
      *
-     * @param updates batch's mutations.
+     * @param updates - the batch mutations.
      */
     public static void verifyBatchSize(Iterable<PartitionUpdate> updates) throws InvalidRequestException
     {

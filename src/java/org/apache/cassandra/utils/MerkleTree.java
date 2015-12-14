@@ -336,18 +336,17 @@ public class MerkleTree implements Serializable
             // else: node.
 
             Inner node = (Inner) hashable;
+            depth = inc(depth);
             if (Range.contains(pleft, node.token, t))
-            // left child contains token
-            {
+            { // left child contains token
                 hashable = node.lchild;
                 pright = node.token;
-                depth = inc(depth);
-                continue;
             }
-            // else: right child contains token
-            hashable = node.rchild;
-            pleft = node.token;
-            depth = inc(depth);
+            else
+            { // else: right child contains token
+                hashable = node.rchild;
+                pleft = node.token;
+            }
         }
     }
 
@@ -426,8 +425,8 @@ public class MerkleTree implements Serializable
             // else: node.
 
             Inner node = (Inner) current;
-            Range<Token> leftRange = new Range<Token>(activeRange.left, node.token);
-            Range<Token> rightRange = new Range<Token>(node.token, activeRange.right);
+            Range<Token> leftRange = new Range<>(activeRange.left, node.token);
+            Range<Token> rightRange = new Range<>(node.token, activeRange.right);
 
             if (find.contains(activeRange))
                 // this node is fully contained in the range
@@ -436,19 +435,19 @@ public class MerkleTree implements Serializable
             // else: one of our children contains the range
 
             if (leftRange.contains(find))
-            // left child contains/matches the range
-            {
+            { // left child contains/matches the range
                 current = node.lchild;
                 activeRange = leftRange;
             }
             else if (rightRange.contains(find))
-            // right child contains/matches the range
-            {
+            { // right child contains/matches the range
                 current = node.rchild;
                 activeRange = rightRange;
             }
             else
+            {
                 throw new StopRecursion.BadRange();
+            }
         }
     }
 

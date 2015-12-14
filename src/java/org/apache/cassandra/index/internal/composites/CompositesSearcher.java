@@ -21,9 +21,6 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.filter.ClusteringIndexNamesFilter;
@@ -41,8 +38,6 @@ import org.apache.cassandra.utils.concurrent.OpOrder;
 
 public class CompositesSearcher extends CassandraIndexSearcher
 {
-    private static final Logger logger = LoggerFactory.getLogger(CompositesSearcher.class);
-
     public CompositesSearcher(ReadCommand command,
                               RowFilter.Expression expression,
                               CassandraIndex index)

@@ -64,7 +64,7 @@ public class CacheService implements CacheServiceMBean
 
     public static final String MBEAN_NAME = "org.apache.cassandra.db:type=Caches";
 
-    public static enum CacheType
+    public enum CacheType
     {
         KEY_CACHE("KeyCache"),
         ROW_CACHE("RowCache"),
@@ -72,7 +72,7 @@ public class CacheService implements CacheServiceMBean
 
         private final String name;
 
-        private CacheType(String typeName)
+        CacheType(String typeName)
         {
             name = typeName;
         }
