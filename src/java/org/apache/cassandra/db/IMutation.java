@@ -25,6 +25,7 @@ import org.apache.cassandra.db.partitions.PartitionUpdate;
 
 public interface IMutation
 {
+    public void apply();
     public String getKeyspaceName();
     public Collection<UUID> getColumnFamilyIds();
     public DecoratedKey key();

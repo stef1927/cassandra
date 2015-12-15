@@ -83,12 +83,6 @@ public abstract class SchemaStatement extends Operation
         return args;
     }
 
-    @Override
-    public void run(SimpleClient client) throws IOException
-    {
-        throw new UnsupportedOperationException();
-    }
-
     abstract class Runner implements RunOp
     {
         int partitionCount;

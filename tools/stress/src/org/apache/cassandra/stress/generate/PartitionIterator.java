@@ -724,31 +724,35 @@ public abstract class PartitionIterator implements Iterator<Row>
     // any children of this child
     static long seed(Object object, AbstractType type, long seed)
     {
-        if (object instanceof ByteBuffer)
+        while (true)
         {
-            ByteBuffer buf = (ByteBuffer) object;
-            for (int i = buf.position() ; i < buf.limit() ; i++)
-                seed = (31 * seed) + buf.get(i);
-            return seed;
-        }
-        else if (object instanceof String)
-        {
-            String str = (String) object;
-            for (int i = 0 ; i < str.length() ; i++)
-                seed = (31 * seed) + str.charAt(i);
-            return seed;
-        }
-        else if (object instanceof Number)
-        {
-            return (seed * 31) + ((Number) object).longValue();
-        }
-        else if (object instanceof UUID)
-        {
-            return seed * 31 + (((UUID) object).getLeastSignificantBits() ^ ((UUID) object).getMostSignificantBits());
-        }
-        else
-        {
-            return seed(type.decompose(object), BytesType.instance, seed);
+            if (object instanceof ByteBuffer)
+            {
+                ByteBuffer buf = (ByteBuffer) object;
+                for (int i = buf.position(); i < buf.limit(); i++)
+                    seed = (31 * seed) + buf.get(i);
+                return seed;
+            }
+            else if (object instanceof String)
+            {
+                String str = (String) object;
+                for (int i = 0; i < str.length(); i++)
+                    seed = (31 * seed) + str.charAt(i);
+                return seed;
+            }
+            else if (object instanceof Number)
+            {
+                return (seed * 31) + ((Number) object).longValue();
+            }
+            else if (object instanceof UUID)
+            {
+                return seed * 31 + (((UUID) object).getLeastSignificantBits() ^ ((UUID) object).getMostSignificantBits());
+            }
+            else
+            {
+                object = type.decompose(object);
+                type = BytesType.instance;
+            }
         }
     }
 

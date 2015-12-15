@@ -57,12 +57,6 @@ public class ValidatingSchemaQuery extends Operation
     final int[] argumentIndex;
     final Object[] bindBuffer;
 
-    @Override
-    public void run(SimpleClient client) throws IOException
-    {
-        throw new UnsupportedOperationException();
-    }
-
     private ValidatingSchemaQuery(Timer timer, StressSettings settings, PartitionGenerator generator, SeedManager seedManager, ValidatingStatement[] statements, ConsistencyLevel cl, int clusteringComponents)
     {
         super(timer, settings, new DataSpec(generator, seedManager, new DistributionFixed(1), settings.insert.rowPopulationRatio.get(), 1));

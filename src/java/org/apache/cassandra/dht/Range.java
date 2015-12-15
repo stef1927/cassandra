@@ -186,9 +186,8 @@ public class Range<T extends RingPosition<T>> extends AbstractBounds<T> implemen
                    ? intersectionBothWrapping(this, that)
                    : intersectionBothWrapping(that, this);
         }
-        if (thiswraps && !thatwraps)
+        if (thiswraps) // thatwraps is always false
             return intersectionOneWrapping(this, that);
-        assert (!thiswraps && thatwraps);
         return intersectionOneWrapping(that, this);
     }
 

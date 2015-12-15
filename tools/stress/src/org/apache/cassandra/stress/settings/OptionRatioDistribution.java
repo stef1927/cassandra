@@ -83,14 +83,18 @@ public class OptionRatioDistribution extends Option
 
     public RatioDistributionFactory get()
     {
-        if (delegate.setByUser())
-            return new DelegateFactory(delegate.get(), divisor);
-        if (defaultSpec == null)
-            return null;
-        OptionRatioDistribution sub = new OptionRatioDistribution("", null, null, true);
-        if (!sub.accept(defaultSpec))
-            throw new IllegalStateException("Invalid default spec: " + defaultSpec);
-        return sub.get();
+        OptionRatioDistribution current = this;
+        while (true)
+        {
+            if (current.delegate.setByUser())
+                return new DelegateFactory(current.delegate.get(), current.divisor);
+            if (current.defaultSpec == null)
+                return null;
+            OptionRatioDistribution sub = new OptionRatioDistribution("", null, null, true);
+            if (!sub.accept(current.defaultSpec))
+                throw new IllegalStateException("Invalid default spec: " + current.defaultSpec);
+            current = sub;
+        }
     }
 
     @Override
