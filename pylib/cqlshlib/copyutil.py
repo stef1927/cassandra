@@ -77,10 +77,10 @@ def parse_options(shell, opts):
     csv_options['dtformats'] = opts.pop('timeformat', shell.display_time_format)
     csv_options['float_precision'] = shell.display_float_precision
     csv_options['chunksize'] = int(opts.pop('chunksize', 1000))
-    csv_options['ingestrate'] = int(opts.pop('ingestrate', 50000))
+    csv_options['ingestrate'] = int(opts.pop('ingestrate', 100000))
     csv_options['maxbatchsize'] = int(opts.pop('maxbatchsize', 20))
     csv_options['minbatchsize'] = int(opts.pop('minbatchsize', 2))
-    csv_options['reportfrequency'] = int(opts.pop('reportfrequency', 10000))
+    csv_options['reportfrequency'] = float(opts.pop('reportfrequency', 0.25))
 
     return csv_options, dialect_options, opts
 
@@ -286,7 +286,7 @@ class ExportTask(CopyTask):
         """
         shell = self.shell
         processes = self.processes
-        meter = RateMeter(self.csv_options['reportfrequency'])
+        meter = RateMeter(update_interval=self.csv_options['reportfrequency'])
         total_requests = len(ranges)
         max_attempts = self.csv_options['maxattempts']
 
@@ -365,16 +365,14 @@ class ImportTask(CopyTask):
                           csv_options, dialect_options, protocol_version, config_file)
 
         self.num_processes = get_num_processes(cap=4)
-        self.max_requests = csv_options['maxrequests']
         self.chunk_size = csv_options['chunksize']
         self.ingest_rate = csv_options['ingestrate']
-        self.report_frequency = csv_options['reportfrequency']
         self.max_attempts = csv_options['maxattempts']
         self.header = self.csv_options['header']
         self.table_meta = self.shell.get_table_meta(self.ks, self.cf)
         self.batch_id = 0
-        self.receive_meter = RateMeter(self.report_frequency)
-        self.send_meter = RateMeter(self.report_frequency, log=False)
+        self.receive_meter = RateMeter(update_interval=csv_options['reportfrequency'])
+        self.send_meter = RateMeter(update_interval=1, log=False)
         self.retries = deque([])
         self.failed = 0
         self.succeeded = 0
@@ -430,7 +428,7 @@ class ImportTask(CopyTask):
         """
         while (self.has_more_to_send(reader) or self.has_more_to_receive()) and self.all_processes_running():
             if self.has_more_to_send(reader):
-                if self.send_meter.current_rate <= self.ingest_rate:
+                if self.send_meter.current_record <= self.ingest_rate:
                     self.send_batches(reader)
                 else:
                     self.send_meter.maybe_update()
@@ -481,14 +479,13 @@ class ImportTask(CopyTask):
 
     def send_batches(self, reader):
         """
-        Send max_requests*num_processes batches to the queue. In the export case we queue
-        everything and let the worker processes throttle, here we throttle in the parent
-        process because of memory usage.
+        Send batches to the queue until we have exceeded the ingest rate. In the export case we queue
+        everything and let the worker processes throttle using max_requests, here we throttle
+        in the parent process because of memory usage concerns.
 
         When we have finished reading the csv file, then send any retries.
         """
-        num_requests = self.max_requests * len(self.processes)
-        for _ in xrange(num_requests):
+        while self.send_meter.current_record <= self.ingest_rate:
             if not reader.exhausted:
                 rows = reader.read_rows()
                 if rows:
@@ -1064,8 +1061,6 @@ class ImportProcess(ChildProcess):
         self.max_attempts = csv_options['maxattempts']
         self.min_batch_size = csv_options['minbatchsize']
         self.max_batch_size = csv_options['maxbatchsize']
-        # each process has a randomized preferred replica index
-        self.replica_idx = random.randint(0, 100)
         self._session = None
 
     @property
@@ -1229,18 +1224,18 @@ class ImportProcess(ChildProcess):
         create a sub-batch with that partition key value, else
         aggregate all remaining rows in a single 'left-overs' batch
         """
-        rows_by_replica = defaultdict(list)
+        rows_by_pk = defaultdict(list)
 
         for row in batch['rows']:
-            replica = self.get_replica(conv.get_row_partition_key_values(row))
-            rows_by_replica[replica].append(row)
+            pk = conv.get_row_partition_key_values(row)
+            rows_by_pk[pk].append(row)
 
         ret = dict()
         remaining_rows = []
 
-        for replica, rows in rows_by_replica.items():
+        for pk, rows in rows_by_pk.items():
             if len(rows) >= self.min_batch_size:
-                ret[replica] = self.batches(rows, batch)
+                ret[pk] = self.batches(rows, batch)
             else:
                 remaining_rows.extend(rows)
 
@@ -1248,21 +1243,6 @@ class ImportProcess(ChildProcess):
             ret[self.hostname] = self.batches(remaining_rows, batch)
 
         return ret.itervalues()
-
-    def get_replica(self, pk):
-        """
-        Return a replica for this primary key or the host we are already connected to
-        if there are no local replicas that are up. To chose a replica we use a randomized
-        index, self.replica_idx, modulo the length of the replicas available.
-        """
-        metadata = self.session.cluster.metadata
-        local_dc = metadata.get_host(self.hostname).datacenter
-        replicas = filter(lambda r: r.is_up and r.datacenter == local_dc, metadata.get_replicas(self.ks, pk))
-        if replicas:
-            idx = self.replica_idx % len(replicas)
-            return replicas[idx].address
-        else:
-            return self.hostname
 
     def batches(self, rows, batch):
         for i in xrange(0, len(rows), self.max_batch_size):
@@ -1282,28 +1262,24 @@ class ImportProcess(ChildProcess):
 
 class RateMeter(object):
 
-    def __init__(self, update_threshold, log=True):
-        self.log_threshold = update_threshold  # number of records after which we log
-        self.log = log
-        self.last_checkpoint_time = time.time()  # last time we logged
+    def __init__(self, update_interval=0.25, log=True):
+        self.log = log  # true if we should log
+        self.update_interval = update_interval  # how often we update in seconds
+        self.start_time = time.time()  # the start time
+        self.last_checkpoint_time = self.start_time  # last time we logged
         self.current_rate = 0.0  # rows per second
         self.current_record = 0  # number of records since we last updated
         self.total_records = 0   # total number of records
-        self.num_logged_messages = 0  # number of messages already logged
 
     def increment(self, n=1):
         self.current_record += n
         self.maybe_update()
-        if self.should_log():
-            self.log_message()
 
     def maybe_update(self):
         new_checkpoint_time = time.time()
-        if new_checkpoint_time - self.last_checkpoint_time >= 0.001:  # 1 millisecond
+        if new_checkpoint_time - self.last_checkpoint_time >= self.update_interval:
             self.update(new_checkpoint_time)
-
-    def should_log(self):
-        return self.log and (self.total_records / self.log_threshold) > self.num_logged_messages
+            self.log_message()
 
     def update(self, new_checkpoint_time):
         time_difference = new_checkpoint_time - self.last_checkpoint_time
@@ -1316,19 +1292,27 @@ class RateMeter(object):
 
     def get_new_rate(self, new_rate):
         """
-         return the previous rate averaged with the new rate to smooth a bit
+         return the rate of the last period: this is the new rate but
+         averaged with the last rate to smooth a bit
         """
         if self.current_rate == 0.0:
             return new_rate
         else:
             return (self.current_rate + new_rate) / 2.0
 
+    def get_avg_rate(self):
+        """
+         return the average rate since we started measuring
+        """
+        time_difference = time.time() - self.start_time
+        return self.total_records / time_difference if time_difference >= 1e-09 else 0
+
     def log_message(self):
         if self.log:
-            output = 'Processed %d rows; Written: %f rows/s\r' % (self.total_records, self.current_rate,)
+            output = 'Processed: %d rows; Rate: %7.0f rows/s; Avg. rage: %7.0f rows/s\r' % \
+                     (self.total_records, self.current_rate, self.get_avg_rate())
             sys.stdout.write(output)
             sys.stdout.flush()
-            self.num_logged_messages += 1
 
     def get_total_records(self):
         self.update(time.time())
