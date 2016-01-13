@@ -1302,7 +1302,8 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
 
     /**
      *  Do a single 'shadow' round of gossip, where we do not modify any state
-     *  Only used when replacing a node, to get and assume its states
+     *  Only used when preparing to join the ring, to either replace a node or
+     *  check for endpoint collisions.
      */
     public void doShadowRound()
     {
@@ -1335,7 +1336,14 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
 
                 slept += 1000;
                 if (slept > StorageService.RING_DELAY)
-                    throw new RuntimeException("Unable to gossip with any seeds");
+                {
+                    if (StorageService.instance.shouldBootstrap())
+                        throw new RuntimeException("Unable to gossip with any seeds");
+
+                    logger.warn("Unable to gossip with any seeds but continuing since we should not bootstrap");
+                    inShadowRound = false;
+                    break;
+                }
             }
         }
         catch (InterruptedException wtf)

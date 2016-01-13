@@ -732,9 +732,14 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             WindowsTimer.endTimerPeriod(DatabaseDescriptor.getWindowsTimerInterval());
     }
 
-    private boolean shouldBootstrap()
+    public boolean shouldBootstrap()
     {
-        return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
+        return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !isSeed();
+    }
+
+    public boolean isSeed()
+    {
+        return DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
     }
 
     private void prepareToJoin() throws ConfigurationException
@@ -757,7 +762,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                 appStates.put(ApplicationState.TOKENS, valueFactory.tokens(bootstrapTokens));
                 appStates.put(ApplicationState.STATUS, valueFactory.hibernate(true));
             }
-            else if (shouldBootstrap())
+            else
             {
                 checkForEndpointCollision();
             }
