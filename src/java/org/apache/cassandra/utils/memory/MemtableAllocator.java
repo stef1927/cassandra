@@ -18,10 +18,13 @@
  */
 package org.apache.cassandra.utils.memory;
 
+import java.util.Iterator;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.rows.*;
+import org.apache.cassandra.db.transform.Transformation;
+import org.apache.cassandra.utils.SearchIterator;
 import org.apache.cassandra.utils.concurrent.OpOrder;
 import org.apache.cassandra.utils.concurrent.WaitQueue;
 
@@ -62,6 +65,7 @@ public abstract class MemtableAllocator
     public abstract DecoratedKey clone(DecoratedKey key, OpOrder.Group opGroup);
     public abstract DataReclaimer reclaimer();
     public abstract boolean allocatingOnHeap();
+    public abstract EnsureOnHeap ensureOnHeap();
 
     public SubAllocator onHeap()
     {
@@ -250,5 +254,6 @@ public abstract class MemtableAllocator
         private static final AtomicLongFieldUpdater<SubAllocator> ownsUpdater = AtomicLongFieldUpdater.newUpdater(SubAllocator.class, "owns");
         private static final AtomicLongFieldUpdater<SubAllocator> reclaimingUpdater = AtomicLongFieldUpdater.newUpdater(SubAllocator.class, "reclaiming");
     }
+
 
 }

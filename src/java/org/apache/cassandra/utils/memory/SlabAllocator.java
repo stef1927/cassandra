@@ -61,16 +61,23 @@ public class SlabAllocator extends MemtableBufferAllocator
     private final ConcurrentLinkedQueue<Region> offHeapRegions = new ConcurrentLinkedQueue<>();
     private AtomicLong unslabbedSize = new AtomicLong(0);
     private final boolean allocateOnHeapOnly;
+    private final EnsureOnHeap ensureOnHeap;
 
     SlabAllocator(SubAllocator onHeap, SubAllocator offHeap, boolean allocateOnHeapOnly)
     {
         super(onHeap, offHeap);
         this.allocateOnHeapOnly = allocateOnHeapOnly;
+        this.ensureOnHeap = allocateOnHeapOnly ? new EnsureOnHeap.NoOp() : new EnsureOnHeap.CloneToHeap();
     }
 
     public boolean allocatingOnHeap()
     {
         return allocateOnHeapOnly;
+    }
+
+    public EnsureOnHeap ensureOnHeap()
+    {
+        return ensureOnHeap;
     }
 
     public ByteBuffer allocate(int size)

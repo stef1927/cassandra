@@ -72,7 +72,7 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
 
     public Row staticRow()
     {
-        return holder().staticRow.onHeapCopy();
+        return holder().staticRow;
     }
 
     public boolean isEmpty()
@@ -127,7 +127,7 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
             return Rows.EMPTY_STATIC_ROW;
 
         Row row = current.staticRow.filter(columns, partitionDeletion, setActiveDeletionToRow, metadata);
-        return row == null ? Rows.EMPTY_STATIC_ROW : row.onHeapCopy();
+        return row == null ? Rows.EMPTY_STATIC_ROW : row;
     }
 
     public SearchIterator<Clustering, Row> searchIterator(final ColumnFilter columns, final boolean reversed)
@@ -162,7 +162,7 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
                 if (row == null)
                     return activeDeletion.isLive() ? null : BTreeRow.emptyDeletedRow(clustering, Row.Deletion.regular(activeDeletion));
 
-                return row.onHeapCopy().filter(columns, activeDeletion, true, metadata);
+                return row.filter(columns, activeDeletion, true, metadata);
             }
         };
     }
@@ -174,7 +174,7 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
             protected Row computeNext()
             {
                 if (iter.hasNext())
-                    return iter.next().onHeapCopy();
+                    return iter.next();
 
                 return endOfData();
             }
@@ -310,7 +310,7 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
         {
             Unfiltered unfiltered = iterator.next();
             if (unfiltered.kind() == Unfiltered.Kind.ROW)
-                builder.add(((Row)(unfiltered)).onHeapCopy());
+                builder.add((Row)unfiltered);
             else
                 deletionBuilder.add((RangeTombstoneMarker)unfiltered);
         }
@@ -318,7 +318,7 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
         if (reversed)
             builder.reverse();
 
-        return new Holder(columns, builder.build(), deletionBuilder.build(), iterator.staticRow().onHeapCopy(), iterator.stats());
+        return new Holder(columns, builder.build(), deletionBuilder.build(), iterator.staticRow(), iterator.stats());
     }
 
     // Note that when building with a RowIterator, deletion will generally be LIVE, but we allow to pass it nonetheless because PartitionUpdate
@@ -332,12 +332,12 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
         BTree.Builder<Row> builder = BTree.builder(metadata.comparator, initialRowCapacity);
         builder.auto(false);
         while (rows.hasNext())
-            builder.add(rows.next().onHeapCopy());
+            builder.add(rows.next());
 
         if (reversed)
             builder.reverse();
 
-        Row staticRow = rows.staticRow().onHeapCopy();
+        Row staticRow = rows.staticRow();
         Object[] tree = builder.build();
         EncodingStats stats = buildEncodingStats ? EncodingStats.Collector.collect(staticRow, BTree.iterator(tree), deletion)
                                                  : EncodingStats.NO_STATS;
@@ -380,7 +380,6 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
         if (BTree.isEmpty(tree))
             return null;
 
-        Row ret = BTree.findByIndex(tree, BTree.size(tree) - 1);
-        return ret != null ? ret.onHeapCopy() : ret;
+        return BTree.findByIndex(tree, BTree.size(tree) - 1);
     }
 }

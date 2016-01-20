@@ -18,20 +18,17 @@
 package org.apache.cassandra.utils.memory;
 
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.apache.cassandra.db.Clustering;
-import org.apache.cassandra.db.DecoratedKey;
-import org.apache.cassandra.db.NativeClustering;
-import org.apache.cassandra.db.NativeDecoratedKey;
-import org.apache.cassandra.db.rows.BTreeRow;
-import org.apache.cassandra.db.rows.Cell;
-import org.apache.cassandra.db.rows.NativeCell;
-import org.apache.cassandra.db.rows.Row;
+import org.apache.cassandra.db.*;
+import org.apache.cassandra.db.rows.*;
+import org.apache.cassandra.db.transform.Transformation;
+import org.apache.cassandra.utils.SearchIterator;
 import org.apache.cassandra.utils.concurrent.OpOrder;
 
 public class NativeAllocator extends MemtableAllocator
@@ -51,6 +48,7 @@ public class NativeAllocator extends MemtableAllocator
 
     private final AtomicReference<Region> currentRegion = new AtomicReference<>();
     private final ConcurrentLinkedQueue<Region> regions = new ConcurrentLinkedQueue<>();
+    private final EnsureOnHeap.CloneToHeap cloneToHeap = new EnsureOnHeap.CloneToHeap();
 
     protected NativeAllocator(NativePool pool)
     {
@@ -85,7 +83,7 @@ public class NativeAllocator extends MemtableAllocator
         @Override
         public Row buildRow(Object[] btree, int minDeletionTime)
         {
-            return BTreeRow.createOffHeap(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime);
+            return BTreeRow.create(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime);
         }
     }
 
@@ -108,6 +106,11 @@ public class NativeAllocator extends MemtableAllocator
     public boolean allocatingOnHeap()
     {
         return false;
+    }
+
+    public EnsureOnHeap ensureOnHeap()
+    {
+        return cloneToHeap;
     }
 
     public long allocate(int size, OpOrder.Group opGroup)

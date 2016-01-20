@@ -222,18 +222,6 @@ public interface Row extends Unfiltered, Collection<ColumnData>
     public String toString(CFMetaData metadata, boolean fullDetails);
 
     /**
-     * If required return a copy of this object on the heap. This method
-     * does nothing for implementations already on the heap but for native-memory
-     * implementations it will make a deep copy on the heap. @see BTreeRow.onHeapCopy
-     *
-     * @return this object if already on the heap or a deep copy of it on the heap
-     */
-    default Row onHeapCopy()
-    {
-        return this;
-    }
-
-    /**
      * A row deletion/tombstone.
      * <p>
      * A row deletion mostly consists of the time of said deletion, but there is 2 variants: shadowable

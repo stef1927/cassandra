@@ -63,16 +63,11 @@ public class BTreeRow extends AbstractRow
     // no expiring cells, this will be Integer.MAX_VALUE;
     private final int minLocalDeletionTime;
 
-    // This is true when this row contains some items (clustering or cells or both) whose memory is off heap
-    // @see NativeAllocator, NativeClustering and NativeCell
-    private final boolean offHeap;
-
     private BTreeRow(Clustering clustering,
                      LivenessInfo primaryKeyLivenessInfo,
                      Deletion deletion,
                      Object[] btree,
-                     int minLocalDeletionTime,
-                     boolean offHeap)
+                     int minLocalDeletionTime)
     {
         assert !deletion.isShadowedBy(primaryKeyLivenessInfo);
         this.clustering = clustering;
@@ -80,12 +75,11 @@ public class BTreeRow extends AbstractRow
         this.deletion = deletion;
         this.btree = btree;
         this.minLocalDeletionTime = minLocalDeletionTime;
-        this.offHeap = offHeap;
     }
 
     private BTreeRow(Clustering clustering, Object[] btree, int minLocalDeletionTime)
     {
-        this(clustering, LivenessInfo.EMPTY, Deletion.LIVE, btree, minLocalDeletionTime, false);
+        this(clustering, LivenessInfo.EMPTY, Deletion.LIVE, btree, minLocalDeletionTime);
     }
 
     // Note that it's often easier/safer to use the sortedBuilder/unsortedBuilder or one of the static creation method below. Only directly useful in a small amount of cases.
@@ -110,16 +104,7 @@ public class BTreeRow extends AbstractRow
                                   Object[] btree,
                                   int minDeletionTime)
     {
-        return new BTreeRow(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime, false);
-    }
-
-    public static BTreeRow createOffHeap(Clustering clustering,
-                                         LivenessInfo primaryKeyLivenessInfo,
-                                         Deletion deletion,
-                                         Object[] btree,
-                                         int minDeletionTime)
-    {
-        return new BTreeRow(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime, true);
+        return new BTreeRow(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime);
     }
 
     public static BTreeRow emptyRow(Clustering clustering)
@@ -139,7 +124,7 @@ public class BTreeRow extends AbstractRow
     public static BTreeRow emptyDeletedRow(Clustering clustering, Deletion deletion)
     {
         assert !deletion.isLive();
-        return new BTreeRow(clustering, LivenessInfo.EMPTY, deletion, BTree.empty(), Integer.MIN_VALUE, false);
+        return new BTreeRow(clustering, LivenessInfo.EMPTY, deletion, BTree.empty(), Integer.MIN_VALUE);
     }
 
     public static BTreeRow noCellLiveRow(Clustering clustering, LivenessInfo primaryKeyLivenessInfo)
@@ -149,8 +134,7 @@ public class BTreeRow extends AbstractRow
                             primaryKeyLivenessInfo,
                             Deletion.LIVE,
                             BTree.empty(),
-                            minDeletionTime(primaryKeyLivenessInfo),
-                            false);
+                            minDeletionTime(primaryKeyLivenessInfo));
     }
 
     private static int minDeletionTime(Cell cell)
@@ -339,12 +323,6 @@ public class BTreeRow extends AbstractRow
     public boolean hasDeletion(int nowInSec)
     {
         return nowInSec >= minLocalDeletionTime;
-    }
-
-    @Override
-    public Row onHeapCopy()
-    {
-        return offHeap ? Rows.copy(this, HeapAllocator.instance.cloningBTreeRowBuilder()).build() : this;
     }
 
     /**

@@ -76,9 +76,7 @@ public abstract class AbstractAllocator
 
         public Row buildRow(Object[] btree, int minDeletionTime)
         {
-            return allocator.allocatingOnHeap()
-                   ? BTreeRow.create(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime)
-                   : BTreeRow.createOffHeap(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime);
+            return BTreeRow.create(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime);
         }
     }
 }
