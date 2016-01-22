@@ -110,23 +110,33 @@ public class NativeCell extends AbstractCell
 
     public long timestamp()
     {
-        return peer == 0 ? 0 : MemoryUtil.getLong(peer + TIMESTAMP);
+        long peer = this.peer;
+        if (peer == 0)
+            throw new IllegalStateException();
+        return MemoryUtil.getLong(peer + TIMESTAMP);
     }
 
     public int ttl()
     {
-        return peer == 0 ? 0 : MemoryUtil.getInt(peer + TTL);
+        long peer = this.peer;
+        if (peer == 0)
+            throw new IllegalStateException();
+        return MemoryUtil.getInt(peer + TTL);
     }
 
     public int localDeletionTime()
     {
-        return peer == 0 ? 0 : MemoryUtil.getInt(peer + DELETION);
+        long peer = this.peer;
+        if (peer == 0)
+            throw new IllegalStateException();
+        return MemoryUtil.getInt(peer + DELETION);
     }
 
     public ByteBuffer value()
     {
+        long peer = this.peer;
         if (peer == 0)
-            return EMPTY_BUFFER;
+            throw new IllegalStateException();
 
         int length = MemoryUtil.getInt(peer + LENGTH);
         return MemoryUtil.getByteBuffer(peer + VALUE, length, ByteOrder.BIG_ENDIAN);
@@ -134,7 +144,11 @@ public class NativeCell extends AbstractCell
 
     public CellPath path()
     {
-        if (peer == 0 || MemoryUtil.getByte(peer+ HAS_CELLPATH) == 0)
+        long peer = this.peer;
+        if (peer == 0)
+            throw new IllegalStateException();
+
+        if (MemoryUtil.getByte(peer+ HAS_CELLPATH) == 0)
             return null;
 
         long offset = peer + VALUE + MemoryUtil.getInt(peer + LENGTH);
