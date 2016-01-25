@@ -5,6 +5,7 @@ import java.util.Iterator;
 import org.apache.cassandra.db.BufferDecoratedKey;
 import org.apache.cassandra.db.Clustering;
 import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.db.DeletionInfo;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.db.transform.Transformation;
 import org.apache.cassandra.utils.SearchIterator;
@@ -15,6 +16,7 @@ public abstract class EnsureOnHeap extends Transformation
     public abstract UnfilteredRowIterator applyToPartition(UnfilteredRowIterator partition);
     public abstract SearchIterator<Clustering, Row> applyToPartition(SearchIterator<Clustering, Row> partition);
     public abstract Iterator<Row> applyToPartition(Iterator<Row> partition);
+    public abstract DeletionInfo applyToDeletionInfo(DeletionInfo deletionInfo);
     public abstract Row applyToRow(Row row);
     public abstract Row applyToStatic(Row row);
     public abstract RangeTombstoneMarker applyToMarker(RangeTombstoneMarker marker);
@@ -91,6 +93,11 @@ public abstract class EnsureOnHeap extends Transformation
                 }
             };
         }
+
+        public DeletionInfo applyToDeletionInfo(DeletionInfo deletionInfo)
+        {
+            return deletionInfo.copy(HeapAllocator.instance);
+        }
     }
 
     static class NoOp extends EnsureOnHeap
@@ -133,6 +140,11 @@ public abstract class EnsureOnHeap extends Transformation
         public Iterator<Row> applyToPartition(Iterator<Row> partition)
         {
             return partition;
+        }
+
+        public DeletionInfo applyToDeletionInfo(DeletionInfo deletionInfo)
+        {
+            return deletionInfo;
         }
     }
 }

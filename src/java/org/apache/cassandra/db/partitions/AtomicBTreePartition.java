@@ -185,6 +185,12 @@ public class AtomicBTreePartition extends AbstractBTreePartition
     }
 
     @Override
+    public DeletionInfo deletionInfo()
+    {
+        return allocator.ensureOnHeap().applyToDeletionInfo(super.deletionInfo());
+    }
+
+    @Override
     public Row staticRow()
     {
         return allocator.ensureOnHeap().applyToStatic(super.staticRow());

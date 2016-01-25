@@ -29,7 +29,6 @@ import org.apache.cassandra.utils.memory.NativeAllocator;
 public class NativeCell extends AbstractCell
 {
     private static final long EMPTY_SIZE = ObjectSizes.measure(new NativeCell());
-    private static final ByteBuffer EMPTY_BUFFER = ByteBuffer.allocateDirect(0);
 
     private static final long HAS_CELLPATH = 0;
     private static final long TIMESTAMP = 1;
@@ -110,7 +109,6 @@ public class NativeCell extends AbstractCell
 
     public long timestamp()
     {
-        long peer = this.peer;
         if (peer == 0)
             throw new IllegalStateException();
         return MemoryUtil.getLong(peer + TIMESTAMP);
@@ -118,7 +116,6 @@ public class NativeCell extends AbstractCell
 
     public int ttl()
     {
-        long peer = this.peer;
         if (peer == 0)
             throw new IllegalStateException();
         return MemoryUtil.getInt(peer + TTL);
@@ -126,7 +123,6 @@ public class NativeCell extends AbstractCell
 
     public int localDeletionTime()
     {
-        long peer = this.peer;
         if (peer == 0)
             throw new IllegalStateException();
         return MemoryUtil.getInt(peer + DELETION);
@@ -134,7 +130,6 @@ public class NativeCell extends AbstractCell
 
     public ByteBuffer value()
     {
-        long peer = this.peer;
         if (peer == 0)
             throw new IllegalStateException();
 
@@ -144,7 +139,6 @@ public class NativeCell extends AbstractCell
 
     public CellPath path()
     {
-        long peer = this.peer;
         if (peer == 0)
             throw new IllegalStateException();
 
