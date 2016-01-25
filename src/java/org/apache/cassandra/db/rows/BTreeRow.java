@@ -38,7 +38,6 @@ import org.apache.cassandra.utils.ObjectSizes;
 import org.apache.cassandra.utils.btree.BTree;
 import org.apache.cassandra.utils.btree.BTreeSearchIterator;
 import org.apache.cassandra.utils.btree.UpdateFunction;
-import org.apache.cassandra.utils.memory.HeapAllocator;
 
 /**
  * Immutable implementation of a Row object.
@@ -591,7 +590,7 @@ public class BTreeRow extends AbstractRow
                 return new ComplexColumnData(column, btree, deletion);
             }
 
-        };
+        }
         protected Clustering clustering;
         protected LivenessInfo primaryKeyLivenessInfo = LivenessInfo.EMPTY;
         protected Deletion deletion = Deletion.LIVE;
@@ -663,11 +662,6 @@ public class BTreeRow extends AbstractRow
             hasComplex = true;
         }
 
-        public Row buildRow(Object[] btree, int minDeletionTime)
-        {
-            return BTreeRow.create(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime);
-        }
-
         public Row build()
         {
             if (!isSorted)
@@ -682,7 +676,7 @@ public class BTreeRow extends AbstractRow
                 deletion = Deletion.LIVE;
 
             int minDeletionTime = minDeletionTime(btree, primaryKeyLivenessInfo, deletion.time());
-            Row row = buildRow(btree, minDeletionTime);
+            Row row = BTreeRow.create(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime);
             reset();
             return row;
         }

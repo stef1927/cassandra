@@ -18,7 +18,6 @@
 package org.apache.cassandra.utils.memory;
 
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Semaphore;
@@ -27,8 +26,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.rows.*;
-import org.apache.cassandra.db.transform.Transformation;
-import org.apache.cassandra.utils.SearchIterator;
 import org.apache.cassandra.utils.concurrent.OpOrder;
 
 public class NativeAllocator extends MemtableAllocator
@@ -79,12 +76,6 @@ public class NativeAllocator extends MemtableAllocator
         {
             super.addCell(new NativeCell(allocator, writeOp, cell));
         }
-
-        @Override
-        public Row buildRow(Object[] btree, int minDeletionTime)
-        {
-            return BTreeRow.create(clustering, primaryKeyLivenessInfo, deletion, btree, minDeletionTime);
-        }
     }
 
     public Row.Builder rowBuilder(OpOrder.Group opGroup)
@@ -101,11 +92,6 @@ public class NativeAllocator extends MemtableAllocator
     public MemtableAllocator.DataReclaimer reclaimer()
     {
         return NO_OP;
-    }
-
-    public boolean allocatingOnHeap()
-    {
-        return false;
     }
 
     public EnsureOnHeap ensureOnHeap()

@@ -29,7 +29,6 @@ import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.filter.ColumnFilter;
 import org.apache.cassandra.db.rows.*;
-import org.apache.cassandra.db.transform.Transformation;
 import org.apache.cassandra.index.transactions.UpdateTransaction;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.ObjectSizes;
@@ -185,51 +184,55 @@ public class AtomicBTreePartition extends AbstractBTreePartition
         }
     }
 
-    public DeletionInfo deletionInfo()
-    {
-        return super.deletionInfo();
-    }
-
+    @Override
     public Row staticRow()
     {
         return allocator.ensureOnHeap().applyToStatic(super.staticRow());
     }
 
+    @Override
     public DecoratedKey partitionKey()
     {
         return allocator.ensureOnHeap().applyToPartitionKey(super.partitionKey());
     }
 
+    @Override
     public Row getRow(Clustering clustering)
     {
         return allocator.ensureOnHeap().applyToRow(super.getRow(clustering));
     }
 
+    @Override
     public Row lastRow()
     {
         return allocator.ensureOnHeap().applyToRow(super.lastRow());
     }
 
+    @Override
     public SearchIterator<Clustering, Row> searchIterator(ColumnFilter columns, boolean reversed)
     {
         return allocator.ensureOnHeap().applyToPartition(super.searchIterator(columns, reversed));
     }
 
+    @Override
     public UnfilteredRowIterator unfilteredIterator(ColumnFilter selection, Slices slices, boolean reversed)
     {
         return allocator.ensureOnHeap().applyToPartition(super.unfilteredIterator(selection, slices, reversed));
     }
 
+    @Override
     public UnfilteredRowIterator unfilteredIterator()
     {
         return allocator.ensureOnHeap().applyToPartition(super.unfilteredIterator());
     }
 
+    @Override
     public UnfilteredRowIterator unfilteredIterator(Holder current, ColumnFilter selection, Slices slices, boolean reversed)
     {
         return allocator.ensureOnHeap().applyToPartition(super.unfilteredIterator(current, selection, slices, reversed));
     }
 
+    @Override
     public Iterator<Row> iterator()
     {
         return allocator.ensureOnHeap().applyToPartition(super.iterator());

@@ -94,7 +94,7 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
 
     public DecoratedKey partitionKey()
     {
-        return partitionKey.onHeapCopy();
+        return partitionKey;
     }
 
     public DeletionTime partitionLevelDeletion()
@@ -167,20 +167,6 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
         };
     }
 
-    private static Iterator<Row> maybeCopied(final Iterator<Row> iter)
-    {
-        return new com.google.common.collect.AbstractIterator<Row>()
-        {
-            protected Row computeNext()
-            {
-                if (iter.hasNext())
-                    return iter.next();
-
-                return endOfData();
-            }
-        };
-    }
-
     public UnfilteredRowIterator unfilteredIterator()
     {
         return unfilteredIterator(ColumnFilter.all(metadata()), Slices.ALL, false);
@@ -220,7 +206,7 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
     {
         return new RowAndDeletionMergeIterator(metadata, partitionKey(), current.deletionInfo.getPartitionDeletion(),
                                                selection, staticRow, reversed, current.stats,
-                                               maybeCopied(rowIter), deleteIter,
+                                               rowIter, deleteIter,
                                                canHaveShadowedData());
     }
 
@@ -228,18 +214,6 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
     {
         final Holder current;
         final ColumnFilter selection;
-
-        private AbstractIterator(ColumnFilter selection, boolean isReversed)
-        {
-            this(AbstractBTreePartition.this.holder(), selection, isReversed);
-        }
-
-        private AbstractIterator(Holder current, ColumnFilter selection, boolean isReversed)
-        {
-            this(current,
-                 AbstractBTreePartition.this.staticRow(current, selection, false),
-                 selection, isReversed);
-        }
 
         private AbstractIterator(Holder current, Row staticRow, ColumnFilter selection, boolean isReversed)
         {
@@ -371,7 +345,7 @@ public abstract class AbstractBTreePartition implements Partition, Iterable<Row>
 
     public Iterator<Row> iterator()
     {
-        return maybeCopied(BTree.<Row>iterator(holder().tree));
+        return BTree.<Row>iterator(holder().tree);
     }
 
     public Row lastRow()

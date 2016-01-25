@@ -56,9 +56,4 @@ public final class ContextAllocator extends AbstractAllocator
     {
         return allocator.allocate(size, opGroup);
     }
-
-    public boolean allocatingOnHeap()
-    {
-        return allocator.allocatingOnHeap();
-    }
 }
