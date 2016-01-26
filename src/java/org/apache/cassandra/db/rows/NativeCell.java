@@ -109,39 +109,27 @@ public class NativeCell extends AbstractCell
 
     public long timestamp()
     {
-        if (peer == 0)
-            throw new IllegalStateException();
         return MemoryUtil.getLong(peer + TIMESTAMP);
     }
 
     public int ttl()
     {
-        if (peer == 0)
-            throw new IllegalStateException();
         return MemoryUtil.getInt(peer + TTL);
     }
 
     public int localDeletionTime()
     {
-        if (peer == 0)
-            throw new IllegalStateException();
         return MemoryUtil.getInt(peer + DELETION);
     }
 
     public ByteBuffer value()
     {
-        if (peer == 0)
-            throw new IllegalStateException();
-
         int length = MemoryUtil.getInt(peer + LENGTH);
         return MemoryUtil.getByteBuffer(peer + VALUE, length, ByteOrder.BIG_ENDIAN);
     }
 
     public CellPath path()
     {
-        if (peer == 0)
-            throw new IllegalStateException();
-
         if (MemoryUtil.getByte(peer+ HAS_CELLPATH) == 0)
             return null;
 

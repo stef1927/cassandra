@@ -46,10 +46,4 @@ public class NativeDecoratedKey extends DecoratedKey
     {
         return MemoryUtil.getByteBuffer(peer + 4, MemoryUtil.getInt(peer), ByteOrder.BIG_ENDIAN);
     }
-
-    @Override
-    public DecoratedKey onHeapCopy()
-    {
-        return new BufferDecoratedKey(getToken(), HeapAllocator.instance.clone(getKey()));
-    }
 }
