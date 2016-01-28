@@ -126,7 +126,7 @@ def get_file_encoding_bomsize(filename):
     else:
         file_encoding, size = "utf-8", 0
 
-    return (file_encoding, size)
+    return file_encoding, size
 
 
 def profile_on():
@@ -135,9 +135,14 @@ def profile_on():
     return pr
 
 
-def profile_off(pr):
+def profile_off(pr, file_name=None):
     pr.disable()
     s = StringIO()
     ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
     ps.print_stats()
-    print s.getvalue()
+    ret = s.getvalue()
+    if file_name:
+        with open(file_name, 'w') as f:
+            print "Writing to %s\n" % (f.name, )
+            f.write(ret)
+    return ret

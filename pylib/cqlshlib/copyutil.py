@@ -35,6 +35,7 @@ from random import randrange
 from StringIO import StringIO
 from threading import Lock
 from uuid import UUID
+from util import profile_on, profile_off
 
 from cassandra.cluster import Cluster
 from cassandra.cqltypes import ReversedType, UserType
@@ -49,6 +50,8 @@ from formatting import format_value_default, EMPTY, get_formatter
 from sslhandling import ssl_settings
 
 CopyOptions = namedtuple('CopyOptions', 'copy dialect unrecognized')
+
+PROFILE_ON = False
 
 
 def safe_normpath(fname):
@@ -631,7 +634,6 @@ class ImportReader(object):
         self.sources = self.get_source(task.fname)
         self.num_sources = 0
         self.current_source = None
-        self.current_reader = None
         self.num_read = 0
 
     def get_source(self, paths):
@@ -668,7 +670,7 @@ class ImportReader(object):
 
     @property
     def exhausted(self):
-        return not self.current_reader
+        return not self.current_source
 
     def next_source(self):
         """
@@ -687,7 +689,6 @@ class ImportReader(object):
         if self.header:
             self.current_source.input.next()
 
-        self.current_reader = csv.reader(self.current_source.input, **self.options.dialect)
         return True
 
     def close_current_source(self):
@@ -700,19 +701,18 @@ class ImportReader(object):
             print
 
         self.current_source = None
-        self.current_reader = None
 
     def close(self):
         self.close_current_source()
 
     def read_rows(self, max_rows):
-        if not self.current_reader:
+        if not self.current_source:
             return []
 
         rows = []
         for i in xrange(min(max_rows, self.chunk_size)):
             try:
-                row = self.current_reader.next()
+                row = self.current_source.input.next()
                 self.num_read += 1
 
                 if 0 <= self.max_rows < self.num_read:
@@ -870,7 +870,12 @@ class ImportTask(CopyTask):
             for process in self.processes:
                 process.start()
 
-            self.import_records()
+            if PROFILE_ON:
+                pr = profile_on()
+                self.import_records()
+                profile_off(pr, file_name='parent_profile_%d.txt' % (os.getpid(),))
+            else:
+                self.import_records()
 
         except Exception, exc:
             shell.printerr(str(exc))
@@ -901,6 +906,13 @@ class ImportTask(CopyTask):
 
             if self.import_errors.max_exceeded() or not self.all_processes_running():
                 break
+
+        for _ in self.processes:
+            self.outmsg.put(None)
+
+        if PROFILE_ON:
+            # allow time for worker processes to write profile results
+            time.sleep(5)
 
         if self.import_errors.num_rows_failed:
             self.shell.printerr("Failed to process %d rows; failed rows written to %s" %
@@ -1650,6 +1662,7 @@ class ImportProcess(ChildProcess):
         self.max_attempts = options.copy['maxattempts']
         self.min_batch_size = options.copy['minbatchsize']
         self.max_batch_size = options.copy['maxbatchsize']
+        self.dialect_options = options.dialect
         self._session = None
 
     @property
@@ -1674,6 +1687,9 @@ class ImportProcess(ChildProcess):
 
     def run(self):
         try:
+            if PROFILE_ON:
+                pr = profile_on()
+
             table_meta = self.session.cluster.metadata.keyspaces[self.ks].tables[self.table]
             is_counter = ("counter" in [table_meta.columns[name].typestring for name in self.valid_columns])
 
@@ -1681,6 +1697,9 @@ class ImportProcess(ChildProcess):
                 self.run_counter(table_meta)
             else:
                 self.run_normal(table_meta)
+
+            if PROFILE_ON:
+                profile_off(pr, file_name='worker_profile_%d.txt' % (os.getpid(),))
 
         except Exception, exc:
             if self.debug:
@@ -1709,6 +1728,9 @@ class ImportProcess(ChildProcess):
 
         while True:
             batch = self.inmsg.get()
+            if batch is None:
+                break
+
             try:
                 for b in self.split_batches(batch, conv):
                     self.send_counter_batch(query, conv, b)
@@ -1733,6 +1755,9 @@ class ImportProcess(ChildProcess):
 
         while True:
             batch = self.inmsg.get()
+            if batch is None:
+                break
+
             try:
                 for b in self.split_batches(batch, conv):
                     self.send_normal_batch(conv, query_statement, b)
@@ -1862,10 +1887,19 @@ class ImportProcess(ChildProcess):
 
         Then batch the left-overs of each replica up to max_batch_size.
         """
+        if not batch['rows']:
+            return
+
         rows_by_pk = defaultdict(list)
         errors = defaultdict(list)
 
-        for row in batch['rows']:
+        # if the batch rows are still strings then convert them via a csv reader else just use them as they are
+        if isinstance(batch['rows'][0], basestring):
+            rows = csv.reader(batch['rows'], **self.dialect_options)
+        else:
+            rows = batch['rows']
+
+        for row in rows:
             try:
                 pk = conv.get_row_partition_key_values(row)
                 rows_by_pk[pk].append(row)
