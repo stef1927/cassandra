@@ -417,7 +417,7 @@ COPY_COMMON_OPTIONS = ['DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'NULL', 'DATETI
                        'MAXATTEMPTS', 'REPORTFREQUENCY', 'DECIMALSEP', 'THOUSANDSSEP', 'BOOLSTYLE',
                        'NUMPROCESSES', 'CONFIGFILE', 'RATEFILE']
 COPY_FROM_OPTIONS = ['CHUNKSIZE', 'INGESTRATE', 'MAXBATCHSIZE', 'MINBATCHSIZE', 'MAXROWS',
-                     'SKIPROWS', 'SKIPCOLS', 'MAXPARSEERRORS', 'MAXINSERTERRORS', 'ERRFILE']
+                     'SKIPROWS', 'SKIPCOLS', 'MAXPARSEERRORS', 'MAXINSERTERRORS', 'ERRFILE', 'PREPAREDSTATEMENTS']
 COPY_TO_OPTIONS = ['ENCODING', 'PAGESIZE', 'PAGETIMEOUT', 'BEGINTOKEN', 'ENDTOKEN', 'MAXOUTPUTSIZE', 'MAXREQUESTS']
 
 
@@ -527,16 +527,12 @@ warnings.filterwarnings('always', category=cql3handling.UnexpectedTableStructure
 
 
 def insert_driver_hooks():
-    extend_cql_deserialization()
-    auto_format_udts()
-
-
-def extend_cql_deserialization():
     """
-    The python driver returns BLOBs as string, but we expect them as bytearrays
+    We support empty values and we intercept user data types format methods
+    to register our formatter.
     """
-    cassandra.cqltypes.BytesType.deserialize = staticmethod(lambda byts, protocol_version: bytearray(byts))
     cassandra.cqltypes.CassandraType.support_empty_values = True
+    auto_format_udts()
 
 
 def auto_format_udts():
@@ -711,6 +707,9 @@ class Shell(cmd.Cmd):
             err = FormatError(val, e)
             self.decoding_errors.append(err)
             return format_value(err, self.output_codec.name, addcolor=self.color)
+
+    def myformat_converted_value(self, val, cqltype, **kwargs):
+        return self.myformat_value(bytearray(val) if cqltype == 'blob' else val, **kwargs)
 
     def myformat_colname(self, name, table_meta=None):
         column_colors = COLUMN_NAME_COLORS.copy()
@@ -1163,8 +1162,10 @@ class Shell(cmd.Cmd):
             return
 
         colnames = rows[0].keys()
+        cqltypes = [table_meta.columns[c].typestring for c in colnames] if table_meta else []
+
         formatted_names = [self.myformat_colname(name, table_meta) for name in colnames]
-        formatted_values = [map(self.myformat_value, row.values()) for row in rows]
+        formatted_values = [map(self.myformat_converted_value, row.values(), cqltypes) for row in rows]
 
         if self.expand_enabled:
             self.print_formatted_result_vertically(formatted_names, formatted_values)
@@ -1534,17 +1535,22 @@ class Shell(cmd.Cmd):
 
         Available COPY FROM options and defaults:
 
-          CHUNKSIZE=1000          - the size of chunks passed to worker processes
-          INGESTRATE=100000       - an approximate ingest rate in rows per second
-          MINBATCHSIZE=2          - the minimum size of an import batch
-          MAXBATCHSIZE=20         - the maximum size of an import batch
-          MAXROWS=-1              - the maximum number of rows, -1 means no maximum
-          SKIPROWS=0              - the number of rows to skip
-          SKIPCOLS=''             - a comma separated list of column names to skip
-          MAXPARSEERRORS=-1       - the maximum global number of parsing errors, -1 means no maximum
-          MAXINSERTERRORS=-1      - the maximum global number of insert errors, -1 means no maximum
-          ERRFILE=''              - a file where to store all rows that could not be imported, by default this is
-                                    import_ks_table.err where <ks> is your keyspace and <table> is your table name.
+          CHUNKSIZE=1000           - the size of chunks passed to worker processes
+          INGESTRATE=100000        - an approximate ingest rate in rows per second
+          MINBATCHSIZE=2           - the minimum size of an import batch
+          MAXBATCHSIZE=20          - the maximum size of an import batch
+          MAXROWS=-1               - the maximum number of rows, -1 means no maximum
+          SKIPROWS=0               - the number of rows to skip
+          SKIPCOLS=''              - a comma separated list of column names to skip
+          MAXPARSEERRORS=-1        - the maximum global number of parsing errors, -1 means no maximum
+          MAXINSERTERRORS=-1       - the maximum global number of insert errors, -1 means no maximum
+          ERRFILE=''               - a file where to store all rows that could not be imported, by default this is
+                                     import_ks_table.err where <ks> is your keyspace and <table> is your table name.
+          PREPAREDSTATEMENTS=True - whether to use prepared statements when importing, by default True. Set this to
+                                    False if you don't mind shifting data parsing to the cluster. The cluster will also
+                                    have to compile every batch statement. For large and oversized clusters
+                                    this will result in a faster import but for smaller clusters it may generate
+                                    timeouts.
 
         Available COPY TO options and defaults:
 

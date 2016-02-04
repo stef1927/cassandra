@@ -1,3 +1,5 @@
+# cython: profile=True
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -39,7 +41,7 @@ from util import profile_on, profile_off
 
 from cassandra.cluster import Cluster
 from cassandra.cqltypes import ReversedType, UserType
-from cassandra.metadata import protect_name, protect_names
+from cassandra.metadata import protect_name, protect_names, protect_value
 from cassandra.policies import RetryPolicy, WhiteListRoundRobinPolicy, TokenAwarePolicy, DCAwareRoundRobinPolicy
 from cassandra.query import BatchStatement, BatchType, SimpleStatement, tuple_factory
 from cassandra.util import Date, Time
@@ -49,9 +51,9 @@ from displaying import NO_COLOR_MAP
 from formatting import format_value_default, EMPTY, get_formatter
 from sslhandling import ssl_settings
 
-CopyOptions = namedtuple('CopyOptions', 'copy dialect unrecognized')
-
 PROFILE_ON = False
+
+CopyOptions = namedtuple('CopyOptions', 'copy dialect unrecognized')
 
 
 def safe_normpath(fname):
@@ -178,7 +180,7 @@ class CopyTask(object):
         copy_options['decimalsep'] = opts.pop('decimalsep', '.')
         copy_options['thousandssep'] = opts.pop('thousandssep', '')
         copy_options['boolstyle'] = [s.strip() for s in opts.pop('boolstyle', 'True, False').split(',')]
-        copy_options['numprocesses'] = int(opts.pop('numprocesses', self.get_num_processes(cap=16)))
+        copy_options['numprocesses'] = int(opts.pop('numprocesses', self.get_num_processes()))
         copy_options['begintoken'] = opts.pop('begintoken', '')
         copy_options['endtoken'] = opts.pop('endtoken', '')
         copy_options['maxrows'] = int(opts.pop('maxrows', '-1'))
@@ -189,6 +191,7 @@ class CopyTask(object):
         copy_options['errfile'] = safe_normpath(opts.pop('errfile', 'import_%s_%s.err' % (self.ks, self.table,)))
         copy_options['ratefile'] = safe_normpath(opts.pop('ratefile', ''))
         copy_options['maxoutputsize'] = int(opts.pop('maxoutputsize', '-1'))
+        copy_options['preparedstatements'] = bool(opts.pop('preparedstatements', 'true').lower() == 'true')
 
         self.check_options(copy_options)
         return CopyOptions(copy=copy_options, dialect=dialect_options, unrecognized=opts)
@@ -206,7 +209,7 @@ class CopyTask(object):
             raise ValueError("Invalid boolean styles %s" % copy_options['boolstyle'])
 
     @staticmethod
-    def get_num_processes(cap):
+    def get_num_processes(cap=16):
         """
         Pick a reasonable number of child processes. We need to leave at
         least one core for the parent process.  This doesn't necessarily
@@ -833,7 +836,7 @@ class ImportTask(CopyTask):
         self.import_errors = ImportErrors(self)
         self.retries = deque([])
         self.failed = 0
-        self.succeeded = 0
+        self.received = 0
         self.sent = 0
 
     def make_params(self):
@@ -930,7 +933,7 @@ class ImportTask(CopyTask):
                        self.reader.skip_rows))
 
     def has_more_to_receive(self):
-        return (self.succeeded + self.failed) < self.sent
+        return self.received < self.sent
 
     def has_more_to_send(self, reader):
         return (not reader.exhausted) or self.retries
@@ -946,7 +949,7 @@ class ImportTask(CopyTask):
                 batch, err = self.inmsg.get(timeout=0.00001)
 
                 if err is None:
-                    self.succeeded += batch['imported']
+                    self.received += batch['imported']
                     self.receive_meter.increment(batch['imported'])
                 else:
                     err = str(err)
@@ -1271,12 +1274,15 @@ class ExportProcess(ChildProcess):
         return session
 
     def attach_callbacks(self, token_range, future, session):
+        metadata = session.cluster.metadata.keyspaces[self.ks].tables[self.table]
+        cql_types = [metadata.columns[c].typestring for c in self.columns]
+
         def result_callback(rows):
             if future.has_more_pages:
                 future.start_fetching_next_page()
-                self.write_rows_to_csv(token_range, rows)
+                self.write_rows_to_csv(token_range, rows, cql_types)
             else:
-                self.write_rows_to_csv(token_range, rows)
+                self.write_rows_to_csv(token_range, rows, cql_types)
                 self.outmsg.put((None, None))
                 session.complete_request()
 
@@ -1286,7 +1292,7 @@ class ExportProcess(ChildProcess):
 
         future.add_callbacks(callback=result_callback, errback=err_callback)
 
-    def write_rows_to_csv(self, token_range, rows):
+    def write_rows_to_csv(self, token_range, rows, cql_types):
         if not rows:
             return  # no rows in this range
 
@@ -1295,7 +1301,7 @@ class ExportProcess(ChildProcess):
             writer = csv.writer(output, **self.options.dialect)
 
             for row in rows:
-                writer.writerow(map(self.format_value, row))
+                writer.writerow(map(self.format_value, row, cql_types))
 
             data = (output.getvalue(), len(rows))
             self.outmsg.put((token_range, data))
@@ -1304,11 +1310,11 @@ class ExportProcess(ChildProcess):
         except Exception, e:
             self.report_error(e, token_range)
 
-    def format_value(self, val):
+    def format_value(self, val, cql_type):
         if val is None or val == EMPTY:
             return format_value_default(self.nullval, colormap=NO_COLOR_MAP)
 
-        ctype = type(val)
+        ctype = bytearray if cql_type == 'blob' else type(val)
         formatter = self.formatters.get(ctype, None)
         if not formatter:
             formatter = get_formatter(ctype)
@@ -1388,7 +1394,7 @@ class ImportConversion(object):
     A class for converting strings to values when importing from csv, used by ImportProcess,
     the parent.
     """
-    def __init__(self, parent, table_meta, statement):
+    def __init__(self, parent, table_meta, statement=None):
         self.ks = parent.ks
         self.table = parent.table
         self.columns = parent.valid_columns
@@ -1403,9 +1409,37 @@ class ImportConversion(object):
         self.primary_key_indexes = [self.columns.index(col.name) for col in self.table_meta.primary_key]
         self.partition_key_indexes = [self.columns.index(col.name) for col in self.table_meta.partition_key]
 
+        if statement is None:
+            self.use_prepared_statements = False
+            statement = self._get_primary_key_statement(parent, table_meta)
+        else:
+            self.use_prepared_statements = True
+
         self.proto_version = statement.protocol_version
-        self.cqltypes = dict([(c.name, c.type) for c in statement.column_metadata])
-        self.converters = dict([(c.name, self._get_converter(c.type)) for c in statement.column_metadata])
+
+        # the cql types and converters for the prepared statement, either the full statement or only the primary keys
+        self.cqltypes = [c.type for c in statement.column_metadata]
+        self.converters = [self._get_converter(c.type) for c in statement.column_metadata]
+
+        # the cql types for the entire statement, these are the same as the types above but
+        # only when using prepared statements
+        self.coltypes = [table_meta.columns[name].typestring for name in parent.valid_columns]
+        # these functions are used for non-prepared statements to protect values with quotes if required
+        self.protectors = [protect_value if t in ('ascii', 'text', 'timestamp', 'date', 'time', 'inet') else lambda v: v
+                           for t in self.coltypes]
+
+    @staticmethod
+    def _get_primary_key_statement(parent, table_meta):
+        """
+        We prepare a query statement to find out the types of the partition key columns so we can
+        route the update query to the correct replicas. As far as I understood this is the easiest
+        way to find out the types of the partition columns, we will never use this prepared statement
+        """
+        where_clause = ' AND '.join(['%s = ?' % (protect_name(c.name)) for c in table_meta.partition_key])
+        select_query = 'SELECT * FROM %s.%s WHERE %s' % (protect_name(parent.ks),
+                                                         protect_name(parent.table),
+                                                         where_clause)
+        return parent.session.prepare(select_query)
 
     def _get_converter(self, cql_type):
         """
@@ -1593,27 +1627,25 @@ class ImportConversion(object):
 
         return converters.get(cql_type.typename, convert_unknown)
 
-    def get_row_values(self, row):
+    def convert_row(self, row):
         """
-        Parse the row into a list of row values to be returned
+        Convert the row into a list of parsed values if using prepared statements, else simply apply the
+        protection functions to escape values with quotes when required. Also check on the row length and
+        make sure primary partition key values aren't missing.
         """
-        def convert(n, val):
-            try:
-                return self.converters[self.columns[n]](val)
-            except Exception, e:
-                raise ParseError(e.message)
+        converters = self.converters if self.use_prepared_statements else self.protectors
 
-        ret = [None] * len(row)
-        for i, val in enumerate(row):
-            if val != self.nullval:
-                ret[i] = convert(i, val)
-            else:
-                if i in self.primary_key_indexes:
-                    raise ParseError(self.get_null_primary_key_message(i))
+        if len(row) != len(converters):
+            raise ParseError('Invalid row length %d should be %d' % (len(row), len(converters)))
 
-                ret[i] = None
+        for i in self.partition_key_indexes:
+            if row[i] == self.nullval:
+                raise ParseError(self.get_null_primary_key_message(i))
 
-        return ret
+        try:
+            return [conv(val) for conv, val in zip(converters, row)]
+        except Exception, e:
+            raise ParseError(e.message)
 
     def get_null_primary_key_message(self, idx):
         message = "Cannot insert null value for primary key column '%s'." % (self.columns[idx],)
@@ -1632,7 +1664,9 @@ class ImportConversion(object):
                 c, v = self.columns[n], row[n]
                 if v == self.nullval:
                     raise ParseError(self.get_null_primary_key_message(n))
-                return self.cqltypes[c].serialize(self.converters[c](v), self.proto_version)
+                if not self.use_prepared_statements:
+                    v = self.converters[n](v)
+                return self.cqltypes[n].serialize(v, self.proto_version)
             except Exception, e:
                 raise ParseError(e.message)
 
@@ -1662,6 +1696,7 @@ class ImportProcess(ChildProcess):
         self.max_attempts = options.copy['maxattempts']
         self.min_batch_size = options.copy['minbatchsize']
         self.max_batch_size = options.copy['maxbatchsize']
+        self.use_prepared_statements = options.copy['preparedstatements']
         self.dialect_options = options.dialect
         self._session = None
 
@@ -1691,12 +1726,7 @@ class ImportProcess(ChildProcess):
                 pr = profile_on()
 
             table_meta = self.session.cluster.metadata.keyspaces[self.ks].tables[self.table]
-            is_counter = ("counter" in [table_meta.columns[name].typestring for name in self.valid_columns])
-
-            if is_counter:
-                self.run_counter(table_meta)
-            else:
-                self.run_normal(table_meta)
+            self.inner_run(*self.make_params(table_meta))
 
             if PROFILE_ON:
                 profile_off(pr, file_name='worker_profile_%d.txt' % (os.getpid(),))
@@ -1713,73 +1743,78 @@ class ImportProcess(ChildProcess):
             self._session.cluster.shutdown()
         ChildProcess.close(self)
 
-    def run_counter(self, table_meta):
-        """
-        Main run method for tables that contain counter columns.
-        """
-        query = 'UPDATE %s.%s SET %%s WHERE %%s' % (protect_name(self.ks), protect_name(self.table))
+    def make_params(self, table_meta):
+        prepared_statement = None
+        is_counter = ("counter" in [table_meta.columns[name].typestring for name in self.valid_columns])
+        if is_counter:
+            query = 'UPDATE %s.%s SET %%s WHERE %%s' % (protect_name(self.ks), protect_name(self.table))
+            make_batch_fcn = self.wrap_make_batch(self.make_counter_batch_statement)
+        elif self.use_prepared_statements:
+            query = 'INSERT INTO %s.%s (%s) VALUES (%s)' % (protect_name(self.ks),
+                                                            protect_name(self.table),
+                                                            ', '.join(protect_names(self.valid_columns),),
+                                                            ', '.join(['?' for _ in self.valid_columns]))
 
-        # We prepare a query statement to find out the types of the partition key columns so we can
-        # route the update query to the correct replicas. As far as I understood this is the easiest
-        # way to find out the types of the partition columns, we will never use this prepared statement
-        where_clause = ' AND '.join(['%s = ?' % (protect_name(c.name)) for c in table_meta.partition_key])
-        select_query = 'SELECT * FROM %s.%s WHERE %s' % (protect_name(self.ks), protect_name(self.table), where_clause)
-        conv = ImportConversion(self, table_meta, self.session.prepare(select_query))
+            query = self.session.prepare(query)
+            query.consistency_level = self.consistency_level
+            prepared_statement = query
+            make_batch_fcn = self.wrap_make_batch(self.make_prepared_batch_statement)
+        else:
+            query = 'INSERT INTO %s.%s (%s) VALUES (%%s)' % (protect_name(self.ks),
+                                                             protect_name(self.table),
+                                                             ', '.join(protect_names(self.valid_columns),))
+            make_batch_fcn = self.wrap_make_batch(self.make_non_prepared_batch_statement)
 
+        conv = ImportConversion(self, table_meta, prepared_statement)
+        return table_meta, query, conv, make_batch_fcn
+
+    def inner_run(self, table_meta, query, conv, make_statement):
+        """
+        Main run method. Note that we bind self methods that are called inside loops
+        for performance reasons.
+        """
+        convert_rows = self.convert_rows
+        execute_statement = self.execute_statement
+        split_batches = self.split_batches
         while True:
             batch = self.inmsg.get()
             if batch is None:
                 break
 
             try:
-                for b in self.split_batches(batch, conv):
-                    self.send_counter_batch(query, conv, b)
+                # if the batch rows are still strings then convert them else just use them as they are
+                if isinstance(batch['rows'][0], basestring):
+                    batch['rows'] = convert_rows(conv, batch)
+
+                batch['imported'] = 0
+                for b in split_batches(batch, conv):
+                    execute_statement(make_statement(query, conv, b), b, batch)
 
             except Exception, exc:
                 self.outmsg.put((batch, '%s - %s' % (exc.__class__.__name__, exc.message)))
                 if self.debug:
                     traceback.print_exc(exc)
 
-    def run_normal(self, table_meta):
-        """
-        Main run method for normal tables, i.e. tables that do not contain counter columns.
-        """
-        query = 'INSERT INTO %s.%s (%s) VALUES (%s)' % (protect_name(self.ks),
-                                                        protect_name(self.table),
-                                                        ', '.join(protect_names(self.valid_columns),),
-                                                        ', '.join(['?' for _ in self.valid_columns]))
-
-        query_statement = self.session.prepare(query)
-        query_statement.consistency_level = self.consistency_level
-        conv = ImportConversion(self, table_meta, query_statement)
-
-        while True:
-            batch = self.inmsg.get()
-            if batch is None:
-                break
-
+    def wrap_make_batch(self, inner_make_batch):
+        def make_batch(query_text, conv, batch):
             try:
-                for b in self.split_batches(batch, conv):
-                    self.send_normal_batch(conv, query_statement, b)
-
+                return inner_make_batch(query_text, conv, batch)
             except Exception, exc:
-                self.outmsg.put((batch, '%s - %s' % (exc.__class__.__name__, exc.message)))
-                if self.debug:
-                    traceback.print_exc(exc)
+                print "Failed to make batch: {}".format(exc)
+                self.err_callback(exc, batch)
+                return None
 
-    def send_counter_batch(self, query_text, conv, batch):
-        if self.test_failures and self.maybe_inject_failures(batch):
-            return
+        def make_batch_with_failures(query_text, conv, batch):
+            failed_batch = self.maybe_inject_failures(batch)
+            if failed_batch:
+                return failed_batch
+            return make_batch(query_text, conv, batch)
 
-        error_rows = []
-        batch_statement = BatchStatement(batch_type=BatchType.COUNTER, consistency_level=self.consistency_level)
+        return make_batch_with_failures if self.test_failures else make_batch
 
-        for r in batch['rows']:
-            row = self.filter_row_values(r)
-            if len(row) != len(self.valid_columns):
-                error_rows.append(row)
-                continue
-
+    def make_counter_batch_statement(self, query, conv, batch):
+        statement = BatchStatement(batch_type=BatchType.COUNTER, consistency_level=self.consistency_level)
+        for row in batch['rows']:
             where_clause = []
             set_clause = []
             for i, value in enumerate(row):
@@ -1788,59 +1823,43 @@ class ImportProcess(ChildProcess):
                 else:
                     set_clause.append("%s=%s+%s" % (self.valid_columns[i], self.valid_columns[i], value))
 
-            full_query_text = query_text % (','.join(set_clause), ' AND '.join(where_clause))
-            batch_statement.add(full_query_text)
+            full_query_text = query % (','.join(set_clause), ' AND '.join(where_clause))
+            statement.add(full_query_text)
+        return statement
 
-        self.execute_statement(batch_statement, batch)
+    def make_prepared_batch_statement(self, query, _, batch):
+        statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
+        for row in batch['rows']:
+            statement.add(query, row)
+        return statement
 
-        if error_rows:
-            self.outmsg.put((ImportTask.split_batch(batch, error_rows),
-                            '%s - %s' % (ParseError.__name__, "Failed to parse one or more rows")))
+    def make_non_prepared_batch_statement(self, query, _, batch):
+        statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
+        for row in batch['rows']:
+            statement.add(query % (','.join(row),))
+        return statement
 
-    def send_normal_batch(self, conv, query_statement, batch):
-        if self.test_failures and self.maybe_inject_failures(batch):
-            return
+    def convert_rows(self, conv, batch):
+        """
+        Return converted rows and report any errors during conversion.
+        """
+        rows = [self.filter_row_values(r) for r in list(csv.reader(batch['rows'], **self.dialect_options))]
+        errors = defaultdict(list)
 
-        good_rows, converted_rows, errors = self.convert_rows(conv, batch['rows'])
-
-        if converted_rows:
+        def convert_row(r):
             try:
-                statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
-                for row in converted_rows:
-                    statement.add(query_statement, row)
-                self.execute_statement(statement, ImportTask.split_batch(batch, good_rows))
-            except Exception, exc:
-                self.err_callback(exc, ImportTask.split_batch(batch, good_rows))
+                return conv.convert_row(r)
+            except ParseError, err:
+                errors[err.message].append(r)
+                return None
+
+        converted_rows = filter(None, [convert_row(r) for r in rows])
 
         if errors:
             for msg, rows in errors.iteritems():
                 self.outmsg.put((ImportTask.split_batch(batch, rows),
-                                '%s - %s' % (ParseError.__name__, msg)))
-
-    def convert_rows(self, conv, rows):
-        """
-        Try to convert each row. If conversion is OK then add the converted result to converted_rows
-        and the original string to good_rows. Else add the original string to error_rows. Return the three
-        arrays.
-        """
-        good_rows = []
-        errors = defaultdict(list)
-        converted_rows = []
-
-        for r in rows:
-            row = self.filter_row_values(r)
-            if len(row) != len(self.valid_columns):
-                msg = 'Invalid row length %d should be %d' % (len(row), len(self.valid_columns))
-                errors[msg].append(row)
-                continue
-
-            try:
-                converted_rows.append(conv.get_row_values(row))
-                good_rows.append(row)
-            except ParseError, err:
-                errors[err.message].append(row)
-
-        return good_rows, converted_rows, errors
+                                 '%s - %s' % (ParseError.__name__, msg)))
+        return converted_rows
 
     def filter_row_values(self, row):
         if not self.skip_column_indexes:
@@ -1861,20 +1880,19 @@ class ImportProcess(ChildProcess):
                 if batch['attempts'] < failing_batch['failures']:
                     statement = SimpleStatement("INSERT INTO badtable (a, b) VALUES (1, 2)",
                                                 consistency_level=self.consistency_level)
-                    self.execute_statement(statement, batch)
-                    return True
+                    return statement
 
         if 'exit_batch' in self.test_failures:
             exit_batch = self.test_failures['exit_batch']
             if exit_batch['id'] == batch['id']:
                 sys.exit(1)
 
-        return False  # carry on as normal
+        return None  # carry on as normal
 
-    def execute_statement(self, statement, batch):
+    def execute_statement(self, statement, batch, parent_batch):
         future = self.session.execute_async(statement)
-        future.add_callbacks(callback=self.result_callback, callback_args=(batch, ),
-                             errback=self.err_callback, errback_args=(batch, ))
+        future.add_callbacks(callback=self.result_callback, callback_args=(batch, parent_batch),
+                             errback=self.err_callback, errback_args=(batch, parent_batch))
 
     def split_batches(self, batch, conv):
         """
@@ -1887,19 +1905,10 @@ class ImportProcess(ChildProcess):
 
         Then batch the left-overs of each replica up to max_batch_size.
         """
-        if not batch['rows']:
-            return
-
         rows_by_pk = defaultdict(list)
         errors = defaultdict(list)
 
-        # if the batch rows are still strings then convert them via a csv reader else just use them as they are
-        if isinstance(batch['rows'][0], basestring):
-            rows = csv.reader(batch['rows'], **self.dialect_options)
-        else:
-            rows = batch['rows']
-
-        for row in rows:
+        for row in batch['rows']:
             try:
                 pk = conv.get_row_partition_key_values(row)
                 rows_by_pk[pk].append(row)
@@ -1941,15 +1950,20 @@ class ImportProcess(ChildProcess):
         for i in xrange(0, len(rows), self.max_batch_size):
             yield ImportTask.make_batch(batch['id'], rows[i:i + self.max_batch_size], batch['attempts'])
 
-    def result_callback(self, _, batch):
-        batch['imported'] = len(batch['rows'])
-        batch['rows'] = []  # no need to resend these, just send the count in 'imported'
-        self.outmsg.put((batch, None))
+    def result_callback(self, _, batch, parent_batch):
+        self.update_parent_batch(batch, parent_batch)
 
-    def err_callback(self, response, batch):
+    def err_callback(self, response, batch, parent_batch):
+        self.update_parent_batch(batch, parent_batch)
         self.outmsg.put((batch, '%s - %s' % (response.__class__.__name__, response.message)))
         if self.debug:
             traceback.print_exc(response)
+
+    def update_parent_batch(self, batch, parent_batch):
+        parent_batch['imported'] += len(batch['rows'])
+        if parent_batch['imported'] == len(parent_batch['rows']):
+            parent_batch['rows'] = []  # no need to resend these, just send the count in 'imported'
+            self.outmsg.put((parent_batch, None))
 
 
 class RateMeter(object):
