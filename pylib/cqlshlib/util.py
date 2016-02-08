@@ -23,6 +23,12 @@ from itertools import izip
 from datetime import timedelta, tzinfo
 from StringIO import StringIO
 
+try:
+    from line_profiler import LineProfiler
+    HAS_LINE_PROFILER = True
+except ImportError:
+    HAS_LINE_PROFILER = False
+
 ZERO = timedelta(0)
 
 
@@ -129,17 +135,27 @@ def get_file_encoding_bomsize(filename):
     return file_encoding, size
 
 
-def profile_on():
+def profile_on(fcn_name=None):
+    if fcn_name and HAS_LINE_PROFILER:
+        pr = LineProfiler(fcn_name)
+        pr.enable()
+        return pr
+
     pr = cProfile.Profile()
     pr.enable()
     return pr
 
 
-def profile_off(pr, file_name=None):
+def profile_off(pr, file_name):
     pr.disable()
     s = StringIO()
-    ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
-    ps.print_stats()
+
+    if HAS_LINE_PROFILER and isinstance(pr, LineProfiler):
+        pr.print_stats(s)
+    else:
+        ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
+        ps.print_stats()
+
     ret = s.getvalue()
     if file_name:
         with open(file_name, 'w') as f:

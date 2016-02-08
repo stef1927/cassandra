@@ -30,6 +30,7 @@ import sys
 import time
 import traceback
 
+from bisect import bisect_right
 from calendar import timegm
 from collections import defaultdict, deque, namedtuple
 from decimal import Decimal
@@ -46,13 +47,18 @@ from cassandra.policies import RetryPolicy, WhiteListRoundRobinPolicy, TokenAwar
 from cassandra.query import BatchStatement, BatchType, SimpleStatement, tuple_factory
 from cassandra.util import Date, Time
 
+try:
+    from cassandra.io.libevreactor import LibevConnection
+    HAS_LIB_EV = True
+except ImportError:
+    HAS_LIB_EV = False
+
 from cql3handling import CqlRuleSet
 from displaying import NO_COLOR_MAP
 from formatting import format_value_default, EMPTY, get_formatter
 from sslhandling import ssl_settings
 
 PROFILE_ON = False
-
 CopyOptions = namedtuple('CopyOptions', 'copy dialect unrecognized')
 
 
@@ -979,7 +985,7 @@ class ImportTask(CopyTask):
             if not reader.exhausted:
                 rows = reader.read_rows(max_rows)
                 if rows:
-                    self.sent += self.send_batch(self.new_batch(rows))
+                    self.send_batch(self.new_batch(rows))
             elif self.retries:
                 batch = self.retries.popleft()
                 if len(batch['rows']) <= max_rows:
@@ -995,7 +1001,7 @@ class ImportTask(CopyTask):
         num_rows = len(batch['rows'])
         self.send_meter.increment(num_rows)
         self.outmsg.put(batch)
-        return num_rows
+        self.sent += num_rows
 
     def new_batch(self, rows):
         self.batch_id += 1
@@ -1115,6 +1121,8 @@ class ExportSession(object):
     connection to the cluster.
     """
     def __init__(self, cluster, export_process):
+        if HAS_LIB_EV:
+            cluster.connection_class = LibevConnection
         session = cluster.connect(export_process.ks)
         session.row_factory = tuple_factory
         session.default_fetch_size = export_process.options.copy['pagesize']
@@ -1716,6 +1724,8 @@ class ImportProcess(ChildProcess):
                 control_connection_timeout=self.connect_timeout,
                 connect_timeout=self.connect_timeout)
 
+            if HAS_LIB_EV:
+                cluster.connection_class = LibevConnection
             self._session = cluster.connect(self.ks)
             self._session.default_timeout = None
         return self._session
@@ -1723,7 +1733,7 @@ class ImportProcess(ChildProcess):
     def run(self):
         try:
             if PROFILE_ON:
-                pr = profile_on()
+                pr = profile_on(fcn_name=self.get_ring_position)
 
             table_meta = self.session.cluster.metadata.keyspaces[self.ks].tables[self.table]
             self.inner_run(*self.make_params(table_meta))
@@ -1829,21 +1839,26 @@ class ImportProcess(ChildProcess):
 
     def make_prepared_batch_statement(self, query, _, batch):
         statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
-        for row in batch['rows']:
-            statement.add(query, row)
+        map(lambda r: statement.add(query, r), batch['rows'])
         return statement
 
     def make_non_prepared_batch_statement(self, query, _, batch):
         statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
-        for row in batch['rows']:
-            statement.add(query % (','.join(row),))
+        map(lambda r:  statement.add(query % (','.join(r),)), batch['rows'])
         return statement
 
     def convert_rows(self, conv, batch):
         """
         Return converted rows and report any errors during conversion.
         """
-        rows = [self.filter_row_values(r) for r in list(csv.reader(batch['rows'], **self.dialect_options))]
+        def filter_row_values(row):
+            return [v for i, v in enumerate(row) if i not in self.skip_column_indexes]
+
+        if self.skip_column_indexes:
+            rows = [filter_row_values(r) for r in list(csv.reader(batch['rows'], **self.dialect_options))]
+        else:
+            rows = list(csv.reader(batch['rows'], **self.dialect_options))
+
         errors = defaultdict(list)
 
         def convert_row(r):
@@ -1860,12 +1875,6 @@ class ImportProcess(ChildProcess):
                 self.outmsg.put((ImportTask.split_batch(batch, rows),
                                  '%s - %s' % (ParseError.__name__, msg)))
         return converted_rows
-
-    def filter_row_values(self, row):
-        if not self.skip_column_indexes:
-            return row
-
-        return [v for i, v in enumerate(row) if i not in self.skip_column_indexes]
 
     def maybe_inject_failures(self, batch):
         """
@@ -1901,9 +1910,10 @@ class ImportProcess(ChildProcess):
         since this translates to a single insert operation server side.
 
         If there are less than min_batch_size rows for a partition, work out the
-        first replica for this partition and add the rows to replica left-over rows.
+        ring position for this partition and add the rows a map indexed by ring position.
 
-        Then batch the left-overs of each replica up to max_batch_size.
+        Then batch the rows of each ring position up to max_batch_size. The driver TAR should ensure
+        these rows will end up to a correct replica.
         """
         rows_by_pk = defaultdict(list)
         errors = defaultdict(list)
@@ -1920,35 +1930,32 @@ class ImportProcess(ChildProcess):
                 self.outmsg.put((ImportTask.split_batch(batch, rows),
                                  '%s - %s' % (ParseError.__name__, msg)))
 
-        rows_by_replica = defaultdict(list)
+        token_map = self.session.cluster.metadata.token_map
+        rows_by_ring_pos = defaultdict(list)
+        get_ring_position = self.get_ring_position
+        make_batch = ImportTask.make_batch
+        min_batch_size = self.min_batch_size
+        max_batch_size = self.max_batch_size
+
         for pk, rows in rows_by_pk.iteritems():
-            if len(rows) >= self.min_batch_size:
-                yield ImportTask.make_batch(batch['id'], rows, batch['attempts'])
+            if len(rows) >= min_batch_size:
+                yield make_batch(batch['id'], rows, batch['attempts'])
             else:
-                replica = self.get_replica(pk)
-                rows_by_replica[replica].extend(rows)
+                ring_pos = get_ring_position(pk, token_map)
+                rows_by_ring_pos[ring_pos].extend(rows)
 
-        for replica, rows in rows_by_replica.iteritems():
-            for b in self.batches(rows, batch):
-                yield b
+        for _, rows in rows_by_ring_pos.iteritems():
+            for i in xrange(0, len(rows), max_batch_size):
+                yield make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts'])
 
-    def get_replica(self, pk):
-        """
-        Return the first replica or the host we are already connected to if there are no local
-        replicas that are up. We always use the first replica to match the replica chosen by the driver
-        TAR, see TokenAwarePolicy.make_query_plan().
-        """
-        metadata = self.session.cluster.metadata
-        replicas = filter(lambda r: r.is_up and r.datacenter == self.local_dc, metadata.get_replicas(self.ks, pk))
-        ret = replicas[0].address if len(replicas) > 0 else self.hostname
-        return ret
-
-    def batches(self, rows, batch):
-        """
-        Split rows into batches of max_batch_size
-        """
-        for i in xrange(0, len(rows), self.max_batch_size):
-            yield ImportTask.make_batch(batch['id'], rows[i:i + self.max_batch_size], batch['attempts'])
+    @staticmethod
+    def get_ring_position(pk, token_map):
+        token = token_map.token_class.from_key(pk)
+        point = bisect_right(token_map.ring, token)
+        if point == len(token_map.ring):
+            return token_map.ring[0]
+        else:
+            return token_map.ring[point]
 
     def result_callback(self, _, batch, parent_batch):
         self.update_parent_batch(batch, parent_batch)
