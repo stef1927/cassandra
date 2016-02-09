@@ -58,7 +58,7 @@ from displaying import NO_COLOR_MAP
 from formatting import format_value_default, EMPTY, get_formatter
 from sslhandling import ssl_settings
 
-PROFILE_ON = False
+PROFILE_ON = True
 CopyOptions = namedtuple('CopyOptions', 'copy dialect unrecognized')
 
 
@@ -1318,17 +1318,17 @@ class ExportProcess(ChildProcess):
         except Exception, e:
             self.report_error(e, token_range)
 
-    def format_value(self, val, cql_type):
+    def format_value(self, val, cqltype):
         if val is None or val == EMPTY:
             return format_value_default(self.nullval, colormap=NO_COLOR_MAP)
 
-        ctype = bytearray if cql_type == 'blob' else type(val)
-        formatter = self.formatters.get(ctype, None)
+        formatter = self.formatters.get(cqltype, None)
         if not formatter:
-            formatter = get_formatter(ctype)
-            self.formatters[ctype] = formatter
+            formatter = get_formatter(val, cqltype)
+            self.formatters[cqltype] = formatter
 
-        return formatter(val, encoding=self.encoding, colormap=NO_COLOR_MAP, time_format=self.time_format,
+        return formatter(val, cqltype=cqltype,
+                         encoding=self.encoding, colormap=NO_COLOR_MAP, time_format=self.time_format,
                          float_precision=self.float_precision, nullval=self.nullval, quote=False,
                          decimal_sep=self.decimal_sep, thousands_sep=self.thousands_sep,
                          boolean_styles=self.boolean_styles)
@@ -1662,32 +1662,34 @@ class ImportConversion(object):
                        " the WITH NULL=<marker> option for COPY."
         return message
 
-    def get_row_partition_key_values(self, row):
+    def get_row_partition_key_values_fcn(self):
         """
         Return a string composed of the partition key values, serialized and binary packed -
         as expected by metadata.get_replicas(), see also BoundStatement.routing_key.
         """
-        def serialize(n):
-            try:
-                c, v = self.columns[n], row[n]
-                if v == self.nullval:
-                    raise ParseError(self.get_null_primary_key_message(n))
-                if not self.use_prepared_statements:
-                    v = self.converters[n](v)
-                return self.cqltypes[n].serialize(v, self.proto_version)
-            except Exception, e:
-                raise ParseError(e.message)
+        def serialize_value_prepared(n, v):
+            return self.cqltypes[n].serialize(v, self.proto_version)
+
+        def serialize_value_not_prepared(n, v):
+            return self.cqltypes[n].serialize(self.converters[n](v), self.proto_version)
 
         partition_key_indexes = self.partition_key_indexes
-        if len(partition_key_indexes) == 1:
-            return serialize(partition_key_indexes[0])
-        else:
+        serialize = serialize_value_prepared if self.use_prepared_statements else serialize_value_not_prepared
+
+        def serialize_row_single(row):
+            return serialize(partition_key_indexes[0], row[partition_key_indexes[0]])
+
+        def serialize_row_multiple(row):
             pk_values = []
             for i in partition_key_indexes:
-                val = serialize(i)
+                val = serialize(i, row[i])
                 l = len(val)
                 pk_values.append(struct.pack(">H%dsB" % l, l, val, 0))
             return b"".join(pk_values)
+
+        if len(partition_key_indexes) == 1:
+            return serialize_row_single
+        return serialize_row_multiple
 
 
 class ImportProcess(ChildProcess):
@@ -1733,7 +1735,7 @@ class ImportProcess(ChildProcess):
     def run(self):
         try:
             if PROFILE_ON:
-                pr = profile_on(fcn_name=self.get_ring_position)
+                pr = profile_on()
 
             table_meta = self.session.cluster.metadata.keyspaces[self.ks].tables[self.table]
             self.inner_run(*self.make_params(table_meta))
@@ -1844,7 +1846,7 @@ class ImportProcess(ChildProcess):
 
     def make_non_prepared_batch_statement(self, query, _, batch):
         statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
-        map(lambda r:  statement.add(query % (','.join(r),)), batch['rows'])
+        map(lambda r: statement.add(query % (','.join(r),)), batch['rows'])
         return statement
 
     def convert_rows(self, conv, batch):
@@ -1917,45 +1919,46 @@ class ImportProcess(ChildProcess):
         """
         rows_by_pk = defaultdict(list)
         errors = defaultdict(list)
+        get_row_partition_key_values = conv.get_row_partition_key_values_fcn()
 
-        for row in batch['rows']:
+        def index_row(row):
             try:
-                pk = conv.get_row_partition_key_values(row)
+                pk = get_row_partition_key_values(row)
                 rows_by_pk[pk].append(row)
-            except ParseError, e:
+            except Exception, e:
                 errors[e.message].append(row)
 
+        map(index_row, batch['rows'])
         if errors:
             for msg, rows in errors.iteritems():
                 self.outmsg.put((ImportTask.split_batch(batch, rows),
                                  '%s - %s' % (ParseError.__name__, msg)))
 
-        token_map = self.session.cluster.metadata.token_map
-        rows_by_ring_pos = defaultdict(list)
-        get_ring_position = self.get_ring_position
-        make_batch = ImportTask.make_batch
         min_batch_size = self.min_batch_size
         max_batch_size = self.max_batch_size
+        token_map = self.session.cluster.metadata.token_map
+        ring = token_map.ring
 
-        for pk, rows in rows_by_pk.iteritems():
+        make_token = token_map.token_class.from_key
+        make_batch = ImportTask.make_batch
+
+        rows_by_ring_pos = defaultdict(list)
+        ret = []
+
+        def process_rows((pk, rows)):
             if len(rows) >= min_batch_size:
-                yield make_batch(batch['id'], rows, batch['attempts'])
+                ret.append(make_batch(batch['id'], rows, batch['attempts']))
             else:
-                ring_pos = get_ring_position(pk, token_map)
-                rows_by_ring_pos[ring_pos].extend(rows)
+                ring_idx = bisect_right(ring, make_token(pk))
+                rows_by_ring_pos[ring_idx].extend(rows)
 
-        for _, rows in rows_by_ring_pos.iteritems():
+        def process_leftover_rows((_, rows)):
             for i in xrange(0, len(rows), max_batch_size):
-                yield make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts'])
+                ret.append(make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts']))
 
-    @staticmethod
-    def get_ring_position(pk, token_map):
-        token = token_map.token_class.from_key(pk)
-        point = bisect_right(token_map.ring, token)
-        if point == len(token_map.ring):
-            return token_map.ring[0]
-        else:
-            return token_map.ring[point]
+        map(process_rows, rows_by_pk.iteritems())
+        map(process_leftover_rows, rows_by_ring_pos.iteritems())
+        return ret
 
     def result_callback(self, _, batch, parent_batch):
         self.update_parent_batch(batch, parent_batch)

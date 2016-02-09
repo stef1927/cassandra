@@ -135,9 +135,11 @@ def get_file_encoding_bomsize(filename):
     return file_encoding, size
 
 
-def profile_on(fcn_name=None):
-    if fcn_name and HAS_LINE_PROFILER:
-        pr = LineProfiler(fcn_name)
+def profile_on(fcn_names=None):
+    if fcn_names and HAS_LINE_PROFILER:
+        pr = LineProfiler()
+        for fcn_name in fcn_names:
+            pr.add_function(fcn_name)
         pr.enable()
         return pr
 
