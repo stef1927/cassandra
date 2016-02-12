@@ -58,7 +58,7 @@ from displaying import NO_COLOR_MAP
 from formatting import format_value_default, EMPTY, get_formatter
 from sslhandling import ssl_settings
 
-PROFILE_ON = True
+PROFILE_ON = False
 CopyOptions = namedtuple('CopyOptions', 'copy dialect unrecognized')
 
 
@@ -1945,19 +1945,19 @@ class ImportProcess(ChildProcess):
         rows_by_ring_pos = defaultdict(list)
         ret = []
 
-        def process_rows((pk, rows)):
+        def process_rows(pk, rows):
             if len(rows) >= min_batch_size:
                 ret.append(make_batch(batch['id'], rows, batch['attempts']))
             else:
                 ring_idx = bisect_right(ring, make_token(pk))
                 rows_by_ring_pos[ring_idx].extend(rows)
 
-        def process_leftover_rows((_, rows)):
+        def process_leftover_rows(rows):
             for i in xrange(0, len(rows), max_batch_size):
                 ret.append(make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts']))
 
-        map(process_rows, rows_by_pk.iteritems())
-        map(process_leftover_rows, rows_by_ring_pos.iteritems())
+        map(process_rows, rows_by_pk.iterkeys(), rows_by_pk.itervalues())
+        map(process_leftover_rows, rows_by_ring_pos.itervalues())
         return ret
 
     def result_callback(self, _, batch, parent_batch):
