@@ -23,6 +23,7 @@ import json
 import glob
 import multiprocessing as mp
 import os
+import platform
 import Queue
 import re
 import struct
@@ -198,6 +199,7 @@ class CopyTask(object):
         copy_options['ratefile'] = safe_normpath(opts.pop('ratefile', ''))
         copy_options['maxoutputsize'] = int(opts.pop('maxoutputsize', '-1'))
         copy_options['preparedstatements'] = bool(opts.pop('preparedstatements', 'true').lower() == 'true')
+        copy_options['cpuaffinity'] = bool(opts.pop('cpuaffinity', 'true').lower() == 'true')
 
         self.check_options(copy_options)
         return CopyOptions(copy=copy_options, dialect=dialect_options, unrecognized=opts)
@@ -215,19 +217,50 @@ class CopyTask(object):
             raise ValueError("Invalid boolean styles %s" % copy_options['boolstyle'])
 
     @staticmethod
-    def get_num_processes(cap=16):
+    def get_num_processes():
         """
         Pick a reasonable number of child processes. We need to leave at
-        least one core for the parent process.  This doesn't necessarily
-        need to be capped, but 4 is currently enough to keep
-        a single local Cassandra node busy so we use this for import, whilst
-        for export we use 16 since we can connect to multiple Cassandra nodes.
-        Eventually this parameter will become an option.
+        least one core for the parent process.
+        """
+        return max(1, CopyTask.get_num_cores() - 1)
+
+    @staticmethod
+    def get_num_cores():
+        """
+        Return the number of cores if available.
         """
         try:
-            return max(1, min(cap, mp.cpu_count() - 1))
+            return mp.cpu_count()
         except NotImplementedError:
             return 1
+
+    @staticmethod
+    def get_core_number(index):
+        """
+        Return a suitable core number for an index, that is index 0 gets the first core and so on
+        until the maximum number of cores is reached at which point we roll over. If we only have
+        one core or CPU affinity is disabled then return None.
+        :param index: zero based index
+        :return: the core number up to the maximum number of cores, None if only one core is available
+        """
+        num_cores = CopyTask.get_num_cores()
+        return index % (num_cores - 1) if num_cores > 1 else 0
+
+    def set_processor_affinity(self, cpu_number, pid):
+        """
+        Set the processor affinity for process id pid. Currently only supported for Linux.
+        :param cpu_number: The CPU number, starting at zero to indicate the first core. If set to a negative value
+        then reset cpu affinity by allowing all cores (mask 0xFFFFFFFF).
+        :param pid: the process id
+        """
+        if not self.options.copy['cpuaffinity'] or pid is None or platform.system() != 'Linux' \
+                or CopyTask.get_num_cores() == 1:
+            return
+
+        mask = "{0:#0{1}x}".format(cpu_number + 1, 10) if cpu_number >= 0 else '0xffffffff'
+        if self.shell.debug:
+            self.printmsg("Setting affinity to %s for pid %d" % (mask, os.getpid()))
+        os.popen("taskset -p %s %d" % (mask, pid)).read()
 
     @staticmethod
     def describe_interval(seconds):
@@ -256,14 +289,28 @@ class CopyTask(object):
         return shell.get_column_names(ks, table) if not columns else columns
 
     def close(self):
-        for process in self.processes:
-            process.terminate()
-
+        self.stop_processes()
         self.inmsg.close()
         self.outmsg.close()
 
+    @staticmethod
+    def get_pid():
+        return os.getpid() if hasattr(os, 'getpid') else None
+
     def num_live_processes(self):
         return sum(1 for p in self.processes if p.is_alive())
+
+    def start_processes(self):
+        for i, process in enumerate(self.processes):
+            process.start()
+            self.set_processor_affinity(self.get_core_number(i), process.pid)
+
+        self.set_processor_affinity(self.get_num_cores() - 1, self.get_pid())
+
+    def stop_processes(self):
+        self.set_processor_affinity(-1, self.get_pid())
+        for process in self.processes:
+            process.terminate()
 
     def make_params(self):
         """
@@ -428,8 +475,7 @@ class ExportTask(CopyTask):
         for i in xrange(self.num_processes):
             self.processes.append(ExportProcess(params))
 
-        for process in self.processes:
-            process.start()
+        self.start_processes()
 
         try:
             self.export_records(ranges)
@@ -876,15 +922,13 @@ class ImportTask(CopyTask):
             for i in range(self.num_processes):
                 self.processes.append(ImportProcess(params))
 
-            for process in self.processes:
-                process.start()
+            self.start_processes()
 
-            if PROFILE_ON:
-                pr = profile_on()
-                self.import_records()
+            pr = profile_on() if PROFILE_ON else None
+            self.import_records()
+
+            if pr:
                 profile_off(pr, file_name='parent_profile_%d.txt' % (os.getpid(),))
-            else:
-                self.import_records()
 
         except Exception, exc:
             shell.printerr(str(exc))
@@ -1664,8 +1708,11 @@ class ImportConversion(object):
 
     def get_row_partition_key_values_fcn(self):
         """
-        Return a string composed of the partition key values, serialized and binary packed -
-        as expected by metadata.get_replicas(), see also BoundStatement.routing_key.
+        Return a function to convert a row into a string composed of the partition key values serialized
+        and binary packed (the tokens on the ring). Depending on whether we are using prepared statements, we
+        may have to convert the primary key values first, so we have two different serialize_value implementations.
+        We also return different functions depending on how many partition key indexes we have (single or multiple).
+        See also BoundStatement.routing_key.
         """
         def serialize_value_prepared(n, v):
             return self.cqltypes[n].serialize(v, self.proto_version)
@@ -1734,13 +1781,12 @@ class ImportProcess(ChildProcess):
 
     def run(self):
         try:
-            if PROFILE_ON:
-                pr = profile_on()
+            pr = profile_on() if PROFILE_ON else None
 
             table_meta = self.session.cluster.metadata.keyspaces[self.ks].tables[self.table]
             self.inner_run(*self.make_params(table_meta))
 
-            if PROFILE_ON:
+            if pr:
                 profile_off(pr, file_name='worker_profile_%d.txt' % (os.getpid(),))
 
         except Exception, exc:
@@ -1841,12 +1887,14 @@ class ImportProcess(ChildProcess):
 
     def make_prepared_batch_statement(self, query, _, batch):
         statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
-        map(lambda r: statement.add(query, r), batch['rows'])
+        for r in batch['rows']:
+            statement.add(query, r)
         return statement
 
     def make_non_prepared_batch_statement(self, query, _, batch):
         statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
-        map(lambda r: statement.add(query % (','.join(r),)), batch['rows'])
+        for r in batch['rows']:
+            statement.add(query % (','.join(r),))
         return statement
 
     def convert_rows(self, conv, batch):
@@ -1921,14 +1969,13 @@ class ImportProcess(ChildProcess):
         errors = defaultdict(list)
         get_row_partition_key_values = conv.get_row_partition_key_values_fcn()
 
-        def index_row(row):
+        for row in batch['rows']:
             try:
                 pk = get_row_partition_key_values(row)
                 rows_by_pk[pk].append(row)
             except Exception, e:
                 errors[e.message].append(row)
 
-        map(index_row, batch['rows'])
         if errors:
             for msg, rows in errors.iteritems():
                 self.outmsg.put((ImportTask.split_batch(batch, rows),
@@ -1943,22 +1990,17 @@ class ImportProcess(ChildProcess):
         make_batch = ImportTask.make_batch
 
         rows_by_ring_pos = defaultdict(list)
-        ret = []
 
-        def process_rows(pk, rows):
+        for pk, rows in rows_by_pk.iteritems():
             if len(rows) >= min_batch_size:
-                ret.append(make_batch(batch['id'], rows, batch['attempts']))
+                yield make_batch(batch['id'], rows, batch['attempts'])
             else:
                 ring_idx = bisect_right(ring, make_token(pk))
                 rows_by_ring_pos[ring_idx].extend(rows)
 
-        def process_leftover_rows(rows):
+        for rows in rows_by_ring_pos.itervalues():
             for i in xrange(0, len(rows), max_batch_size):
-                ret.append(make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts']))
-
-        map(process_rows, rows_by_pk.iterkeys(), rows_by_pk.itervalues())
-        map(process_leftover_rows, rows_by_ring_pos.itervalues())
-        return ret
+                yield make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts'])
 
     def result_callback(self, _, batch, parent_batch):
         self.update_parent_batch(batch, parent_batch)

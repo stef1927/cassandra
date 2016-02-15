@@ -415,7 +415,7 @@ def complete_copy_column_names(ctxt, cqlsh):
 
 COPY_COMMON_OPTIONS = ['DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'NULL', 'DATETIMEFORMAT',
                        'MAXATTEMPTS', 'REPORTFREQUENCY', 'DECIMALSEP', 'THOUSANDSSEP', 'BOOLSTYLE',
-                       'NUMPROCESSES', 'CONFIGFILE', 'RATEFILE']
+                       'NUMPROCESSES', 'CONFIGFILE', 'RATEFILE', 'CPUAFFINITY']
 COPY_FROM_OPTIONS = ['CHUNKSIZE', 'INGESTRATE', 'MAXBATCHSIZE', 'MINBATCHSIZE', 'MAXROWS',
                      'SKIPROWS', 'SKIPCOLS', 'MAXPARSEERRORS', 'MAXINSERTERRORS', 'ERRFILE', 'PREPAREDSTATEMENTS']
 COPY_TO_OPTIONS = ['ENCODING', 'PAGESIZE', 'PAGETIMEOUT', 'BEGINTOKEN', 'ENDTOKEN', 'MAXOUTPUTSIZE', 'MAXREQUESTS']
@@ -1521,7 +1521,6 @@ class Shell(cmd.Cmd):
           BOOLSTYLE='True,False'  - the representation for booleans, case insensitive, specify true followed by false,
                                     for example yes,no or 1,0
           NUMPROCESSES=n          - the number of worker processes, by default the number of cores minus one
-                                    capped at 16
           CONFIGFILE=''           - a configuration file with the same format as .cqlshrc (see the Python ConfigParser
                                     documentation) where you can specify WITH options under the following optional
                                     sections: [copy], [copy-to], [copy-from], [copy:ks.table], [copy-to:ks.table],
@@ -1531,6 +1530,7 @@ class Shell(cmd.Cmd):
                                     Depending on the COPY direction, only the relevant copy-from or copy-to sections
                                     are used. If no configfile is specified then .cqlshrc is searched instead.
           RATEFILE=''             - an optional file where to print the output statistics
+          CPUAFFINITY=True        - whether to use CPU affinity (pinning) via taskset, available on Linux only
 
         Available COPY FROM options and defaults:
 
