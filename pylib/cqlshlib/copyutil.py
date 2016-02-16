@@ -23,8 +23,6 @@ import json
 import glob
 import multiprocessing as mp
 import os
-import platform
-import Queue
 import re
 import struct
 import sys
@@ -60,6 +58,7 @@ from formatting import format_value_default, EMPTY, get_formatter
 from sslhandling import ssl_settings
 
 PROFILE_ON = False
+STRACE_ON = False
 CopyOptions = namedtuple('CopyOptions', 'copy dialect unrecognized')
 
 
@@ -69,6 +68,66 @@ def safe_normpath(fname):
     an empty string (which means no file name) to a dot. Also expand any user variables such as ~ to the full path
     """
     return os.path.normpath(os.path.expanduser(fname)) if fname else fname
+
+
+class QueueEmpty(Exception):
+    "Exception raised by Queue.recv()."
+    pass
+
+
+class Queue(object):
+    """
+
+    """
+    def __init__(self, num_processes):
+        pipes = [mp.Pipe(duplex=False) for _ in xrange(num_processes)]
+        self._readers = [p[0] for p in pipes]
+        self._writers = [p[1] for p in pipes]
+        self._rlocks = [mp.Lock() for _ in xrange(num_processes)]
+        self._wlocks =  [mp.Lock() for _ in xrange(num_processes)]
+        self.num_processes = num_processes
+        self._current = 0
+
+    def _get_next(self):
+        c = self._current
+        self._current = self._current + 1 if self._current < (self.num_processes - 1) else 0
+        return c
+
+    def send_next(self, obj):
+        self.send_one(self._get_next(), obj)
+
+    def send_one(self, c, obj):
+        with self._wlocks[c]:
+            self._writers[c].send(obj)
+
+    def recv_all(self, timeout=None):
+        for c in xrange(self.num_processes):
+            try:
+                return self.recv_one(c, timeout)
+            except QueueEmpty:
+                pass
+        raise QueueEmpty()
+
+    def recv_one(self, c, timeout=None):
+        with self._rlocks[c]:
+            if self._readers[c].poll(timeout):
+                return self._readers[c].recv()
+            else:
+                raise QueueEmpty()
+
+    def close(self):
+        for reader in self._readers:
+            self._close(reader)
+
+        for writer in self._writers:
+            self._close(writer)
+
+    @staticmethod
+    def _close(connection):
+        try:
+            connection.close()
+        except:
+            pass
 
 
 class CopyTask(object):
@@ -91,8 +150,8 @@ class CopyTask(object):
         self.printmsg('Using %d child processes' % (self.num_processes,))
 
         self.processes = []
-        self.inmsg = mp.Queue()
-        self.outmsg = mp.Queue()
+        self.inmsg = Queue(self.num_processes)
+        self.outmsg = Queue(self.num_processes)
 
         self.columns = CopyTask.get_columns(shell, ks, table, columns)
         self.time_start = time.time()
@@ -178,7 +237,7 @@ class CopyTask(object):
         copy_options['maxattempts'] = int(opts.pop('maxattempts', 5))
         copy_options['dtformats'] = opts.pop('datetimeformat', shell.display_time_format)
         copy_options['float_precision'] = shell.display_float_precision
-        copy_options['chunksize'] = int(opts.pop('chunksize', 1000))
+        copy_options['chunksize'] = int(opts.pop('chunksize', 5000))
         copy_options['ingestrate'] = int(opts.pop('ingestrate', 100000))
         copy_options['maxbatchsize'] = int(opts.pop('maxbatchsize', 20))
         copy_options['minbatchsize'] = int(opts.pop('minbatchsize', 2))
@@ -199,7 +258,6 @@ class CopyTask(object):
         copy_options['ratefile'] = safe_normpath(opts.pop('ratefile', ''))
         copy_options['maxoutputsize'] = int(opts.pop('maxoutputsize', '-1'))
         copy_options['preparedstatements'] = bool(opts.pop('preparedstatements', 'true').lower() == 'true')
-        copy_options['cpuaffinity'] = bool(opts.pop('cpuaffinity', 'true').lower() == 'true')
 
         self.check_options(copy_options)
         return CopyOptions(copy=copy_options, dialect=dialect_options, unrecognized=opts)
@@ -235,34 +293,6 @@ class CopyTask(object):
             return 1
 
     @staticmethod
-    def get_core_number(index):
-        """
-        Return a suitable core number for an index, that is index 0 gets the first core and so on
-        until the maximum number of cores is reached at which point we roll over. If we only have
-        one core or CPU affinity is disabled then return None.
-        :param index: zero based index
-        :return: the core number up to the maximum number of cores, None if only one core is available
-        """
-        num_cores = CopyTask.get_num_cores()
-        return index % (num_cores - 1) if num_cores > 1 else 0
-
-    def set_processor_affinity(self, cpu_number, pid):
-        """
-        Set the processor affinity for process id pid. Currently only supported for Linux.
-        :param cpu_number: The CPU number, starting at zero to indicate the first core. If set to a negative value
-        then reset cpu affinity by allowing all cores (mask 0xFFFFFFFF).
-        :param pid: the process id
-        """
-        if not self.options.copy['cpuaffinity'] or pid is None or platform.system() != 'Linux' \
-                or CopyTask.get_num_cores() == 1:
-            return
-
-        mask = "{0:#0{1}x}".format(cpu_number + 1, 10) if cpu_number >= 0 else '0xffffffff'
-        if self.shell.debug:
-            self.printmsg("Setting affinity to %s for pid %d" % (mask, os.getpid()))
-        os.popen("taskset -p %s %d" % (mask, pid)).read()
-
-    @staticmethod
     def describe_interval(seconds):
         desc = []
         for length, unit in ((86400, 'day'), (3600, 'hour'), (60, 'minute')):
@@ -293,22 +323,26 @@ class CopyTask(object):
         self.inmsg.close()
         self.outmsg.close()
 
+    def num_live_processes(self):
+        return sum(1 for p in self.processes if p.is_alive())
+
     @staticmethod
     def get_pid():
         return os.getpid() if hasattr(os, 'getpid') else None
 
-    def num_live_processes(self):
-        return sum(1 for p in self.processes if p.is_alive())
+    @staticmethod
+    def trace_process(pid):
+        if pid and STRACE_ON:
+            os.system("strace -vvvv -c -o strace.{pid}.out -e trace=all -p {pid}&".format(pid=pid))
 
     def start_processes(self):
         for i, process in enumerate(self.processes):
             process.start()
-            self.set_processor_affinity(self.get_core_number(i), process.pid)
+            self.trace_process(process.pid)
 
-        self.set_processor_affinity(self.get_num_cores() - 1, self.get_pid())
+        self.trace_process(self.get_pid())
 
     def stop_processes(self):
-        self.set_processor_affinity(-1, self.get_pid())
         for process in self.processes:
             process.terminate()
 
@@ -473,7 +507,7 @@ class ExportTask(CopyTask):
 
         params = self.make_params()
         for i in xrange(self.num_processes):
-            self.processes.append(ExportProcess(params))
+            self.processes.append(ExportProcess(i, params))
 
         self.start_processes()
 
@@ -601,7 +635,7 @@ class ExportTask(CopyTask):
 
     def send_work(self, ranges, tokens_to_send):
         for token_range in tokens_to_send:
-            self.outmsg.put((token_range, ranges[token_range]))
+            self.outmsg.send_next((token_range, ranges[token_range]))
             ranges[token_range]['attempts'] += 1
 
     def export_records(self, ranges):
@@ -627,7 +661,7 @@ class ExportTask(CopyTask):
         failed = 0
         while (failed + succeeded) < total_requests and self.num_live_processes() == num_processes:
             try:
-                token_range, result = self.inmsg.get(timeout=1.0)
+                token_range, result = self.inmsg.recv_all(timeout=0.1)
                 if token_range is None and result is None:  # a request has finished
                     succeeded += 1
                 elif isinstance(result, Exception):  # an error occurred
@@ -652,7 +686,7 @@ class ExportTask(CopyTask):
                     self.writer.write(data, num)
                     meter.increment(n=num)
                     ranges[token_range]['rows'] += num
-            except Queue.Empty:
+            except QueueEmpty:
                 pass
 
         if self.num_live_processes() < len(processes):
@@ -920,7 +954,7 @@ class ImportTask(CopyTask):
             params = self.make_params()
 
             for i in range(self.num_processes):
-                self.processes.append(ImportProcess(params))
+                self.processes.append(ImportProcess(i, params))
 
             self.start_processes()
 
@@ -960,8 +994,8 @@ class ImportTask(CopyTask):
             if self.import_errors.max_exceeded() or not self.all_processes_running():
                 break
 
-        for _ in self.processes:
-            self.outmsg.put(None)
+        for i, _ in enumerate(self.processes):
+            self.outmsg.send_one(i, None)
 
         if PROFILE_ON:
             # allow time for worker processes to write profile results
@@ -994,9 +1028,9 @@ class ImportTask(CopyTask):
     def receive(self):
         start_time = time.time()
 
-        while time.time() - start_time < 0.001:
+        while time.time() - start_time < 0.1:
             try:
-                batch, err = self.inmsg.get(timeout=0.00001)
+                batch, err = self.inmsg.recv_all(timeout=0.001)
 
                 if err is None:
                     self.received += batch['imported']
@@ -1009,7 +1043,7 @@ class ImportTask(CopyTask):
                     else:
                         self.failed += len(batch['rows'])
 
-            except Queue.Empty:
+            except QueueEmpty:
                 pass
 
     def send_batches(self, reader):
@@ -1044,7 +1078,7 @@ class ImportTask(CopyTask):
         batch['attempts'] += 1
         num_rows = len(batch['rows'])
         self.send_meter.increment(num_rows)
-        self.outmsg.put(batch)
+        self.outmsg.send_next(batch)
         self.sent += num_rows
 
     def new_batch(self, rows):
@@ -1070,8 +1104,9 @@ class ChildProcess(mp.Process):
     An child worker process, this is for common functionality between ImportProcess and ExportProcess.
     """
 
-    def __init__(self, params, target):
+    def __init__(self, proc_num, params, target):
         mp.Process.__init__(self, target=target)
+        self.proc_num = proc_num
         self.inmsg = params['inmsg']
         self.outmsg = params['outmsg']
         self.ks = params['ks']
@@ -1205,8 +1240,8 @@ class ExportProcess(ChildProcess):
     An child worker process for the export task, ExportTask.
     """
 
-    def __init__(self, params):
-        ChildProcess.__init__(self, params=params, target=self.run)
+    def __init__(self, proc_num, params):
+        ChildProcess.__init__(self, proc_num=proc_num, params=params, target=self.run)
         options = params['options']
         self.encoding = options.copy['encoding']
         self.float_precision = options.copy['float_precision']
@@ -1239,7 +1274,7 @@ class ExportProcess(ChildProcess):
                 time.sleep(0.001)  # 1 millisecond
                 continue
 
-            token_range, info = self.inmsg.get()
+            token_range, info = self.inmsg.recv_one(self.proc_num)
             self.start_request(token_range, info)
 
     @staticmethod
@@ -1257,7 +1292,7 @@ class ExportProcess(ChildProcess):
     def report_error(self, err, token_range=None):
         msg = self.get_error_message(err, print_traceback=self.debug)
         self.printdebugmsg(msg)
-        self.outmsg.put((token_range, Exception(msg)))
+        self.outmsg.send_one(self.proc_num, (token_range, Exception(msg)))
 
     def start_request(self, token_range, info):
         """
@@ -1320,7 +1355,8 @@ class ExportProcess(ChildProcess):
             default_retry_policy=ExpBackoffRetryPolicy(self),
             compression=None,
             control_connection_timeout=self.connect_timeout,
-            connect_timeout=self.connect_timeout)
+            connect_timeout=self.connect_timeout,
+            idle_heartbeat_interval=0)
         session = ExportSession(new_cluster, self)
         self.hosts_to_sessions[host] = session
         return session
@@ -1335,7 +1371,7 @@ class ExportProcess(ChildProcess):
                 self.write_rows_to_csv(token_range, rows, cql_types)
             else:
                 self.write_rows_to_csv(token_range, rows, cql_types)
-                self.outmsg.put((None, None))
+                self.outmsg.send_one(self.proc_num, (None, None))
                 session.complete_request()
 
         def err_callback(err):
@@ -1356,7 +1392,7 @@ class ExportProcess(ChildProcess):
                 writer.writerow(map(self.format_value, row, cql_types))
 
             data = (output.getvalue(), len(rows))
-            self.outmsg.put((token_range, data))
+            self.outmsg.send_one(self.proc_num, (token_range, data))
             output.close()
 
         except Exception, e:
@@ -1741,8 +1777,8 @@ class ImportConversion(object):
 
 class ImportProcess(ChildProcess):
 
-    def __init__(self, params):
-        ChildProcess.__init__(self, params=params, target=self.run)
+    def __init__(self, proc_num, params):
+        ChildProcess.__init__(self, proc_num=proc_num, params=params, target=self.run)
 
         self.skip_columns = params['skip_columns']
         self.valid_columns = params['valid_columns']
@@ -1771,7 +1807,8 @@ class ImportProcess(ChildProcess):
                 default_retry_policy=ExpBackoffRetryPolicy(self),
                 compression=None,
                 control_connection_timeout=self.connect_timeout,
-                connect_timeout=self.connect_timeout)
+                connect_timeout=self.connect_timeout,
+                idle_heartbeat_interval=0)
 
             if HAS_LIB_EV:
                 cluster.connection_class = LibevConnection
@@ -1824,9 +1861,9 @@ class ImportProcess(ChildProcess):
             make_batch_fcn = self.wrap_make_batch(self.make_non_prepared_batch_statement)
 
         conv = ImportConversion(self, table_meta, prepared_statement)
-        return table_meta, query, conv, make_batch_fcn
+        return query, conv, make_batch_fcn
 
-    def inner_run(self, table_meta, query, conv, make_statement):
+    def inner_run(self, query, conv, make_statement):
         """
         Main run method. Note that we bind self methods that are called inside loops
         for performance reasons.
@@ -1834,8 +1871,9 @@ class ImportProcess(ChildProcess):
         convert_rows = self.convert_rows
         execute_statement = self.execute_statement
         split_batches = self.split_batches
+
         while True:
-            batch = self.inmsg.get()
+            batch =  self.inmsg.recv_one(self.proc_num)
             if batch is None:
                 break
 
@@ -1849,7 +1887,7 @@ class ImportProcess(ChildProcess):
                     execute_statement(make_statement(query, conv, b), b, batch)
 
             except Exception, exc:
-                self.outmsg.put((batch, '%s - %s' % (exc.__class__.__name__, exc.message)))
+                self.outmsg.send_one(self.proc_num, (batch, '%s - %s' % (exc.__class__.__name__, exc.message)))
                 if self.debug:
                     traceback.print_exc(exc)
 
@@ -1922,7 +1960,7 @@ class ImportProcess(ChildProcess):
 
         if errors:
             for msg, rows in errors.iteritems():
-                self.outmsg.put((ImportTask.split_batch(batch, rows),
+                self.outmsg.send_one(self.proc_num, (ImportTask.split_batch(batch, rows),
                                  '%s - %s' % (ParseError.__name__, msg)))
         return converted_rows
 
@@ -1978,7 +2016,7 @@ class ImportProcess(ChildProcess):
 
         if errors:
             for msg, rows in errors.iteritems():
-                self.outmsg.put((ImportTask.split_batch(batch, rows),
+                self.outmsg.send_one(self.proc_num, (ImportTask.split_batch(batch, rows),
                                  '%s - %s' % (ParseError.__name__, msg)))
 
         min_batch_size = self.min_batch_size
@@ -2007,7 +2045,7 @@ class ImportProcess(ChildProcess):
 
     def err_callback(self, response, batch, parent_batch):
         self.update_parent_batch(batch, parent_batch)
-        self.outmsg.put((batch, '%s - %s' % (response.__class__.__name__, response.message)))
+        self.outmsg.send_one(self.proc_num, (batch, '%s - %s' % (response.__class__.__name__, response.message)))
         if self.debug:
             traceback.print_exc(response)
 
@@ -2015,7 +2053,7 @@ class ImportProcess(ChildProcess):
         parent_batch['imported'] += len(batch['rows'])
         if parent_batch['imported'] == len(parent_batch['rows']):
             parent_batch['rows'] = []  # no need to resend these, just send the count in 'imported'
-            self.outmsg.put((parent_batch, None))
+            self.outmsg.send_one(self.proc_num, (parent_batch, None))
 
 
 class RateMeter(object):
