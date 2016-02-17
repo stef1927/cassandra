@@ -100,13 +100,8 @@ class Queue(object):
         with self._wlocks[c]:
             self._writers[c].send(obj)
 
-    def recv_all(self, timeout=None):
-        for c in xrange(self.num_processes):
-            try:
-                return self.recv_one(c, timeout)
-            except QueueEmpty:
-                pass
-        raise QueueEmpty()
+    def recv_next(self, timeout=None):
+        return self.recv_one(self._get_next(), timeout)
 
     def recv_one(self, c, timeout=None):
         with self._rlocks[c]:
@@ -238,10 +233,10 @@ class CopyTask(object):
         copy_options['dtformats'] = opts.pop('datetimeformat', shell.display_time_format)
         copy_options['float_precision'] = shell.display_float_precision
         copy_options['chunksize'] = int(opts.pop('chunksize', 5000))
-        copy_options['ingestrate'] = int(opts.pop('ingestrate', 100000))
+        copy_options['ingestrate'] = int(opts.pop('ingestrate', 200000))
         copy_options['maxbatchsize'] = int(opts.pop('maxbatchsize', 20))
         copy_options['minbatchsize'] = int(opts.pop('minbatchsize', 2))
-        copy_options['reportfrequency'] = float(opts.pop('reportfrequency', 0.25))
+        copy_options['reportfrequency'] = float(opts.pop('reportfrequency', 0.5))
         copy_options['consistencylevel'] = shell.consistency_level
         copy_options['decimalsep'] = opts.pop('decimalsep', '.')
         copy_options['thousandssep'] = opts.pop('thousandssep', '')
@@ -661,7 +656,7 @@ class ExportTask(CopyTask):
         failed = 0
         while (failed + succeeded) < total_requests and self.num_live_processes() == num_processes:
             try:
-                token_range, result = self.inmsg.recv_all(timeout=0.1)
+                token_range, result = self.inmsg.recv_next(timeout=0.1)
                 if token_range is None and result is None:  # a request has finished
                     succeeded += 1
                 elif isinstance(result, Exception):  # an error occurred
@@ -983,13 +978,16 @@ class ImportTask(CopyTask):
         receive check the incoming queue.
         """
         reader = self.reader
+        recv_time = time.time()
+        recv_interval = self.receive_meter.update_interval / 2
 
         while self.has_more_to_send(reader) or self.has_more_to_receive():
             if self.has_more_to_send(reader):
                 self.send_batches(reader)
-
-            if self.has_more_to_receive():
-                self.receive()
+                if time.time() - recv_time > recv_interval:
+                    recv_time = self.receive()
+            else:
+                recv_time = self.receive()
 
             if self.import_errors.max_exceeded() or not self.all_processes_running():
                 break
@@ -1026,25 +1024,30 @@ class ImportTask(CopyTask):
         return self.num_live_processes() == self.num_processes
 
     def receive(self):
-        start_time = time.time()
+        start = time.time()
+        now = start
 
-        while time.time() - start_time < 0.1:
-            try:
-                batch, err = self.inmsg.recv_all(timeout=0.001)
+        while now - start < 0.01:
+            for i, _ in enumerate(self.processes):
+                try:
+                    batch, err = self.inmsg.recv_one(i, timeout=0.000001)
 
-                if err is None:
-                    self.received += batch['imported']
-                    self.receive_meter.increment(batch['imported'])
-                else:
-                    err = str(err)
-
-                    if self.import_errors.handle_error(err, batch):
-                        self.retries.append(self.reset_batch(batch))
+                    if err is None:
+                        self.received += batch['imported']
+                        self.receive_meter.increment(batch['imported'])
                     else:
-                        self.failed += len(batch['rows'])
+                        err = str(err)
 
-            except QueueEmpty:
-                pass
+                        if self.import_errors.handle_error(err, batch):
+                            self.retries.append(self.reset_batch(batch))
+                        else:
+                            self.failed += len(batch['rows'])
+
+                except QueueEmpty:
+                    pass
+
+            now = time.time()
+        return now
 
     def send_batches(self, reader):
         """
@@ -1873,7 +1876,7 @@ class ImportProcess(ChildProcess):
         split_batches = self.split_batches
 
         while True:
-            batch =  self.inmsg.recv_one(self.proc_num)
+            batch = self.inmsg.recv_one(self.proc_num)
             if batch is None:
                 break
 
@@ -1883,33 +1886,33 @@ class ImportProcess(ChildProcess):
                     batch['rows'] = convert_rows(conv, batch)
 
                 batch['imported'] = 0
-                for b in split_batches(batch, conv):
-                    execute_statement(make_statement(query, conv, b), b, batch)
+                for pk, b in split_batches(batch, conv):
+                    execute_statement(make_statement(query, conv, b, pk), b, batch)
 
             except Exception, exc:
-                self.outmsg.send_one(self.proc_num, (batch, '%s - %s' % (exc.__class__.__name__, exc.message)))
-                if self.debug:
-                    traceback.print_exc(exc)
+                self.report_error(exc, batch)
 
     def wrap_make_batch(self, inner_make_batch):
-        def make_batch(query_text, conv, batch):
+        def make_batch(query, conv, batch, pk):
             try:
-                return inner_make_batch(query_text, conv, batch)
+                return inner_make_batch(query, conv, batch, pk)
             except Exception, exc:
                 print "Failed to make batch: {}".format(exc)
-                self.err_callback(exc, batch)
+                self.report_error(exc, batch)
                 return None
 
-        def make_batch_with_failures(query_text, conv, batch):
+        def make_batch_with_failures(query, conv, batch, pk):
             failed_batch = self.maybe_inject_failures(batch)
             if failed_batch:
                 return failed_batch
-            return make_batch(query_text, conv, batch)
+            return make_batch(query, conv, batch, pk)
 
         return make_batch_with_failures if self.test_failures else make_batch
 
-    def make_counter_batch_statement(self, query, conv, batch):
+    def make_counter_batch_statement(self, query, conv, batch, pk):
         statement = BatchStatement(batch_type=BatchType.COUNTER, consistency_level=self.consistency_level)
+        statement.routing_key = pk
+        statement.keyspace = self.ks
         for row in batch['rows']:
             where_clause = []
             set_clause = []
@@ -1923,16 +1926,28 @@ class ImportProcess(ChildProcess):
             statement.add(full_query_text)
         return statement
 
-    def make_prepared_batch_statement(self, query, _, batch):
+    def make_prepared_batch_statement(self, query, _, batch, pk):
+        """
+        Return a batch statement. This is an optimized version of:
+
+            statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
+            for row in batch['rows']:
+                statement.add(query, row)
+
+        We could optimize further by removing bound_statements altogether but we'd have to duplicate much
+        more driver's code (BoundStatement.bind()).
+        """
         statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
-        for r in batch['rows']:
-            statement.add(query, r)
+        statement.routing_key = pk
+        statement.keyspace = query.column_metadata[0].keyspace_name
+        statement._statements_and_parameters = [(True, query.query_id, query.bind(r).values) for r in batch['rows']]
         return statement
 
-    def make_non_prepared_batch_statement(self, query, _, batch):
+    def make_non_prepared_batch_statement(self, query, _, batch, pk):
         statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
-        for r in batch['rows']:
-            statement.add(query % (','.join(r),))
+        statement.routing_key = pk
+        statement.keyspace = self.ks
+        statement._statements_and_parameters = [(False, query % (','.join(r),), ()) for r in batch['rows']]
         return statement
 
     def convert_rows(self, conv, batch):
@@ -2026,28 +2041,35 @@ class ImportProcess(ChildProcess):
 
         make_token = token_map.token_class.from_key
         make_batch = ImportTask.make_batch
-
-        rows_by_ring_pos = defaultdict(list)
+        rows_by_ring_idx = dict()
 
         for pk, rows in rows_by_pk.iteritems():
             if len(rows) >= min_batch_size:
-                yield make_batch(batch['id'], rows, batch['attempts'])
+                yield pk, [make_batch(batch['id'], rows, batch['attempts'])]
             else:
                 ring_idx = bisect_right(ring, make_token(pk))
-                rows_by_ring_pos[ring_idx].extend(rows)
+                if ring_idx in rows_by_ring_idx:
+                    rows_by_ring_idx[ring_idx][1].extend(rows)
+                else:
+                    # we store the first partition key which will because the routing key
+                    rows_by_ring_idx[ring_idx] = (pk, rows)
 
-        for rows in rows_by_ring_pos.itervalues():
+        for ring_pos, (pk, rows) in rows_by_ring_idx.iteritems():
             for i in xrange(0, len(rows), max_batch_size):
-                yield make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts'])
+                yield pk, make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts'])
 
     def result_callback(self, _, batch, parent_batch):
         self.update_parent_batch(batch, parent_batch)
 
-    def err_callback(self, response, batch, parent_batch):
-        self.update_parent_batch(batch, parent_batch)
-        self.outmsg.send_one(self.proc_num, (batch, '%s - %s' % (response.__class__.__name__, response.message)))
+    def err_callback(self, response, batch, parent_batch=None):
+        self.report_error(response, batch)
+        if parent_batch:
+            self.update_parent_batch(batch, parent_batch)
+
+    def report_error(self, err, batch):
         if self.debug:
-            traceback.print_exc(response)
+            traceback.print_exc(err)
+        self.outmsg.send_one(self.proc_num, (batch, '%s - %s' % (err.__class__.__name__, err.message)))
 
     def update_parent_batch(self, batch, parent_batch):
         parent_batch['imported'] += len(batch['rows'])
