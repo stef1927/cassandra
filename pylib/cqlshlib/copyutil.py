@@ -23,6 +23,7 @@ import json
 import glob
 import multiprocessing as mp
 import os
+import platform
 import re
 import struct
 import sys
@@ -35,6 +36,7 @@ from collections import defaultdict, deque, namedtuple
 from decimal import Decimal
 from random import randrange
 from StringIO import StringIO
+from select import select
 from threading import Lock
 from uuid import UUID
 from util import profile_on, profile_off
@@ -59,6 +61,8 @@ from sslhandling import ssl_settings
 
 PROFILE_ON = False
 STRACE_ON = False
+IS_LINUX = platform.system() == 'Linux'
+
 CopyOptions = namedtuple('CopyOptions', 'copy dialect unrecognized')
 
 
@@ -70,45 +74,106 @@ def safe_normpath(fname):
     return os.path.normpath(os.path.expanduser(fname)) if fname else fname
 
 
-class QueueEmpty(Exception):
-    "Exception raised by Queue.recv()."
-    pass
-
-
-class Queue(object):
+class MessageChannel(object):
     """
-
+    A channel used to exchange messages. This is currently implemented as n one-way pipes.
+    At the moment num_pipes=num_processes but this doesn't have to be the case.
+    Initially we had one single pipe shared by all processes and this gave too much contention.
+    Now we have one pipe per process but if we encounter scalability problems with too many processes
+    then we could have 2 processes sharing a pipe for example.
     """
-    def __init__(self, num_processes):
-        pipes = [mp.Pipe(duplex=False) for _ in xrange(num_processes)]
+    def __init__(self, num_pipes):
+        pipes = [mp.Pipe(duplex=False) for _ in xrange(num_pipes)]
         self._readers = [p[0] for p in pipes]
         self._writers = [p[1] for p in pipes]
-        self._rlocks = [mp.Lock() for _ in xrange(num_processes)]
-        self._wlocks =  [mp.Lock() for _ in xrange(num_processes)]
-        self.num_processes = num_processes
+        self._rlocks = [mp.Lock() for _ in xrange(num_pipes)]
+        self._wlocks =  [mp.Lock() for _ in xrange(num_pipes)]
+        self._rlocks_by_readers = dict([(r, l) for r, l in zip(self._readers, self._rlocks)])
+        self.num_pipes = num_pipes
         self._current = 0
+
+        # the last time we have received something in self.recv
+        self.recv_time = time.time()
+        # if this is set then we only receive after this interval
+        self.recv_interval = None
+
+        # The recv method is used by the parent process to receive work from the pipes that
+        # are ready. I think MacOS may have select but I am not able to test it so I enabled
+        # the select implementation only for Linux.
+        self._recv = self._recv_select if IS_LINUX else self._recv_polling
 
     def _get_next(self):
         c = self._current
-        self._current = self._current + 1 if self._current < (self.num_processes - 1) else 0
+        self._current = self._current + 1 if self._current < (self.num_pipes - 1) else 0
         return c
 
     def send_next(self, obj):
+        """
+        Send the object to the next pipe. This is just a round robin at the moment, we do not
+        check if the pipe is able to send for example. This is used by the parent process to
+        dish out work.
+        """
         self.send_one(self._get_next(), obj)
 
     def send_one(self, c, obj):
+        """
+        Send the object to a specific pipe with index "c". This is used by worker processes to send
+        results back on a specific pipe.
+        """
         with self._wlocks[c]:
             self._writers[c].send(obj)
 
-    def recv_next(self, timeout=None):
-        return self.recv_one(self._get_next(), timeout)
+    def recv(self, timeout):
+        """
+        Receive from all pipes that are ready for up to timeout seconds. This method is used by the
+        parent process to receive results from worker processes.
+        """
+        start = time.time()
+        if self.recv_interval is not None and start - self.recv_time < self.recv_interval:
+            return
 
-    def recv_one(self, c, timeout=None):
+        while True:
+            for obj in self._recv():
+                yield obj
+
+            now = time.time()
+            if now - start > timeout:
+                self.recv_time = now
+                break
+
+    def _recv_select(self):
+        """
+        Implementation of the recv method for Linux, where select is available. Receive an object from
+        all pipes that are ready for reading without blocking.
+        """
+        readable, _, _ = select(self._readers, [], [], 0.000000001)
+        for r in readable:
+            with self._rlocks_by_readers[r]:
+                try:
+                    yield r.recv()
+                except EOFError:
+                    continue
+
+    def _recv_polling(self):
+        """
+        Implementation of the recv method for platforms where select() is not available for pipes.
+        We poll on all of the readers with a very small timeout.
+        """
+        for i, r in enumerate(self._readers):
+            with self._rlocks[i]:
+                if r.poll(0.000000001):
+                    try:
+                        yield r.recv()
+                    except EOFError:
+                        continue
+
+    def recv_one(self, c):
+        """
+        Receive from a specific pipe "c", block if required. This is used by the worker processes
+        to receive work from the pipe assigned to them.
+        """
         with self._rlocks[c]:
-            if self._readers[c].poll(timeout):
-                return self._readers[c].recv()
-            else:
-                raise QueueEmpty()
+            return self._readers[c].recv()
 
     def close(self):
         for reader in self._readers:
@@ -145,8 +210,8 @@ class CopyTask(object):
         self.printmsg('Using %d child processes' % (self.num_processes,))
 
         self.processes = []
-        self.inmsg = Queue(self.num_processes)
-        self.outmsg = Queue(self.num_processes)
+        self.inmsg = MessageChannel(self.num_processes)
+        self.outmsg = MessageChannel(self.num_processes)
 
         self.columns = CopyTask.get_columns(shell, ks, table, columns)
         self.time_start = time.time()
@@ -233,7 +298,7 @@ class CopyTask(object):
         copy_options['dtformats'] = opts.pop('datetimeformat', shell.display_time_format)
         copy_options['float_precision'] = shell.display_float_precision
         copy_options['chunksize'] = int(opts.pop('chunksize', 5000))
-        copy_options['ingestrate'] = int(opts.pop('ingestrate', 200000))
+        copy_options['ingestrate'] = int(opts.pop('ingestrate', 100000))
         copy_options['maxbatchsize'] = int(opts.pop('maxbatchsize', 20))
         copy_options['minbatchsize'] = int(opts.pop('minbatchsize', 2))
         copy_options['reportfrequency'] = float(opts.pop('reportfrequency', 0.5))
@@ -655,8 +720,7 @@ class ExportTask(CopyTask):
         succeeded = 0
         failed = 0
         while (failed + succeeded) < total_requests and self.num_live_processes() == num_processes:
-            try:
-                token_range, result = self.inmsg.recv_next(timeout=0.1)
+            for token_range, result in self.inmsg.recv(timeout=0.1):
                 if token_range is None and result is None:  # a request has finished
                     succeeded += 1
                 elif isinstance(result, Exception):  # an error occurred
@@ -681,8 +745,6 @@ class ExportTask(CopyTask):
                     self.writer.write(data, num)
                     meter.increment(n=num)
                     ranges[token_range]['rows'] += num
-            except QueueEmpty:
-                pass
 
         if self.num_live_processes() < len(processes):
             for process in processes:
@@ -920,6 +982,9 @@ class ImportTask(CopyTask):
         self.received = 0
         self.sent = 0
 
+        # we only want to receive twice per update interval
+        self.inmsg.recv_interval = self.receive_meter.update_interval / 2
+
     def make_params(self):
         ret = CopyTask.make_params(self)
         ret['skip_columns'] = self.skip_columns
@@ -978,16 +1043,12 @@ class ImportTask(CopyTask):
         receive check the incoming queue.
         """
         reader = self.reader
-        recv_time = time.time()
-        recv_interval = self.receive_meter.update_interval / 2
 
         while self.has_more_to_send(reader) or self.has_more_to_receive():
             if self.has_more_to_send(reader):
                 self.send_batches(reader)
-                if time.time() - recv_time > recv_interval:
-                    recv_time = self.receive()
-            else:
-                recv_time = self.receive()
+
+            self.receive()
 
             if self.import_errors.max_exceeded() or not self.all_processes_running():
                 break
@@ -1024,30 +1085,19 @@ class ImportTask(CopyTask):
         return self.num_live_processes() == self.num_processes
 
     def receive(self):
-        start = time.time()
-        now = start
+        for batch, err in self.inmsg.recv(timeout=0.01):
+            if err is None:
+                self.received += batch['imported']
+                self.receive_meter.increment(batch['imported'])
+            else:
+                err = str(err)
 
-        while now - start < 0.01:
-            for i, _ in enumerate(self.processes):
-                try:
-                    batch, err = self.inmsg.recv_one(i, timeout=0.000001)
+                if self.import_errors.handle_error(err, batch):
+                    self.retries.append(self.reset_batch(batch))
+                else:
+                    self.failed += len(batch['rows'])
 
-                    if err is None:
-                        self.received += batch['imported']
-                        self.receive_meter.increment(batch['imported'])
-                    else:
-                        err = str(err)
-
-                        if self.import_errors.handle_error(err, batch):
-                            self.retries.append(self.reset_batch(batch))
-                        else:
-                            self.failed += len(batch['rows'])
-
-                except QueueEmpty:
-                    pass
-
-            now = time.time()
-        return now
+        return time.time()
 
     def send_batches(self, reader):
         """
@@ -1778,6 +1828,30 @@ class ImportConversion(object):
         return serialize_row_multiple
 
 
+class TokenMap(object):
+    """
+    A thin wrapper around the metadata token map and other ring information.
+    It is very important that we use the token values rather than the tokens for a bisect_right()
+    in split_batches(). If we use values, it will be done really fast in compiled code, with token classes
+    each comparison would require a call into the interpreter to perform the cmp operation defined with
+    Python code
+    """
+    def __init__(self, ks, hostname, local_dc, metadata):
+        self.hostname = hostname
+        self.local_dc = local_dc
+        self.token_map = metadata.token_map
+        self.token_map.rebuild_keyspace(ks, build_if_absent=True)
+        self.tokens_to_hosts = self.token_map.tokens_to_hosts_by_ks.get(ks, None)
+
+        self.ring = [r.value for r in self.token_map.ring]
+        self.pk_to_token = self.token_map.token_class.from_key
+
+    def get_replica(self, idx):
+        token = self.token_map.ring[idx] if idx < len(self.ring) else self.token_map.ring[0]
+        replicas = filter(lambda r: r.is_up and r.datacenter == self.local_dc, self.tokens_to_hosts[token])
+        return replicas[0].address if len(replicas) > 0 else self.hostname
+
+
 class ImportProcess(ChildProcess):
 
     def __init__(self, proc_num, params):
@@ -1823,8 +1897,7 @@ class ImportProcess(ChildProcess):
         try:
             pr = profile_on() if PROFILE_ON else None
 
-            table_meta = self.session.cluster.metadata.keyspaces[self.ks].tables[self.table]
-            self.inner_run(*self.make_params(table_meta))
+            self.inner_run(*self.make_params())
 
             if pr:
                 profile_off(pr, file_name='worker_profile_%d.txt' % (os.getpid(),))
@@ -1841,7 +1914,9 @@ class ImportProcess(ChildProcess):
             self._session.cluster.shutdown()
         ChildProcess.close(self)
 
-    def make_params(self, table_meta):
+    def make_params(self):
+        metadata = self.session.cluster.metadata
+        table_meta = metadata.keyspaces[self.ks].tables[self.table]
         prepared_statement = None
         is_counter = ("counter" in [table_meta.columns[name].typestring for name in self.valid_columns])
         if is_counter:
@@ -1864,9 +1939,10 @@ class ImportProcess(ChildProcess):
             make_batch_fcn = self.wrap_make_batch(self.make_non_prepared_batch_statement)
 
         conv = ImportConversion(self, table_meta, prepared_statement)
-        return query, conv, make_batch_fcn
+        tm = TokenMap(self.ks, self.hostname, self.local_dc, metadata)
+        return query, conv, tm, make_batch_fcn
 
-    def inner_run(self, query, conv, make_statement):
+    def inner_run(self, query, conv, tm, make_statement):
         """
         Main run method. Note that we bind self methods that are called inside loops
         for performance reasons.
@@ -1886,7 +1962,7 @@ class ImportProcess(ChildProcess):
                     batch['rows'] = convert_rows(conv, batch)
 
                 batch['imported'] = 0
-                for pk, b in split_batches(batch, conv):
+                for pk, b in split_batches(batch, conv, tm):
                     execute_statement(make_statement(query, conv, b, pk), b, batch)
 
             except Exception, exc:
@@ -2006,7 +2082,7 @@ class ImportProcess(ChildProcess):
         future.add_callbacks(callback=self.result_callback, callback_args=(batch, parent_batch),
                              errback=self.err_callback, errback_args=(batch, parent_batch))
 
-    def split_batches(self, batch, conv):
+    def split_batches(self, batch, conv, tm):
         """
         Batch rows by partition key, if there are at least min_batch_size (2)
         rows with the same partition key. These batches can be as big as they want
@@ -2036,25 +2112,25 @@ class ImportProcess(ChildProcess):
 
         min_batch_size = self.min_batch_size
         max_batch_size = self.max_batch_size
-        token_map = self.session.cluster.metadata.token_map
-        ring = token_map.ring
 
-        make_token = token_map.token_class.from_key
+        ring = tm.ring
+        make_token = tm.pk_to_token
+        get_replica = tm.get_replica
         make_batch = ImportTask.make_batch
-        rows_by_ring_idx = dict()
+        rows_by_replica = dict()
 
         for pk, rows in rows_by_pk.iteritems():
             if len(rows) >= min_batch_size:
                 yield pk, [make_batch(batch['id'], rows, batch['attempts'])]
             else:
-                ring_idx = bisect_right(ring, make_token(pk))
-                if ring_idx in rows_by_ring_idx:
-                    rows_by_ring_idx[ring_idx][1].extend(rows)
+                replica = get_replica(bisect_right(ring, make_token(pk).value))
+                if replica in rows_by_replica:
+                    rows_by_replica[replica][1].extend(rows)
                 else:
-                    # we store the first partition key which will because the routing key
-                    rows_by_ring_idx[ring_idx] = (pk, rows)
+                    # we store the first partition key which will become the routing key
+                    rows_by_replica[replica] = (pk, rows)
 
-        for ring_pos, (pk, rows) in rows_by_ring_idx.iteritems():
+        for _, (pk, rows) in rows_by_replica.iteritems():
             for i in xrange(0, len(rows), max_batch_size):
                 yield pk, make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts'])
 

@@ -1515,7 +1515,7 @@ class Shell(cmd.Cmd):
           DATETIMEFORMAT=         - timestamp strftime format
             '%Y-%m-%d %H:%M:%S%z'   defaults to time_format value in cqlshrc
           MAXATTEMPTS=5           - the maximum number of attempts per batch or range
-          REPORTFREQUENCY=0.25    - the frequency with which we display status updates in seconds
+          REPORTFREQUENCY=0.5     - the frequency with which we display status updates in seconds
           DECIMALSEP='.'          - the separator for decimal values
           THOUSANDSSEP=''         - the separator for thousands digit groups
           BOOLSTYLE='True,False'  - the representation for booleans, case insensitive, specify true followed by false,
@@ -1533,8 +1533,8 @@ class Shell(cmd.Cmd):
 
         Available COPY FROM options and defaults:
 
-          CHUNKSIZE=1000           - the size of chunks passed to worker processes
-          INGESTRATE=100000        - an approximate ingest rate in rows per second
+          CHUNKSIZE=5000           - the size of chunks passed to worker processes
+          INGESTRATE=200000        - an approximate ingest rate in rows per second
           MINBATCHSIZE=2           - the minimum size of an import batch
           MAXBATCHSIZE=20          - the maximum size of an import batch
           MAXROWS=-1               - the maximum number of rows, -1 means no maximum
