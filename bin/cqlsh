@@ -417,7 +417,8 @@ COPY_COMMON_OPTIONS = ['DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'NULL', 'DATETI
                        'MAXATTEMPTS', 'REPORTFREQUENCY', 'DECIMALSEP', 'THOUSANDSSEP', 'BOOLSTYLE',
                        'NUMPROCESSES', 'CONFIGFILE', 'RATEFILE']
 COPY_FROM_OPTIONS = ['CHUNKSIZE', 'INGESTRATE', 'MAXBATCHSIZE', 'MINBATCHSIZE', 'MAXROWS',
-                     'SKIPROWS', 'SKIPCOLS', 'MAXPARSEERRORS', 'MAXINSERTERRORS', 'ERRFILE', 'PREPAREDSTATEMENTS']
+                     'SKIPROWS', 'SKIPCOLS', 'MAXPARSEERRORS', 'MAXINSERTERRORS', 'ERRFILE',
+                     'PREPAREDSTATEMENTS', "RECEIVETIME"]
 COPY_TO_OPTIONS = ['ENCODING', 'PAGESIZE', 'PAGETIMEOUT', 'BEGINTOKEN', 'ENDTOKEN', 'MAXOUTPUTSIZE', 'MAXREQUESTS']
 
 
@@ -1533,9 +1534,9 @@ class Shell(cmd.Cmd):
 
         Available COPY FROM options and defaults:
 
-          CHUNKSIZE=5000           - the size of chunks passed to worker processes
+          CHUNKSIZE=5000          - the size of chunks passed to worker processes
           INGESTRATE=200000        - an approximate ingest rate in rows per second
-          MINBATCHSIZE=2           - the minimum size of an import batch
+          MINBATCHSIZE=10          - the minimum size of an import batch
           MAXBATCHSIZE=20          - the maximum size of an import batch
           MAXROWS=-1               - the maximum number of rows, -1 means no maximum
           SKIPROWS=0               - the number of rows to skip
@@ -1549,6 +1550,9 @@ class Shell(cmd.Cmd):
                                     have to compile every batch statement. For large and oversized clusters
                                     this will result in a faster import but for smaller clusters it may generate
                                     timeouts.
+          RECEIVETIME=0.05        - time in seconds spent receiving results from worker processes after having sent some
+                                    CHUNKSIZE rows to each process. Increase this value if you notice the report rate
+                                    is lagging behind the final average.
 
         Available COPY TO options and defaults:
 

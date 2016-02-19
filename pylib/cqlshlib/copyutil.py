@@ -24,6 +24,7 @@ import glob
 import multiprocessing as mp
 import os
 import platform
+import random
 import re
 import struct
 import sys
@@ -43,8 +44,8 @@ from util import profile_on, profile_off
 
 from cassandra.cluster import Cluster
 from cassandra.cqltypes import ReversedType, UserType
-from cassandra.metadata import protect_name, protect_names, protect_value
-from cassandra.policies import RetryPolicy, WhiteListRoundRobinPolicy, TokenAwarePolicy, DCAwareRoundRobinPolicy
+from cassandra.metadata import protect_name, protect_names, protect_value, Metadata
+from cassandra.policies import RetryPolicy, WhiteListRoundRobinPolicy, DCAwareRoundRobinPolicy
 from cassandra.query import BatchStatement, BatchType, SimpleStatement, tuple_factory
 from cassandra.util import Date, Time
 
@@ -74,6 +75,11 @@ def safe_normpath(fname):
     return os.path.normpath(os.path.expanduser(fname)) if fname else fname
 
 
+class ChannelEmpty(Exception):
+    "Exception raised by MessageChannel receive methods"
+    pass
+
+
 class MessageChannel(object):
     """
     A channel used to exchange messages. This is currently implemented as n one-way pipes.
@@ -91,11 +97,6 @@ class MessageChannel(object):
         self._rlocks_by_readers = dict([(r, l) for r, l in zip(self._readers, self._rlocks)])
         self.num_pipes = num_pipes
         self._current = 0
-
-        # the last time we have received something in self.recv
-        self.recv_time = time.time()
-        # if this is set then we only receive after this interval
-        self.recv_interval = None
 
         # The recv method is used by the parent process to receive work from the pipes that
         # are ready. I think MacOS may have select but I am not able to test it so I enabled
@@ -129,16 +130,11 @@ class MessageChannel(object):
         parent process to receive results from worker processes.
         """
         start = time.time()
-        if self.recv_interval is not None and start - self.recv_time < self.recv_interval:
-            return
-
         while True:
             for obj in self._recv():
                 yield obj
 
-            now = time.time()
-            if now - start > timeout:
-                self.recv_time = now
+            if time.time() - start > timeout:
                 break
 
     def _recv_select(self):
@@ -167,13 +163,16 @@ class MessageChannel(object):
                     except EOFError:
                         continue
 
-    def recv_one(self, c):
+    def recv_one(self, c, timeout=None):
         """
         Receive from a specific pipe "c", block if required. This is used by the worker processes
         to receive work from the pipe assigned to them.
         """
         with self._rlocks[c]:
-            return self._readers[c].recv()
+            if self._readers[c].poll(timeout):
+                return self._readers[c].recv()
+            else:
+                raise ChannelEmpty()
 
     def close(self):
         for reader in self._readers:
@@ -298,9 +297,9 @@ class CopyTask(object):
         copy_options['dtformats'] = opts.pop('datetimeformat', shell.display_time_format)
         copy_options['float_precision'] = shell.display_float_precision
         copy_options['chunksize'] = int(opts.pop('chunksize', 5000))
-        copy_options['ingestrate'] = int(opts.pop('ingestrate', 100000))
+        copy_options['ingestrate'] = int(opts.pop('ingestrate', 200000))
         copy_options['maxbatchsize'] = int(opts.pop('maxbatchsize', 20))
-        copy_options['minbatchsize'] = int(opts.pop('minbatchsize', 2))
+        copy_options['minbatchsize'] = int(opts.pop('minbatchsize', 10))
         copy_options['reportfrequency'] = float(opts.pop('reportfrequency', 0.5))
         copy_options['consistencylevel'] = shell.consistency_level
         copy_options['decimalsep'] = opts.pop('decimalsep', '.')
@@ -318,6 +317,7 @@ class CopyTask(object):
         copy_options['ratefile'] = safe_normpath(opts.pop('ratefile', ''))
         copy_options['maxoutputsize'] = int(opts.pop('maxoutputsize', '-1'))
         copy_options['preparedstatements'] = bool(opts.pop('preparedstatements', 'true').lower() == 'true')
+        copy_options['receivetime'] = float(opts.pop('receivetime', 0.01))
 
         self.check_options(copy_options)
         return CopyOptions(copy=copy_options, dialect=dialect_options, unrecognized=opts)
@@ -971,6 +971,7 @@ class ImportTask(CopyTask):
         self.valid_columns = [c for c in self.columns if c not in self.skip_columns]
         self.table_meta = self.shell.get_table_meta(self.ks, self.table)
         self.batch_id = 0
+        self.receive_time = options.copy['receivetime']
         self.receive_meter = RateMeter(log_fcn=self.printmsg,
                                        update_interval=options.copy['reportfrequency'],
                                        log_file=options.copy['ratefile'])
@@ -981,9 +982,6 @@ class ImportTask(CopyTask):
         self.failed = 0
         self.received = 0
         self.sent = 0
-
-        # we only want to receive twice per update interval
-        self.inmsg.recv_interval = self.receive_meter.update_interval / 2
 
     def make_params(self):
         ret = CopyTask.make_params(self)
@@ -1043,12 +1041,16 @@ class ImportTask(CopyTask):
         receive check the incoming queue.
         """
         reader = self.reader
+        recv_time = time.time()
+        recv_interval = self.receive_meter.update_interval / 2
 
         while self.has_more_to_send(reader) or self.has_more_to_receive():
             if self.has_more_to_send(reader):
                 self.send_batches(reader)
-
-            self.receive()
+                if time.time() - recv_time > recv_interval:
+                    recv_time = self.receive()
+            else:
+                recv_time = self.receive()
 
             if self.import_errors.max_exceeded() or not self.all_processes_running():
                 break
@@ -1084,20 +1086,52 @@ class ImportTask(CopyTask):
     def all_processes_running(self):
         return self.num_live_processes() == self.num_processes
 
+    # def receive(self):
+    #     received = 0
+    #     try:
+    #         for batch, err in self.inmsg.recv(timeout=self.receive_time):
+    #             if err is None:
+    #                 received += batch['imported']
+    #             else:
+    #                 err = str(err)
+    #                 if self.import_errors.handle_error(err, batch):
+    #                     self.retries.append(self.reset_batch(batch))
+    #                 else:
+    #                     self.failed += len(batch['rows'])
+    #     finally:
+    #         self.received += received
+    #         self.receive_meter.increment(received)
+    #
+    #     return time.time()
+
     def receive(self):
-        for batch, err in self.inmsg.recv(timeout=0.01):
-            if err is None:
-                self.received += batch['imported']
-                self.receive_meter.increment(batch['imported'])
-            else:
-                err = str(err)
+        start = time.time()
+        now = start
+        received = 0
 
-                if self.import_errors.handle_error(err, batch):
-                    self.retries.append(self.reset_batch(batch))
-                else:
-                    self.failed += len(batch['rows'])
+        while now - start < self.receive_time:
+            for i, _ in enumerate(self.processes):
+                try:
+                    batch, err = self.inmsg.recv_one(i, timeout=0.000001)
 
-        return time.time()
+                    if err is None:
+                        received += batch['imported']
+                    else:
+                        err = str(err)
+
+                        if self.import_errors.handle_error(err, batch):
+                            self.retries.append(self.reset_batch(batch))
+                        else:
+                            self.failed += len(batch['rows'])
+
+                except ChannelEmpty:
+                    pass
+
+            now = time.time()
+
+        self.received += received
+        self.receive_meter.increment(received)
+        return now
 
     def send_batches(self, reader):
         """
@@ -1830,26 +1864,75 @@ class ImportConversion(object):
 
 class TokenMap(object):
     """
-    A thin wrapper around the metadata token map and other ring information.
-    It is very important that we use the token values rather than the tokens for a bisect_right()
-    in split_batches(). If we use values, it will be done really fast in compiled code, with token classes
-    each comparison would require a call into the interpreter to perform the cmp operation defined with
-    Python code
+    A wrapper around the metadata token map to speed things up by caching ring token *values* and
+    replicas. It is very important that we use the token values, which are primitive types, rather
+    than the tokens classes when calling bisect_right() in split_batches(). If we use primitive values,
+    the bisect is done in compiled code whilst with token classes each comparison requires a call
+    into the interpreter to perform the cmp operation defined in Python. A simple test with 1 million bisect
+    operations on an array of 2048 tokens was done in 0.37 seconds with primitives and 2.25 seconds with
+    token classes. This is significant for large datasets because we need to do a bisect for each single row,
+    and if VNODES are used, the size of the token map can get quite large too.
     """
-    def __init__(self, ks, hostname, local_dc, metadata):
+    def __init__(self, ks, hostname, local_dc, session):
+
+        self.ks = ks
         self.hostname = hostname
         self.local_dc = local_dc
-        self.token_map = metadata.token_map
-        self.token_map.rebuild_keyspace(ks, build_if_absent=True)
-        self.tokens_to_hosts = self.token_map.tokens_to_hosts_by_ks.get(ks, None)
+        self.metadata = session.cluster.metadata
 
-        self.ring = [r.value for r in self.token_map.ring]
-        self.pk_to_token = self.token_map.token_class.from_key
+        self._initialize_ring()
 
-    def get_replica(self, idx):
-        token = self.token_map.ring[idx] if idx < len(self.ring) else self.token_map.ring[0]
-        replicas = filter(lambda r: r.is_up and r.datacenter == self.local_dc, self.tokens_to_hosts[token])
-        return replicas[0].address if len(replicas) > 0 else self.hostname
+        # Note that refresh metadata is disabled by default and we currenlty do not intercept it
+        # If hosts are added, removed or moved during a COPY operation our token map is no longer optimal
+        # However we can cope with hosts going down and up since we filter for replicas that are up when
+        # making each batch
+
+    def _initialize_ring(self):
+        token_map = self.metadata.token_map
+        if token_map is None:
+            self.ring = [0]
+            self.replicas = [(self.metadata.get_host(self.hostname),)]
+            self.pk_to_token_value = lambda pk: 0
+            return
+
+        token_map.rebuild_keyspace(self.ks, build_if_absent=True)
+        tokens_to_hosts = token_map.tokens_to_hosts_by_ks.get(self.ks, None)
+        from_key = token_map.token_class.from_key
+
+        self.ring = [token.value for token in token_map.ring]
+        self.replicas = [tuple(tokens_to_hosts[token]) for token in token_map.ring]
+        self.pk_to_token_value = lambda pk: from_key(pk).value
+
+    @staticmethod
+    def get_ring_pos(ring, val):
+        idx = bisect_right(ring, val)
+        return idx if idx < len(ring) else 0
+
+    def filter_replicas(self, hosts):
+        shuffled = tuple(sorted(hosts, key=lambda k: random.random()))
+        return filter(lambda r: r.is_up and r.datacenter == self.local_dc, shuffled) if hosts else ()
+
+
+class FastTokenAwarePolicy(DCAwareRoundRobinPolicy):
+    """
+    Send to any replicas attached to the query, or else fall back to DCAwareRoundRobinPolicy
+    """
+
+    def __init__(self, local_dc='', used_hosts_per_remote_dc=0):
+        DCAwareRoundRobinPolicy.__init__(self, local_dc, used_hosts_per_remote_dc)
+
+    def make_query_plan(self, working_keyspace=None, query=None):
+        """
+        Extend TokenAwarePolicy.make_query_plan() so that we choose the same replicas in preference
+        and most importantly we avoid repeating the (slow) bisect
+        """
+        replicas = query.replicas if hasattr(query, 'replicas') else []
+        for r in replicas:
+            yield r
+
+        for r in DCAwareRoundRobinPolicy.make_query_plan(self, working_keyspace, query):
+            if r not in replicas:
+                yield r
 
 
 class ImportProcess(ChildProcess):
@@ -1879,7 +1962,7 @@ class ImportProcess(ChildProcess):
                 cql_version=self.cql_version,
                 protocol_version=self.protocol_version,
                 auth_provider=self.auth_provider,
-                load_balancing_policy=TokenAwarePolicy(DCAwareRoundRobinPolicy(local_dc=self.local_dc)),
+                load_balancing_policy=FastTokenAwarePolicy(local_dc=self.local_dc),
                 ssl_options=ssl_settings(self.hostname, self.config_file) if self.ssl else None,
                 default_retry_policy=ExpBackoffRetryPolicy(self),
                 compression=None,
@@ -1889,6 +1972,7 @@ class ImportProcess(ChildProcess):
 
             if HAS_LIB_EV:
                 cluster.connection_class = LibevConnection
+
             self._session = cluster.connect(self.ks)
             self._session.default_timeout = None
         return self._session
@@ -1917,11 +2001,12 @@ class ImportProcess(ChildProcess):
     def make_params(self):
         metadata = self.session.cluster.metadata
         table_meta = metadata.keyspaces[self.ks].tables[self.table]
+
         prepared_statement = None
         is_counter = ("counter" in [table_meta.columns[name].typestring for name in self.valid_columns])
         if is_counter:
             query = 'UPDATE %s.%s SET %%s WHERE %%s' % (protect_name(self.ks), protect_name(self.table))
-            make_batch_fcn = self.wrap_make_batch(self.make_counter_batch_statement)
+            make_statement = self.wrap_make_statement(self.make_counter_batch_statement)
         elif self.use_prepared_statements:
             query = 'INSERT INTO %s.%s (%s) VALUES (%s)' % (protect_name(self.ks),
                                                             protect_name(self.table),
@@ -1931,16 +2016,16 @@ class ImportProcess(ChildProcess):
             query = self.session.prepare(query)
             query.consistency_level = self.consistency_level
             prepared_statement = query
-            make_batch_fcn = self.wrap_make_batch(self.make_prepared_batch_statement)
+            make_statement = self.wrap_make_statement(self.make_prepared_batch_statement)
         else:
             query = 'INSERT INTO %s.%s (%s) VALUES (%%s)' % (protect_name(self.ks),
                                                              protect_name(self.table),
                                                              ', '.join(protect_names(self.valid_columns),))
-            make_batch_fcn = self.wrap_make_batch(self.make_non_prepared_batch_statement)
+            make_statement = self.wrap_make_statement(self.make_non_prepared_batch_statement)
 
         conv = ImportConversion(self, table_meta, prepared_statement)
-        tm = TokenMap(self.ks, self.hostname, self.local_dc, metadata)
-        return query, conv, tm, make_batch_fcn
+        tm = TokenMap(self.ks, self.hostname, self.local_dc, self.session)
+        return query, conv, tm, make_statement
 
     def inner_run(self, query, conv, tm, make_statement):
         """
@@ -1962,32 +2047,32 @@ class ImportProcess(ChildProcess):
                     batch['rows'] = convert_rows(conv, batch)
 
                 batch['imported'] = 0
-                for pk, b in split_batches(batch, conv, tm):
-                    execute_statement(make_statement(query, conv, b, pk), b, batch)
+                for replicas, b in split_batches(batch, conv, tm):
+                    execute_statement(make_statement(query, conv, b, replicas), b, batch)
 
             except Exception, exc:
                 self.report_error(exc, batch)
 
-    def wrap_make_batch(self, inner_make_batch):
-        def make_batch(query, conv, batch, pk):
+    def wrap_make_statement(self, inner_make_statement):
+        def make_statement(query, conv, batch, replicas):
             try:
-                return inner_make_batch(query, conv, batch, pk)
+                return inner_make_statement(query, conv, batch, replicas)
             except Exception, exc:
-                print "Failed to make batch: {}".format(exc)
+                print "Failed to make batch statement: {}".format(exc)
                 self.report_error(exc, batch)
                 return None
 
-        def make_batch_with_failures(query, conv, batch, pk):
+        def make_statement_with_failures(query, conv, batch, replicas):
             failed_batch = self.maybe_inject_failures(batch)
             if failed_batch:
                 return failed_batch
-            return make_batch(query, conv, batch, pk)
+            return make_statement(query, conv, batch, replicas)
 
-        return make_batch_with_failures if self.test_failures else make_batch
+        return make_statement_with_failures if self.test_failures else make_statement
 
-    def make_counter_batch_statement(self, query, conv, batch, pk):
+    def make_counter_batch_statement(self, query, conv, batch, replicas):
         statement = BatchStatement(batch_type=BatchType.COUNTER, consistency_level=self.consistency_level)
-        statement.routing_key = pk
+        statement.replicas = replicas
         statement.keyspace = self.ks
         for row in batch['rows']:
             where_clause = []
@@ -2002,7 +2087,7 @@ class ImportProcess(ChildProcess):
             statement.add(full_query_text)
         return statement
 
-    def make_prepared_batch_statement(self, query, _, batch, pk):
+    def make_prepared_batch_statement(self, query, _, batch, replicas):
         """
         Return a batch statement. This is an optimized version of:
 
@@ -2014,14 +2099,14 @@ class ImportProcess(ChildProcess):
         more driver's code (BoundStatement.bind()).
         """
         statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
-        statement.routing_key = pk
-        statement.keyspace = query.column_metadata[0].keyspace_name
+        statement.replicas = replicas
+        statement.keyspace = self.ks
         statement._statements_and_parameters = [(True, query.query_id, query.bind(r).values) for r in batch['rows']]
         return statement
 
-    def make_non_prepared_batch_statement(self, query, _, batch, pk):
+    def make_non_prepared_batch_statement(self, query, _, batch, replicas):
         statement = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=self.consistency_level)
-        statement.routing_key = pk
+        statement.replicas = replicas
         statement.keyspace = self.ks
         statement._statements_and_parameters = [(False, query % (','.join(r),), ()) for r in batch['rows']]
         return statement
@@ -2084,24 +2169,32 @@ class ImportProcess(ChildProcess):
 
     def split_batches(self, batch, conv, tm):
         """
-        Batch rows by partition key, if there are at least min_batch_size (2)
-        rows with the same partition key. These batches can be as big as they want
-        since this translates to a single insert operation server side.
-
-        If there are less than min_batch_size rows for a partition, work out the
-        ring position for this partition and add the rows a map indexed by ring position.
-
-        Then batch the rows of each ring position up to max_batch_size. The driver TAR should ensure
-        these rows will end up to a correct replica.
+        Batch rows by ring position or replica.
+        If there are at least min_batch_size rows for a ring position then split these rows into
+        groups of max_batch_size and send a batch for each group, using all replicas for this ring position.
+        Otherwise, we are forced to batch by replica, and here unfortunately we can only choose one replica to
+        guarantee common replicas across partition keys. We are typically able
+        to batch by ring position for small clusters or when VNODES are not used. For large clusters with VNODES
+        it may not be possible, in this case it helps to increase the CHUNK SIZE but up to a limit, otherwise
+        we may choke the cluster.
         """
-        rows_by_pk = defaultdict(list)
+
+        rows_by_ring_pos = defaultdict(list)
         errors = defaultdict(list)
+
+        min_batch_size = self.min_batch_size
+        max_batch_size = self.max_batch_size
+        ring = tm.ring
+
         get_row_partition_key_values = conv.get_row_partition_key_values_fcn()
+        pk_to_token_value = tm.pk_to_token_value
+        get_ring_pos = tm.get_ring_pos
+        make_batch = ImportTask.make_batch
 
         for row in batch['rows']:
             try:
                 pk = get_row_partition_key_values(row)
-                rows_by_pk[pk].append(row)
+                rows_by_ring_pos[get_ring_pos(ring, pk_to_token_value(pk))].append(row)
             except Exception, e:
                 errors[e.message].append(row)
 
@@ -2110,29 +2203,22 @@ class ImportProcess(ChildProcess):
                 self.outmsg.send_one(self.proc_num, (ImportTask.split_batch(batch, rows),
                                  '%s - %s' % (ParseError.__name__, msg)))
 
-        min_batch_size = self.min_batch_size
-        max_batch_size = self.max_batch_size
-
-        ring = tm.ring
-        make_token = tm.pk_to_token
-        get_replica = tm.get_replica
-        make_batch = ImportTask.make_batch
-        rows_by_replica = dict()
-
-        for pk, rows in rows_by_pk.iteritems():
-            if len(rows) >= min_batch_size:
-                yield pk, [make_batch(batch['id'], rows, batch['attempts'])]
+        replicas = tm.replicas
+        filter_replicas = tm.filter_replicas
+        rows_by_replica = defaultdict(list)
+        for ring_pos, rows in rows_by_ring_pos.iteritems():
+            if len(rows) > min_batch_size:
+                for i in xrange(0, len(rows), max_batch_size):
+                    yield filter_replicas(replicas[ring_pos]), \
+                          make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts'])
             else:
-                replica = get_replica(bisect_right(ring, make_token(pk).value))
-                if replica in rows_by_replica:
-                    rows_by_replica[replica][1].extend(rows)
-                else:
-                    # we store the first partition key which will become the routing key
-                    rows_by_replica[replica] = (pk, rows)
+                # select only the first valid replica to guarantee more overlap or none at all
+                rows_by_replica[filter_replicas(replicas[ring_pos])[:1]].extend(rows)
 
-        for _, (pk, rows) in rows_by_replica.iteritems():
+        # Now send the batches by replica
+        for replicas, rows in rows_by_replica.iteritems():
             for i in xrange(0, len(rows), max_batch_size):
-                yield pk, make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts'])
+                yield replicas, make_batch(batch['id'], rows[i:i + max_batch_size], batch['attempts'])
 
     def result_callback(self, _, batch, parent_batch):
         self.update_parent_batch(batch, parent_batch)
