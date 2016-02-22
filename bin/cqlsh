@@ -1516,7 +1516,7 @@ class Shell(cmd.Cmd):
           DATETIMEFORMAT=         - timestamp strftime format
             '%Y-%m-%d %H:%M:%S%z'   defaults to time_format value in cqlshrc
           MAXATTEMPTS=5           - the maximum number of attempts per batch or range
-          REPORTFREQUENCY=0.5     - the frequency with which we display status updates in seconds
+          REPORTFREQUENCY=0.25    - the frequency with which we display status updates in seconds
           DECIMALSEP='.'          - the separator for decimal values
           THOUSANDSSEP=''         - the separator for thousands digit groups
           BOOLSTYLE='True,False'  - the representation for booleans, case insensitive, specify true followed by false,
@@ -1550,9 +1550,6 @@ class Shell(cmd.Cmd):
                                     have to compile every batch statement. For large and oversized clusters
                                     this will result in a faster import but for smaller clusters it may generate
                                     timeouts.
-          RECEIVETIME=0.05        - time in seconds spent receiving results from worker processes after having sent some
-                                    CHUNKSIZE rows to each process. Increase this value if you notice the report rate
-                                    is lagging behind the final average.
 
         Available COPY TO options and defaults:
 
