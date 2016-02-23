@@ -963,18 +963,19 @@ class ImportErrorHandler(object):
         shell = self.shell
 
         if err.is_parse_error():
-            self.parse_errors += len(err['rows'])
-            self.add_failed_rows(err['rows'])
-            shell.printerr("Failed to import %d rows: %s -  given up without retries" % (len(err['rows']), err))
+            self.parse_errors += len(err.rows)
+            self.add_failed_rows(err.rows)
+            shell.printerr("Failed to import %d rows: %s - %s,  given up without retries"
+                           % (len(err.rows), err.name, err.msg))
         else:
-            self.insert_errors += len(err['rows'])
+            self.insert_errors += len(err.rows)
             if not err.final:
-                shell.printerr("Failed to import %d rows: %s (%s) -  will retry later, attempt %d of %d"
-                               % (len(err['rows']), err.name, err.message, err['attempts'], self.max_attempts))
+                shell.printerr("Failed to import %d rows: %s - %s,  will retry later, attempt %d of %d"
+                               % (len(err.rows), err.name, err.msg, err.attempts, self.max_attempts))
             else:
-                self.add_failed_rows(err['rows'])
-                shell.printerr("Failed to import %d rows: %s (%s) -  given up after %d attempts"
-                               % (len(err['rows']), err.name, err.message, err['attempts']))
+                self.add_failed_rows(err.rows)
+                shell.printerr("Failed to import %d rows: %s - %s,  given up after %d attempts"
+                               % (len(err.rows), err.name, err.msg, err.attempts))
 
 
 class ImportTask(CopyTask):
@@ -1824,7 +1825,7 @@ class ImportConversion(object):
         if len(row) != len(converters):
             raise ParseError('Invalid row length %d should be %d' % (len(row), len(converters)))
 
-        for i in self.partition_key_indexes:
+        for i in self.primary_key_indexes:
             if row[i] == self.nullval:
                 raise ParseError(self.get_null_primary_key_message(i))
 
@@ -1963,6 +1964,9 @@ class ImportProcess(ChildProcess):
         self.use_prepared_statements = options.copy['preparedstatements']
         self.dialect_options = options.dialect
         self._session = None
+        self.query = None
+        self.conv = None
+        self.make_statement = None
 
     @property
     def session(self):
@@ -2043,9 +2047,15 @@ class ImportProcess(ChildProcess):
         Main run method. Note that we bind self methods that are called inside loops
         for performance reasons.
         """
+        self.query = query
+        self.conv = conv
+        self.make_statement = make_statement
+
         convert_rows = self.convert_rows
-        execute_statement = self.execute_statement
         split_into_batches = self.split_into_batches
+        result_callback = self.result_callback
+        err_callback = self.err_callback
+        session = self.session
 
         while True:
             chunk = self.inmsg.recv()
@@ -2055,25 +2065,28 @@ class ImportProcess(ChildProcess):
             try:
                 chunk['rows'] = convert_rows(conv, chunk)
                 for replicas, batch in split_into_batches(chunk, conv, tm):
-                    execute_statement(make_statement(query, conv, batch, replicas), batch, chunk)
+                    statement = make_statement(query, conv, chunk, batch, replicas)
+                    future = session.execute_async(statement)
+                    future.add_callbacks(callback=result_callback, callback_args=(batch, chunk),
+                                         errback=err_callback, errback_args=(batch, chunk, replicas))
 
             except Exception, exc:
-                self.report_error(exc, chunk['rows'])
+                self.report_error(exc, chunk, chunk['rows'])
 
     def wrap_make_statement(self, inner_make_statement):
-        def make_statement(query, conv, batch, replicas):
+        def make_statement(query, conv, chunk, batch, replicas):
             try:
                 return inner_make_statement(query, conv, batch, replicas)
             except Exception, exc:
                 print "Failed to make batch statement: {}".format(exc)
-                self.report_error(exc, batch['rows'])
+                self.report_error(exc, chunk, batch['rows'])
                 return None
 
-        def make_statement_with_failures(query, conv, batch, replicas):
+        def make_statement_with_failures(query, conv, chunk, batch, replicas):
             failed_batch = self.maybe_inject_failures(batch)
             if failed_batch:
                 return failed_batch
-            return make_statement(query, conv, batch, replicas)
+            return make_statement(query, conv, chunk, batch, replicas)
 
         return make_statement_with_failures if self.test_failures else make_statement
 
@@ -2144,6 +2157,7 @@ class ImportProcess(ChildProcess):
         if errors:
             for msg, rows in errors.iteritems():
                 self.outmsg.send(ImportTaskError(ParseError.__name__, msg, rows))
+                self.update_chunk(rows, chunk)
         return converted_rows
 
     def maybe_inject_failures(self, batch):
@@ -2167,11 +2181,6 @@ class ImportProcess(ChildProcess):
                 sys.exit(1)
 
         return None  # carry on as normal
-
-    def execute_statement(self, statement, batch, chunk):
-        future = self.session.execute_async(statement)
-        future.add_callbacks(callback=self.result_callback, callback_args=(batch, chunk),
-                             errback=self.err_callback, errback_args=(statement, batch, chunk))
 
     @staticmethod
     def make_batch(batch_id, rows, attempts=1):
@@ -2211,6 +2220,7 @@ class ImportProcess(ChildProcess):
         if errors:
             for msg, rows in errors.iteritems():
                 self.outmsg.send(ImportTaskError(ParseError.__name__, msg, rows))
+                self.update_chunk(rows, chunk)
 
         replicas = tm.replicas
         filter_replicas = tm.filter_replicas
@@ -2218,8 +2228,7 @@ class ImportProcess(ChildProcess):
         for ring_pos, rows in rows_by_ring_pos.iteritems():
             if len(rows) > min_batch_size:
                 for i in xrange(0, len(rows), max_batch_size):
-                    yield filter_replicas(replicas[ring_pos]), \
-                          make_batch(chunk['id'], rows[i:i + max_batch_size])
+                    yield filter_replicas(replicas[ring_pos]), make_batch(chunk['id'], rows[i:i + max_batch_size])
             else:
                 # select only the first valid replica to guarantee more overlap or none at all
                 rows_by_replica[filter_replicas(replicas[ring_pos])[:1]].extend(rows)
@@ -2230,27 +2239,28 @@ class ImportProcess(ChildProcess):
                 yield replicas, make_batch(chunk['id'], rows[i:i + max_batch_size])
 
     def result_callback(self, _, batch, chunk):
-        self.update_chunk(batch, chunk)
+        self.update_chunk(batch['rows'], chunk)
 
-    def err_callback(self, response, statement, batch, chunk):
-        if batch['attempts'] < self.max_attempts:
+    def err_callback(self, response, batch, chunk, replicas):
+        err_is_final = batch['attempts'] >= self.max_attempts
+        self.report_error(response, chunk, batch['rows'], batch['attempts'], err_is_final)
+        if not err_is_final:
             batch['attempts'] += 1
-            self.execute_statement(statement, batch, chunk)
-            err_is_final = False
-        else:
-            self.update_chunk(batch, chunk)
-            err_is_final = True
+            statement = self.make_statement(self.query, self.conv, chunk, batch, replicas)
+            future = self.session.execute_async(statement)
+            future.add_callbacks(callback=self.result_callback, callback_args=(batch, chunk),
+                                 errback=self.err_callback, errback_args=(batch, chunk, replicas))
 
-        self.report_error(response, batch['rows'], batch['attempts'], err_is_final)
-
-    def report_error(self, err, rows=None, attempts=1, final=True):
+    def report_error(self, err, chunk, rows=None, attempts=1, final=True):
         if self.debug:
             traceback.print_exc(err)
         self.outmsg.send(ImportTaskError(err.__class__.__name__, err.message, rows, attempts, final))
+        if final:
+            self.update_chunk(rows, chunk)
 
-    def update_chunk(self, batch, chunk):
+    def update_chunk(self, rows, chunk):
         num_chunk_rows = len(chunk['rows'])
-        chunk['imported'] += len(batch['rows'])
+        chunk['imported'] += len(rows)
         if chunk['imported'] == num_chunk_rows:
             self.outmsg.send(ImportProcessResult(num_chunk_rows))
 
