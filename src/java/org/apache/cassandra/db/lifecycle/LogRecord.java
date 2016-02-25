@@ -109,7 +109,8 @@ final class LogRecord
         }
         catch (Throwable t)
         {
-            return new LogRecord(Type.UNKNOWN, null, 0, 0, 0, line).setError(t);
+            return new LogRecord(Type.UNKNOWN, null, 0, 0, 0, line)
+                   .setError(String.format("Failed to parse line: %s", t.getMessage()));
         }
     }
 
@@ -178,11 +179,6 @@ final class LogRecord
             this.checksum = checksum;
             this.raw = raw;
         }
-    }
-
-    LogRecord setError(Throwable t)
-    {
-        return setError(t.getMessage());
     }
 
     LogRecord setError(String error)

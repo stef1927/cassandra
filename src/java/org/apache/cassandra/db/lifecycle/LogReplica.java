@@ -19,6 +19,9 @@
 package org.apache.cassandra.db.lifecycle;
 
 import java.io.File;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.CLibrary;
@@ -38,6 +41,7 @@ final class LogReplica
 {
     private final File file;
     private int folderDescriptor;
+    private final Map<String, String> errors = new HashMap<>();
 
     static LogReplica create(File folder, String fileName)
     {
@@ -58,6 +62,21 @@ final class LogReplica
     File file()
     {
         return file;
+    }
+
+    List<String> readLines()
+    {
+        return FileUtils.readLines(file);
+    }
+
+    String getFileName()
+    {
+        return file.getName();
+    }
+
+    String getFolder()
+    {
+        return file.getParent();
     }
 
     void append(LogRecord record)
@@ -101,5 +120,32 @@ final class LogReplica
     public String toString()
     {
         return String.format("[%s] ", file);
+    }
+
+    void setError(String line, String error)
+    {
+        errors.put(line, error);
+    }
+
+    void printContentsWithAnyErrors(StringBuilder str)
+    {
+        str.append(file.getPath());
+        str.append(System.lineSeparator());
+        FileUtils.readLines(file).forEach(line -> printLineWithAnyError(str, line));
+    }
+
+    private void printLineWithAnyError(StringBuilder str, String line)
+    {
+        str.append('\t');
+        str.append(line);
+        str.append(System.lineSeparator());
+
+        String error = errors.get(line);
+        if (error != null)
+        {
+            str.append("\t\t***");
+            str.append(error);
+            str.append(System.lineSeparator());
+        }
     }
 }

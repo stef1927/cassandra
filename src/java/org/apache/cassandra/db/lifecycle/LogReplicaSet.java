@@ -32,7 +32,6 @@ import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.Throwables;
 
 /**
@@ -101,15 +100,18 @@ public class LogReplicaSet
 
     boolean readRecords(Set<LogRecord> records)
     {
-        Map<File, List<String>> linesByReplica = replicas().stream()
-                                                           .map(LogReplica::file)
-                                                           .collect(Collectors.toMap(Function.<File>identity(), FileUtils::readLines));
+        Map<LogReplica, List<String>> linesByReplica = replicas().stream()
+                                                                 .collect(Collectors.toMap(Function.<LogReplica>identity(),
+                                                                                           LogReplica::readLines,
+                                                                                           (k, v) -> {throw new IllegalStateException("Duplicated key: " + k);},
+                                                                                           LinkedHashMap::new));
+
         int maxNumLines = linesByReplica.values().stream().map(List::size).reduce(0, Integer::max);
         for (int i = 0; i < maxNumLines; i++)
         {
             String firstLine = null;
             boolean partial = false;
-            for (Map.Entry<File, List<String>> entry : linesByReplica.entrySet())
+            for (Map.Entry<LogReplica, List<String>> entry : linesByReplica.entrySet())
             {
                 List<String> currentLines = entry.getValue();
                 if (i >= currentLines.size())
@@ -125,9 +127,10 @@ public class LogReplicaSet
                 if (!isPrefixMatch(firstLine, currentLine))
                 { // not a prefix match
                     logger.error("Mismatched line in file {}: got '{}' expected '{}', giving up",
-                                 entry.getKey().getName(),
+                                 entry.getKey().getFileName(),
                                  currentLine,
                                  firstLine);
+                    entry.getKey().setError(currentLine, String.format("Does not match <%s> in first replica file", firstLine));
                     return false;
                 }
 
@@ -136,7 +139,7 @@ public class LogReplicaSet
                     if (i == currentLines.size() - 1)
                     { // last record, just set record as invalid and move on
                         logger.warn("Mismatched last line in file {}: '{}' not the same as '{}'",
-                                    entry.getKey().getName(),
+                                    entry.getKey().getFileName(),
                                     currentLine,
                                     firstLine);
 
@@ -148,9 +151,10 @@ public class LogReplicaSet
                     else
                     {   // mismatched entry file has more lines, giving up
                         logger.error("Mismatched line in file {}: got '{}' expected '{}', giving up",
-                                     entry.getKey().getName(),
+                                     entry.getKey().getFileName(),
                                      currentLine,
                                      firstLine);
+                        entry.getKey().setError(currentLine, String.format("Does not match <%s> in first replica file", firstLine));
                         return false;
                     }
                 }
@@ -160,6 +164,7 @@ public class LogReplicaSet
             if (records.contains(record))
             { // duplicate records
                 logger.error("Found duplicate record {} for {}, giving up", record, record.fileName());
+                setError(record, "Duplicated record");
                 return false;
             }
 
@@ -171,11 +176,28 @@ public class LogReplicaSet
             if (record.isFinal() && i != (maxNumLines - 1))
             { // too many final records
                 logger.error("Found too many lines for {}, giving up", record.fileName());
+                setError(record, "This record should have been the last one in all replicas");
                 return false;
             }
         }
 
         return true;
+    }
+
+    void setError(LogRecord record, String error)
+    {
+        record.setError(error);
+        setErrorInReplicas(record);
+    }
+
+    void setErrorInReplicas(LogRecord record)
+    {
+        replicas().forEach(r -> r.setError(record.raw, record.error()));
+    }
+
+    void printContentsWithAnyErrors(StringBuilder str)
+    {
+        replicas().forEach(r -> r.printContentsWithAnyErrors(str));
     }
 
     /**
@@ -214,6 +236,11 @@ public class LogReplicaSet
         return ret.isPresent() ?
                ret.get()
                : "[-]";
+    }
+
+    String getFolders()
+    {
+        return String.join(", ", replicas().stream().map(LogReplica::getFolder).collect(Collectors.toList()));
     }
 
     @VisibleForTesting

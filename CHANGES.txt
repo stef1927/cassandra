@@ -1,3 +1,6 @@
+3.6
+* Refuse to start and print txn log information in case of disk corruption (CASSANDRA-10112)
+
 3.5
 Merged from 3.0:
  * Fix filtering on non-primary key columns for queries without index (CASSANDRA-6377)
