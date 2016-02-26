@@ -1461,15 +1461,12 @@ class ExportProcess(ChildProcess):
         return session
 
     def attach_callbacks(self, token_range, future, session):
-        metadata = session.cluster.metadata.keyspaces[self.ks].tables[self.table]
-        cql_types = [metadata.columns[c].typestring for c in self.columns]
-
         def result_callback(rows):
             if future.has_more_pages:
                 future.start_fetching_next_page()
-                self.write_rows_to_csv(token_range, rows, cql_types)
+                self.write_rows_to_csv(token_range, rows)
             else:
-                self.write_rows_to_csv(token_range, rows, cql_types)
+                self.write_rows_to_csv(token_range, rows)
                 self.outmsg.send((None, None))
                 session.complete_request()
 
@@ -1479,7 +1476,7 @@ class ExportProcess(ChildProcess):
 
         future.add_callbacks(callback=result_callback, errback=err_callback)
 
-    def write_rows_to_csv(self, token_range, rows, cql_types):
+    def write_rows_to_csv(self, token_range, rows):
         if not rows:
             return  # no rows in this range
 
@@ -1488,7 +1485,7 @@ class ExportProcess(ChildProcess):
             writer = csv.writer(output, **self.options.dialect)
 
             for row in rows:
-                writer.writerow(map(self.format_value, row, cql_types))
+                writer.writerow(map(self.format_value, row))
 
             data = (output.getvalue(), len(rows))
             self.outmsg.send((token_range, data))
@@ -1497,17 +1494,17 @@ class ExportProcess(ChildProcess):
         except Exception, e:
             self.report_error(e, token_range)
 
-    def format_value(self, val, cqltype):
+    def format_value(self, val):
         if val is None or val == EMPTY:
             return format_value_default(self.nullval, colormap=NO_COLOR_MAP)
 
-        formatter = self.formatters.get(cqltype, None)
+        ctype = type(val)
+        formatter = self.formatters.get(ctype, None)
         if not formatter:
-            formatter = get_formatter(val, cqltype)
-            self.formatters[cqltype] = formatter
+            formatter = get_formatter(ctype)
+            self.formatters[ctype] = formatter
 
-        return formatter(val, cqltype=cqltype,
-                         encoding=self.encoding, colormap=NO_COLOR_MAP, time_format=self.time_format,
+        return formatter(val, encoding=self.encoding, colormap=NO_COLOR_MAP, time_format=self.time_format,
                          float_precision=self.float_precision, nullval=self.nullval, quote=False,
                          decimal_sep=self.decimal_sep, thousands_sep=self.thousands_sep,
                          boolean_styles=self.boolean_styles)
