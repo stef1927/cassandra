@@ -273,9 +273,9 @@ def get_sub_types(val, num_sub_types):
         elif c == ',' and level == 0 and not quote:
             ret.append(val[last:i].strip())
             last = i + 1
-    else:
-        if last < len(val) - 1:
-            ret.append(val[last:].strip())
+
+    if last < len(val) - 1:
+        ret.append(val[last:].strip())
 
     if len(ret) < num_sub_types:
         # for list and set all types are identical to the first one
