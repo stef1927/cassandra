@@ -260,7 +260,7 @@ class CopyTask(object):
         copy_options['dtformats'] = opts.pop('datetimeformat', shell.display_time_format)
         copy_options['float_precision'] = shell.display_float_precision
         copy_options['chunksize'] = int(opts.pop('chunksize', 5000))
-        copy_options['ingestrate'] = int(opts.pop('ingestrate', 200000))
+        copy_options['ingestrate'] = int(opts.pop('ingestrate', 100000))
         copy_options['maxbatchsize'] = int(opts.pop('maxbatchsize', 20))
         copy_options['minbatchsize'] = int(opts.pop('minbatchsize', 10))
         copy_options['reportfrequency'] = float(opts.pop('reportfrequency', 0.25))
@@ -268,7 +268,7 @@ class CopyTask(object):
         copy_options['decimalsep'] = opts.pop('decimalsep', '.')
         copy_options['thousandssep'] = opts.pop('thousandssep', '')
         copy_options['boolstyle'] = [s.strip() for s in opts.pop('boolstyle', 'True, False').split(',')]
-        copy_options['numprocesses'] = int(opts.pop('numprocesses', self.get_num_processes()))
+        copy_options['numprocesses'] = int(opts.pop('numprocesses', self.get_num_processes(cap=16)))
         copy_options['begintoken'] = opts.pop('begintoken', '')
         copy_options['endtoken'] = opts.pop('endtoken', '')
         copy_options['maxrows'] = int(opts.pop('maxrows', '-1'))
@@ -297,12 +297,12 @@ class CopyTask(object):
             raise ValueError("Invalid boolean styles %s" % copy_options['boolstyle'])
 
     @staticmethod
-    def get_num_processes():
+    def get_num_processes(cap):
         """
         Pick a reasonable number of child processes. We need to leave at
         least one core for the parent process.
         """
-        return max(1, CopyTask.get_num_cores() - 1)
+        return max(1, min(cap, CopyTask.get_num_cores() - 1))
 
     @staticmethod
     def get_num_cores():

@@ -1523,6 +1523,7 @@ class Shell(cmd.Cmd):
           BOOLSTYLE='True,False'  - the representation for booleans, case insensitive, specify true followed by false,
                                     for example yes,no or 1,0
           NUMPROCESSES=n          - the number of worker processes, by default the number of cores minus one
+                                    capped at 16
           CONFIGFILE=''           - a configuration file with the same format as .cqlshrc (see the Python ConfigParser
                                     documentation) where you can specify WITH options under the following optional
                                     sections: [copy], [copy-to], [copy-from], [copy:ks.table], [copy-to:ks.table],
@@ -1536,16 +1537,16 @@ class Shell(cmd.Cmd):
         Available COPY FROM options and defaults:
 
           CHUNKSIZE=5000          - the size of chunks passed to worker processes
-          INGESTRATE=200000        - an approximate ingest rate in rows per second
-          MINBATCHSIZE=10          - the minimum size of an import batch
-          MAXBATCHSIZE=20          - the maximum size of an import batch
-          MAXROWS=-1               - the maximum number of rows, -1 means no maximum
-          SKIPROWS=0               - the number of rows to skip
-          SKIPCOLS=''              - a comma separated list of column names to skip
-          MAXPARSEERRORS=-1        - the maximum global number of parsing errors, -1 means no maximum
-          MAXINSERTERRORS=-1       - the maximum global number of insert errors, -1 means no maximum
-          ERRFILE=''               - a file where to store all rows that could not be imported, by default this is
-                                     import_ks_table.err where <ks> is your keyspace and <table> is your table name.
+          INGESTRATE=100000       - an approximate ingest rate in rows per second
+          MINBATCHSIZE=10         - the minimum size of an import batch
+          MAXBATCHSIZE=20         - the maximum size of an import batch
+          MAXROWS=-1              - the maximum number of rows, -1 means no maximum
+          SKIPROWS=0              - the number of rows to skip
+          SKIPCOLS=''             - a comma separated list of column names to skip
+          MAXPARSEERRORS=-1       - the maximum global number of parsing errors, -1 means no maximum
+          MAXINSERTERRORS=-1      - the maximum global number of insert errors, -1 means no maximum
+          ERRFILE=''              - a file where to store all rows that could not be imported, by default this is
+                                    import_ks_table.err where <ks> is your keyspace and <table> is your table name.
           PREPAREDSTATEMENTS=True - whether to use prepared statements when importing, by default True. Set this to
                                     False if you don't mind shifting data parsing to the cluster. The cluster will also
                                     have to compile every batch statement. For large and oversized clusters
