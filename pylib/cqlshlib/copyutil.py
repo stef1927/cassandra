@@ -49,11 +49,6 @@ from cassandra.policies import RetryPolicy, WhiteListRoundRobinPolicy, DCAwareRo
 from cassandra.query import BatchStatement, BatchType, SimpleStatement, tuple_factory
 from cassandra.util import Date, Time
 
-try:
-    from cassandra.io.libevreactor import LibevConnection
-except ImportError:
-    LibevConnection = None
-
 from cql3handling import CqlRuleSet
 from displaying import NO_COLOR_MAP
 from formatting import format_value_default, EMPTY, get_formatter
@@ -895,7 +890,7 @@ class FeedingProcessResult(object):
 
 class ImportTaskError(object):
     """
-    An object send from child processes (feeder or workers) to the parent import task to indicate an error.
+    An object sent from child processes (feeder or workers) to the parent import task to indicate an error.
     """
     def __init__(self, name, msg, rows=None, attempts=1, final=True):
         self.name = name
@@ -1300,8 +1295,6 @@ class ExportSession(object):
     connection to the cluster.
     """
     def __init__(self, cluster, export_process):
-        if LibevConnection:
-            cluster.connection_class = LibevConnection
         session = cluster.connect(export_process.ks)
         session.row_factory = tuple_factory
         session.default_fetch_size = export_process.options.copy['pagesize']
@@ -1981,9 +1974,6 @@ class ImportProcess(ChildProcess):
                 control_connection_timeout=self.connect_timeout,
                 connect_timeout=self.connect_timeout,
                 idle_heartbeat_interval=0)
-
-            if LibevConnection:
-                cluster.connection_class = LibevConnection
 
             self._session = cluster.connect(self.ks)
             self._session.default_timeout = None
