@@ -636,6 +636,9 @@ def extend_cql_deserialization():
 
     cassandra.cqltypes.DateType.deserialize = staticmethod(deserialize_date_fallback_int)
 
+    if hasattr(cassandra, 'deserializers'):
+        del cassandra.deserializers.DesDateType
+
     # Return cassandra.cqltypes.EMPTY instead of None for empty values
     cassandra.cqltypes.CassandraType.support_empty_values = True
 

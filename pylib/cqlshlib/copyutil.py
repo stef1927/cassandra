@@ -1709,7 +1709,13 @@ class ImportConversion(object):
 
             m = p.match(val)
             if not m:
-                raise ValueError("can't interpret %r as a date with this format: %s" % (val, self.date_time_format))
+                try:
+                    # in case of overflow COPY TO prints dates as milliseconds from the epoch, see
+                    # deserialize_date_fallback_int in cqlsh.py
+                    return int(val)
+                except ValueError:
+                    raise ValueError("can't interpret %r as a date with format %s or as int" % (val,
+                                                                                                self.date_time_format))
 
             # https://docs.python.org/2/library/time.html#time.struct_time
             tval = time.struct_time((int(m.group(1)), int(m.group(2)), int(m.group(3)),  # year, month, day
