@@ -740,7 +740,8 @@ class FilesReader(object):
         self.header = options.copy['header']
         self.max_rows = options.copy['maxrows']
         self.skip_rows = options.copy['skiprows']
-        self.sources = self.get_source(fname)
+        self.fname = fname
+        self.sources = None  # must be created later due to pickle problems on Windows
         self.num_sources = 0
         self.current_source = None
         self.num_read = 0
@@ -772,6 +773,7 @@ class FilesReader(object):
         sys.stdout.flush()
 
     def start(self):
+        self.sources = self.get_source(self.fname)
         self.next_source()
 
     @property
@@ -880,7 +882,7 @@ class ImportProcessResult(object):
 
 class FeedingProcessResult(object):
     """
-   An object sent from FeedingProcess instances to the parent import task in order to indicate progress.
+    An object sent from FeedingProcess instances to the parent import task in order to indicate progress.
     """
     def __init__(self, sent, reader):
         self.sent = sent
