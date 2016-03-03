@@ -1190,7 +1190,7 @@ class FeedingProcess(mp.Process):
         self.chunk_id += 1
         num_rows = len(rows)
         self.send_meter.increment(num_rows)
-        ch.send({'id': self.chunk_id, 'rows': rows, 'imported': 0})
+        ch.send({'id': self.chunk_id, 'rows': rows, 'imported': 0, 'num_rows_sent': num_rows})
         return num_rows
 
     def close(self):
@@ -2149,7 +2149,7 @@ class ImportProcess(ChildProcess):
         def convert_row(r):
             try:
                 return conv.convert_row(r)
-            except ParseError, err:
+            except Exception, err:
                 errors[err.message].append(r)
                 return None
 
@@ -2157,8 +2157,7 @@ class ImportProcess(ChildProcess):
 
         if errors:
             for msg, rows in errors.iteritems():
-                self.outmsg.send(ImportTaskError(ParseError.__name__, msg, rows))
-                self.update_chunk(rows, chunk)
+                self.report_error(ParseError(msg), chunk, rows)
         return converted_rows
 
     def maybe_inject_failures(self, batch):
@@ -2220,8 +2219,7 @@ class ImportProcess(ChildProcess):
 
         if errors:
             for msg, rows in errors.iteritems():
-                self.outmsg.send(ImportTaskError(ParseError.__name__, msg, rows))
-                self.update_chunk(rows, chunk)
+                self.report_error(ParseError(msg), chunk, rows)
 
         replicas = tm.replicas
         filter_replicas = tm.filter_replicas
@@ -2260,10 +2258,9 @@ class ImportProcess(ChildProcess):
             self.update_chunk(rows, chunk)
 
     def update_chunk(self, rows, chunk):
-        num_chunk_rows = len(chunk['rows'])
         chunk['imported'] += len(rows)
-        if chunk['imported'] == num_chunk_rows:
-            self.outmsg.send(ImportProcessResult(num_chunk_rows))
+        if chunk['imported'] == chunk['num_rows_sent']:
+            self.outmsg.send(ImportProcessResult(chunk['num_rows_sent']))
 
 
 class RateMeter(object):
