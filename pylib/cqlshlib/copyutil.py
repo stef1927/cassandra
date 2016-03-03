@@ -1085,13 +1085,18 @@ class ImportTask(CopyTask):
         if not self.all_processes_running():
             self.shell.printerr("{} child process(es) died unexpectedly, aborting"
                                 .format(self.num_processes - self.num_live_processes()))
+        else:
+            # it is only safe to write to processes if they are all running because the feeder process
+            # at the moment hangs whilst sending messages to a crashed worker process; in future
+            # we could do something about this by using a BoundedSemaphore to keep track of how many messages are
+            # queued on a pipe
+            for i, _ in enumerate(self.processes):
+                self.outmsg.channels[i].send(None)
 
-        for i, _ in enumerate(self.processes):
-            self.outmsg.channels[i].send(None)
-
-        if PROFILE_ON:
-            # allow time for worker processes to write profile results
-            time.sleep(5)
+            if PROFILE_ON:
+                # allow time for worker processes to write profile results (only works if processes received
+                # the poison pill above)
+                time.sleep(5)
 
         self.printmsg("\n%d rows imported from %d files in %s (%d skipped)." %
                       (self.receive_meter.get_total_records(),
