@@ -105,12 +105,13 @@ final class LogRecord
                                  matcher.group(2),
                                  Long.valueOf(matcher.group(3)),
                                  Integer.valueOf(matcher.group(4)),
-                                 Long.valueOf(matcher.group(5)), line);
+                                 Long.valueOf(matcher.group(5)),
+                                 line);
         }
-        catch (Throwable t)
+        catch (IllegalArgumentException e)
         {
             return new LogRecord(Type.UNKNOWN, null, 0, 0, 0, line)
-                   .setError(String.format("Failed to parse line: %s", t.getMessage()));
+                   .setError(String.format("Failed to parse line: %s", e.getMessage()));
         }
     }
 

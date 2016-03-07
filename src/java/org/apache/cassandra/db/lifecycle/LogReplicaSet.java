@@ -59,31 +59,31 @@ public class LogReplicaSet
 
     void addReplica(File file)
     {
-        File folder = file.getParentFile();
-        assert !replicasByFile.containsKey(folder);
-        replicasByFile.put(folder, LogReplica.open(file));
+        File directory = file.getParentFile();
+        assert !replicasByFile.containsKey(directory);
+        replicasByFile.put(directory, LogReplica.open(file));
 
         if (logger.isTraceEnabled())
             logger.trace("Added log file replica {} ", file);
     }
 
-    void maybeCreateReplica(File folder, String fileName, Set<LogRecord> records)
+    void maybeCreateReplica(File directory, String fileName, Set<LogRecord> records)
     {
-        if (replicasByFile.containsKey(folder))
+        if (replicasByFile.containsKey(directory))
             return;
 
-        final LogReplica replica = LogReplica.create(folder, fileName);
+        final LogReplica replica = LogReplica.create(directory, fileName);
 
         records.forEach(replica::append);
-        replicasByFile.put(folder, replica);
+        replicasByFile.put(directory, replica);
 
         if (logger.isTraceEnabled())
             logger.trace("Created new file replica {}", replica);
     }
 
-    Throwable syncFolder(Throwable accumulate)
+    Throwable syncDirectory(Throwable accumulate)
     {
-        return Throwables.perform(accumulate, replicas().stream().map(s -> s::syncFolder));
+        return Throwables.perform(accumulate, replicas().stream().map(s -> s::syncDirectory));
     }
 
     Throwable delete(Throwable accumulate)
@@ -238,9 +238,9 @@ public class LogReplicaSet
                : "[-]";
     }
 
-    String getFolders()
+    String getDirectories()
     {
-        return String.join(", ", replicas().stream().map(LogReplica::getFolder).collect(Collectors.toList()));
+        return String.join(", ", replicas().stream().map(LogReplica::getDirectory).collect(Collectors.toList()));
     }
 
     @VisibleForTesting

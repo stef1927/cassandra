@@ -863,7 +863,7 @@ public class LogTransactionTest extends AbstractTransactionalTest
                                   if (filePath.endsWith("Data.db"))
                                   {
                                       assertTrue(FileUtils.delete(filePath));
-                                      assertNull(t.txnFile().syncFolder(null));
+                                      assertNull(t.txnFile().syncDirectory(null));
                                       break;
                                   }
                               }

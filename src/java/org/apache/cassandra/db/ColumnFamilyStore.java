@@ -591,10 +591,11 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
 
         logger.trace("Removing temporary or obsoleted files from unfinished operations for table {}", metadata.cfName);
         if (!LifecycleTransaction.removeUnfinishedLeftovers(metadata))
-            throw new StartupException(3, String.format("Cannot remove temporary or obsoleted files for %s.%s due to a problem with transaction " +
-                                                        "log files. Please check records with problems in the log messages above and fix them. " +
-                                                        "Refer to the 3.0 upgrading instructions in NEWS.txt " +
-                                                        "for a description of transaction log files.", metadata.ksName, metadata.cfName));
+            throw new StartupException(StartupException.ERR_WRONG_DISK_STATE,
+                                       String.format("Cannot remove temporary or obsoleted files for %s.%s due to a problem with transaction " +
+                                                     "log files. Please check records with problems in the log messages above and fix them. " +
+                                                     "Refer to the 3.0 upgrading instructions in NEWS.txt " +
+                                                     "for a description of transaction log files.", metadata.ksName, metadata.cfName));
 
         logger.trace("Further extra check for orphan sstable files for {}", metadata.cfName);
         for (Map.Entry<Descriptor,Set<Component>> sstableFiles : directories.sstableLister(Directories.OnTxnErr.IGNORE).list().entrySet())

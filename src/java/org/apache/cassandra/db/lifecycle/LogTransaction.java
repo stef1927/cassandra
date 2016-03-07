@@ -380,9 +380,17 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
     protected void doPrepare() { }
 
     /**
-     * Called on startup to scan existing folders for any unfinished leftovers of
-     * operations that were ongoing when the process exited. Also called by the standalone
-     * sstableutil tool when the cleanup option is specified, @see StandaloneSSTableUtil.
+     * Removes any leftovers from unifinished transactions as indicated by any transaction log files that
+     * are found in the table directories. This means that any old sstable files for transactions that were committed,
+     * or any new sstable files for transactions that were aborted or still in progress, should be removed *if
+     * it is safe to do so*. Refer to the checks in LogFile.verify for further details on the safety checks
+     * before removing transaction leftovers and refer to the comments at the beginning of this file or in NEWS.txt
+     * for further details on transaction logs.
+     *
+     * This method is called on startup and by the standalone sstableutil tool when the cleanup option is specified,
+     * @see StandaloneSSTableUtil.
+     *
+     * @return true if the leftovers of all transaction logs found were removed, false otherwise.
      *
      */
     static boolean removeUnfinishedLeftovers(CFMetaData metadata)
@@ -391,20 +399,24 @@ class LogTransaction extends Transactional.AbstractTransactional implements Tran
     }
 
     @VisibleForTesting
-    static boolean removeUnfinishedLeftovers(List<File> folders)
+    static boolean removeUnfinishedLeftovers(List<File> directories)
     {
         LogFilesByName logFiles = new LogFilesByName();
-        folders.forEach(logFiles::list);
+        directories.forEach(logFiles::list);
         return logFiles.removeUnfinishedLeftovers();
     }
 
     private static final class LogFilesByName
     {
+        // This maps a transaction log file name to a list of physical files. Each sstable
+        // can have multiple directories and a transaction is trakced by identical transaction log
+        // files, one per directory. So for each transaction file name we can have multiple
+        // physical files.
         Map<String, List<File>> files = new HashMap<>();
 
-        void list(File folder)
+        void list(File directory)
         {
-            Arrays.stream(folder.listFiles(LogFile::isLogFile)).forEach(this::add);
+            Arrays.stream(directory.listFiles(LogFile::isLogFile)).forEach(this::add);
         }
 
         void add(File file)

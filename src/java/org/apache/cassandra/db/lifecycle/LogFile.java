@@ -73,9 +73,9 @@ final class LogFile
         return new LogFile(operationType, id, logReplicas);
     }
 
-    Throwable syncFolder(Throwable accumulate)
+    Throwable syncDirectory(Throwable accumulate)
     {
-        return replicas.syncFolder(accumulate);
+        return replicas.syncDirectory(accumulate);
     }
 
     OperationType type()
@@ -94,9 +94,9 @@ final class LogFile
         {
             deleteFilesForRecordsOfType(committed() ? Type.REMOVE : Type.ADD);
 
-            // we sync the parent folders between contents and log deletion
+            // we sync the parent directories between contents and log deletion
             // to ensure there is a happens before edge between them
-            Throwables.maybeFail(syncFolder(accumulate));
+            Throwables.maybeFail(syncDirectory(accumulate));
 
             accumulate = replicas.delete(accumulate);
         }
@@ -263,9 +263,9 @@ final class LogFile
     {
         assert type == Type.ADD || type == Type.REMOVE;
 
-        File folder = table.descriptor.directory;
-        String fileName = StringUtils.join(folder, File.separator, getFileName());
-        replicas.maybeCreateReplica(folder, fileName, records);
+        File directory = table.descriptor.directory;
+        String fileName = StringUtils.join(directory, File.separator, getFileName());
+        replicas.maybeCreateReplica(directory, fileName, records);
         return LogRecord.make(type, table);
     }
 
@@ -356,8 +356,8 @@ final class LogFile
         StringBuilder str = new StringBuilder();
         str.append('[');
         str.append(getFileName());
-        str.append(" in folders ");
-        str.append(replicas.getFolders());
+        str.append(" in ");
+        str.append(replicas.getDirectories());
         str.append(']');
         if (showContents)
         {
