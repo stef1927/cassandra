@@ -1875,10 +1875,8 @@ class Shell(cmd.Cmd):
           MAXOUTPUTSIZE='-1'       - the maximum size of the output file measured in number of lines,
                                      beyond this maximum the output file will be split into segments,
                                      -1 means unlimited.
-          FLOATPRECISION=5         - the default precision for float values, this is the same as the cqlsh default
-                                     float precision.
-          DOUBLEPRECISION=12       - the default precision for double values, note that this is higher than the
-                                     cqlsh default double precision
+          FLOATPRECISION=5         - the number of digits displayed after the decimal point for cql float values
+          DOUBLEPRECISION=12       - the number of digits displayed after the decimal point for cql double values
 
         When entering CSV data on STDIN, you can use the sequence "\."
         on a line by itself to end the data input.

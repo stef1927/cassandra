@@ -254,7 +254,7 @@ class CopyTask(object):
         copy_options['maxattempts'] = int(opts.pop('maxattempts', 5))
         copy_options['dtformats'] = DateTimeFormat(opts.pop('datetimeformat', shell.display_timestamp_format),
                                                    shell.display_date_format, shell.display_nanotime_format)
-        copy_options['floatprecision'] = int(opts.pop('floatprecision', str(shell.display_float_precision)))
+        copy_options['floatprecision'] = int(opts.pop('floatprecision', '5'))
         copy_options['doubleprecision'] = int(opts.pop('doubleprecision', '12'))
         copy_options['chunksize'] = int(opts.pop('chunksize', 5000))
         copy_options['ingestrate'] = int(opts.pop('ingestrate', 100000))
