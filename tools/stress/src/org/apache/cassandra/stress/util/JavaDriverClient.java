@@ -77,9 +77,11 @@ public class JavaDriverClient
 
         if (settings.node.isWhiteList)
             loadBalancingPolicy = new WhiteListPolicy(policyBuilder.build(), settings.node.resolveAll(settings.port.nativePort));
-        else if (settings.node.datacenter != null)
+        else if (settings.tokenRange.localRouting)
+            loadBalancingPolicy = new TokenRangeRoutingPolicy(policyBuilder.build());
+		else if (settings.node.datacenter != null)
             loadBalancingPolicy = policyBuilder.build();
-        else
+		else
             loadBalancingPolicy = null;
 
         connectionsPerHost = settings.mode.connectionsPerHost == null ? 8 : settings.mode.connectionsPerHost;
@@ -111,6 +113,14 @@ public class JavaDriverClient
             stmts.put(query, stmt);
         }
         return stmt;
+    }
+
+    public SimpleStatement makeTokenRangeStatement(String query, TokenRange range)
+    {
+        if (loadBalancingPolicy instanceof TokenRangeRoutingPolicy)
+            return ((TokenRangeRoutingPolicy)loadBalancingPolicy).makeStatement(query, range);
+
+        return new SimpleStatement(query);
     }
 
     public void connect(ProtocolOptions.Compression compression) throws Exception
@@ -185,7 +195,6 @@ public class JavaDriverClient
 
     public ResultSet executePrepared(PreparedStatement stmt, List<Object> queryParams, org.apache.cassandra.db.ConsistencyLevel consistency)
     {
-
         stmt.setConsistencyLevel(from(consistency));
         BoundStatement bstmt = stmt.bind((Object[]) queryParams.toArray(new Object[queryParams.size()]));
         return getSession().execute(bstmt);

@@ -42,6 +42,7 @@ import org.apache.cassandra.exceptions.UnauthorizedException;
 import org.apache.cassandra.schema.SchemaKeyspace;
 import org.apache.cassandra.thrift.ThriftValidation;
 import org.apache.cassandra.tracing.TraceKeyspace;
+import org.apache.cassandra.transport.Connection;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.JVMStabilityInspector;
 import org.apache.cassandra.utils.CassandraVersion;
@@ -116,6 +117,9 @@ public class ClientState
     // The remote address of the client - null for internal clients.
     private final InetSocketAddress remoteAddress;
 
+    // The connection to the remote client - null for internal or thrift clients.
+    public final Connection connection;
+
     // The biggest timestamp that was returned by getTimestamp/assigned to a query. This is global to the VM
     // for the sake of paxos (see #9649).
     private static final AtomicLong lastTimestampMicros = new AtomicLong(0);
@@ -127,12 +131,14 @@ public class ClientState
     {
         this.isInternal = true;
         this.remoteAddress = null;
+        this.connection = null;
     }
 
-    protected ClientState(InetSocketAddress remoteAddress)
+    protected ClientState(InetSocketAddress remoteAddress, Connection connection)
     {
         this.isInternal = false;
         this.remoteAddress = remoteAddress;
+        this.connection = connection;
         if (!DatabaseDescriptor.getAuthenticator().requireAuthentication())
             this.user = AuthenticatedUser.ANONYMOUS_USER;
     }
@@ -148,9 +154,9 @@ public class ClientState
     /**
      * @return a ClientState object for external clients (thrift/native protocol users).
      */
-    public static ClientState forExternalCalls(SocketAddress remoteAddress)
+    public static ClientState forExternalCalls(SocketAddress remoteAddress, Connection connection)
     {
-        return new ClientState((InetSocketAddress)remoteAddress);
+        return new ClientState((InetSocketAddress)remoteAddress, connection);
     }
 
     /**

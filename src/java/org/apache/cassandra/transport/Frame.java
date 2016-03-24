@@ -97,13 +97,14 @@ public class Frame
             this.type = type;
         }
 
-        public static enum Flag
+        public enum Flag
         {
             // The order of that enum matters!!
             COMPRESSED,
             TRACING,
             CUSTOM_PAYLOAD,
-            WARNING;
+            WARNING,
+            MULTI_PART;
 
             private static final Flag[] ALL_VALUES = values();
 

@@ -146,7 +146,7 @@ public class QueryProcessor implements QueryHandler
     }
 
     // Work around initialization dependency
-    private static enum InternalStateInstance
+    private enum InternalStateInstance
     {
         INSTANCE;
 

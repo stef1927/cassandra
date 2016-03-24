@@ -364,7 +364,7 @@ public abstract class QueryOptions
 
     private static class Codec implements CBCodec<QueryOptions>
     {
-        private static enum Flag
+        private enum Flag
         {
             // The order of that enum matters!!
             VALUES,

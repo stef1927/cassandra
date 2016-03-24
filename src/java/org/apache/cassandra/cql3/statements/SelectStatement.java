@@ -50,9 +50,11 @@ import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.exceptions.*;
 import org.apache.cassandra.index.SecondaryIndexManager;
 import org.apache.cassandra.serializers.MarshalException;
+import org.apache.cassandra.service.BulkReadService;
 import org.apache.cassandra.service.ClientState;
 import org.apache.cassandra.service.ClientWarn;
 import org.apache.cassandra.service.QueryState;
+import org.apache.cassandra.service.StorageProxy;
 import org.apache.cassandra.service.pager.PagingState;
 import org.apache.cassandra.service.pager.QueryPager;
 import org.apache.cassandra.thrift.ThriftValidation;
@@ -79,12 +81,13 @@ import static org.apache.cassandra.utils.ByteBufferUtil.UNSET_BYTE_BUFFER;
 public class SelectStatement implements CQLStatement
 {
     private static final Logger logger = LoggerFactory.getLogger(SelectStatement.class);
+    protected static final boolean READ_LOCAL_OPTIMIZATION = Boolean.valueOf(System.getProperty("cassandra.test.read_local_optimization", "false"));
 
     private static final int DEFAULT_COUNT_PAGE_SIZE = 10000;
     private final int boundTerms;
     public final CFMetaData cfm;
     public final Parameters parameters;
-    private final Selection selection;
+    public final Selection selection;
     private final Term limit;
     private final Term perPartitionLimit;
 
@@ -217,7 +220,8 @@ public class SelectStatement implements CQLStatement
         // Nothing to do, all validation has been done by RawStatement.prepare()
     }
 
-    public ResultMessage.Rows execute(QueryState state, QueryOptions options) throws RequestExecutionException, RequestValidationException
+    public ResultMessage.Rows execute(QueryState state, QueryOptions options)
+        throws RequestExecutionException, RequestValidationException
     {
         ConsistencyLevel cl = options.getConsistency();
         checkNotNull(cl, "Invalid empty consistency level");
@@ -231,11 +235,46 @@ public class SelectStatement implements CQLStatement
 
         int pageSize = getPageSize(options);
 
+        if (state.getStreamingRequested())
+        {
+            if (isStreamingAllowed(options, userLimit))
+                return new BulkReadService(this).execute(query, options, state, nowInSec, pageSize);
+            else
+                throw invalidRequest("Streaming is only supported for local reads at CL.ONE without " +
+                                     "limits or aggregate queries.");
+        }
+
+        if (READ_LOCAL_OPTIMIZATION && isLocalOnly(options)) //TODO: this is temporary for testing only
+            return executeInternal(state, options);
+
         if (pageSize <= 0 || query.limits().count() <= pageSize)
             return execute(query, options, state, nowInSec, userLimit);
 
         QueryPager pager = query.getPager(options.getPagingState(), options.getProtocolVersion());
         return execute(Pager.forDistributedQuery(pager, cl, state.getClientState()), options, pageSize, nowInSec, userLimit);
+    }
+
+    private boolean isStreamingAllowed(QueryOptions options, int userLimit)
+    {
+        return isLocalOnly(options) && userLimit == DataLimits.NO_LIMIT && !selection.isAggregate();
+    }
+
+    /**
+     * Check if the query can be executed locally, that is the key range is local and the consistency
+     * level is ONE or less.
+     */
+    private boolean isLocalOnly(QueryOptions options)
+    {
+        Keyspace keyspace = Keyspace.open(cfm.ksName);
+
+        if (options.getConsistency().blockFor(keyspace) > 1)
+            return false;
+
+        AbstractBounds<PartitionPosition> bounds = restrictions.getPartitionKeyBounds(options);
+        if (bounds == null)
+            return false; // empty query
+
+        return StorageProxy.isLocalRange(keyspace, bounds);
     }
 
     private int getPageSize(QueryOptions options)
@@ -764,7 +803,7 @@ public class SelectStatement implements CQLStatement
     }
 
     // Used by ModificationStatement for CAS operations
-    void processPartition(RowIterator partition, QueryOptions options, Selection.ResultSetBuilder result, int nowInSec)
+    public void processPartition(RowIterator partition, QueryOptions options, Selection.ResultSetAccumulator result, int nowInSec)
     throws InvalidRequestException
     {
         int protocolVersion = options.getProtocolVersion();
@@ -824,7 +863,7 @@ public class SelectStatement implements CQLStatement
         }
     }
 
-    private static void addValue(Selection.ResultSetBuilder result, ColumnDefinition def, Row row, int nowInSec, int protocolVersion)
+    private static void addValue(Selection.ResultSetAccumulator result, ColumnDefinition def, Row row, int nowInSec, int protocolVersion)
     {
         if (def.isComplex())
         {
@@ -852,7 +891,7 @@ public class SelectStatement implements CQLStatement
     /**
      * Orders results when multiple keys are selected (using IN)
      */
-    private void orderResults(ResultSet cqlRows)
+    public void orderResults(ResultSet cqlRows)
     {
         if (cqlRows.size() == 0 || !needsPostQueryOrdering())
             return;

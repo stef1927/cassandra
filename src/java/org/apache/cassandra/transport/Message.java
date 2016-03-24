@@ -121,7 +121,7 @@ public abstract class Message
             }
         }
 
-        private Type(int opcode, Direction direction, Codec<?> codec)
+        Type(int opcode, Direction direction, Codec<?> codec)
         {
             this.opcode = opcode;
             this.direction = direction;
@@ -200,6 +200,7 @@ public abstract class Message
     public static abstract class Request extends Message
     {
         protected boolean tracingRequested;
+        protected boolean multiPartRespRequested;
 
         protected Request(Type type)
         {
@@ -213,12 +214,22 @@ public abstract class Message
 
         public void setTracingRequested()
         {
-            this.tracingRequested = true;
+            this.multiPartRespRequested = true;
         }
 
         public boolean isTracingRequested()
         {
             return tracingRequested;
+        }
+
+        public void setMultiPartRespRequested()
+        {
+            this.multiPartRespRequested = true;
+        }
+
+        public boolean isMultiPartRespRequested()
+        {
+            return multiPartRespRequested;
         }
     }
 
@@ -226,6 +237,7 @@ public abstract class Message
     {
         protected UUID tracingId;
         protected List<String> warnings;
+        protected boolean multiPart;
 
         protected Response(Type type)
         {
@@ -256,6 +268,24 @@ public abstract class Message
         {
             return warnings;
         }
+
+        public Message setMultiPart()
+        {
+            this.multiPart = true;
+            return this;
+        }
+
+        public boolean isMultiPart()
+        {
+            return multiPart;
+        }
+
+        public void prepareForSending(int streamId, Connection connection)
+        {
+            setStreamId(streamId);
+            setWarnings(ClientWarn.instance.getWarnings());
+            attach(connection);
+        }
     }
 
     @ChannelHandler.Sharable
@@ -267,6 +297,7 @@ public abstract class Message
             boolean isTracing = frame.header.flags.contains(Frame.Header.Flag.TRACING);
             boolean isCustomPayload = frame.header.flags.contains(Frame.Header.Flag.CUSTOM_PAYLOAD);
             boolean hasWarning = frame.header.flags.contains(Frame.Header.Flag.WARNING);
+            boolean isMultipart = frame.header.flags.contains(Frame.Header.Flag.MULTI_PART);
 
             UUID tracingId = isRequest || !isTracing ? null : CBUtil.readUUID(frame.body);
             List<String> warnings = isRequest || !hasWarning ? null : CBUtil.readStringList(frame.body);
@@ -290,14 +321,19 @@ public abstract class Message
                     req.attach(connection);
                     if (isTracing)
                         req.setTracingRequested();
+                    if (isMultipart)
+                        req.setMultiPartRespRequested();
                 }
                 else
                 {
                     assert message instanceof Response;
+                    Response resp = (Response)message;
                     if (isTracing)
-                        ((Response)message).setTracingId(tracingId);
+                        resp.setTracingId(tracingId);
                     if (hasWarning)
-                        ((Response)message).setWarnings(warnings);
+                        resp.setWarnings(warnings);
+                    if (isMultipart)
+                        resp.setMultiPart();
                 }
 
                 results.add(message);
@@ -334,6 +370,7 @@ public abstract class Message
                     if (tracingId != null)
                         messageSize += CBUtil.sizeOfUUID(tracingId);
                     List<String> warnings = ((Response)message).getWarnings();
+                    boolean isMultipart = ((Response)message).isMultiPart();
                     if (warnings != null)
                     {
                         if (version < Server.VERSION_4)
@@ -362,6 +399,8 @@ public abstract class Message
                         CBUtil.writeBytesMap(customPayload, body);
                         flags.add(Frame.Header.Flag.CUSTOM_PAYLOAD);
                     }
+                    if (isMultipart)
+                        flags.add(Frame.Header.Flag.MULTI_PART);
                 }
                 else
                 {
@@ -377,6 +416,8 @@ public abstract class Message
                         CBUtil.writeBytesMap(payload, body);
                         flags.add(Frame.Header.Flag.CUSTOM_PAYLOAD);
                     }
+                    if (((Request)message).isMultiPartRespRequested())
+                        flags.add(Frame.Header.Flag.MULTI_PART);
                 }
 
                 try
@@ -501,13 +542,11 @@ public abstract class Message
                 if (connection.getVersion() >= Server.VERSION_4)
                     ClientWarn.instance.captureWarnings();
 
-                QueryState qstate = connection.validateNewMessage(request.type, connection.getVersion(), request.getStreamId());
+                QueryState qstate = connection.validateNewMessage(request, connection.getVersion());
 
                 logger.trace("Received: {}, v={}", request, connection.getVersion());
                 response = request.execute(qstate);
-                response.setStreamId(request.getStreamId());
-                response.setWarnings(ClientWarn.instance.getWarnings());
-                response.attach(connection);
+                response.prepareForSending(request.getStreamId(), connection);
                 connection.applyStateTransition(request.type, response.type);
             }
             catch (Throwable t)

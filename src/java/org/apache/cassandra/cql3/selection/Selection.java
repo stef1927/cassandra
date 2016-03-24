@@ -33,6 +33,7 @@ import org.apache.cassandra.cql3.functions.Function;
 import org.apache.cassandra.db.rows.Cell;
 import org.apache.cassandra.db.context.CounterContext;
 import org.apache.cassandra.db.marshal.UTF8Type;
+import org.apache.cassandra.db.rows.Row;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
@@ -284,7 +285,16 @@ public abstract class Selection
         return Collections.singletonList(UTF8Type.instance.getSerializer().serialize(sb.toString()));
     }
 
-    public class ResultSetBuilder
+    public static interface ResultSetAccumulator
+    {
+        void add(ByteBuffer v);
+
+        void add(Cell c, int nowInSec);
+
+        void newRow(int protocolVersion) throws InvalidRequestException;
+    }
+
+    public class ResultSetBuilder implements ResultSetAccumulator
     {
         private final ResultSet resultSet;
 
