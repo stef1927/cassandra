@@ -475,8 +475,7 @@ COPY_COMMON_OPTIONS = ['DELIMITER', 'QUOTE', 'ESCAPE', 'HEADER', 'NULL', 'DATETI
                        'MAXATTEMPTS', 'REPORTFREQUENCY', 'DECIMALSEP', 'THOUSANDSSEP', 'BOOLSTYLE',
                        'NUMPROCESSES', 'CONFIGFILE', 'RATEFILE']
 COPY_FROM_OPTIONS = ['CHUNKSIZE', 'INGESTRATE', 'MAXBATCHSIZE', 'MINBATCHSIZE', 'MAXROWS',
-                     'SKIPROWS', 'SKIPCOLS', 'MAXPARSEERRORS', 'MAXINSERTERRORS', 'ERRFILE', 'PREPAREDSTATEMENTS',
-                     'MAXINFLIGHTMESSAGES', 'MAXBACKOFFATTEMPTS', 'MAXPENDINGCHUNKS']
+                     'SKIPROWS', 'SKIPCOLS', 'MAXPARSEERRORS', 'MAXINSERTERRORS', 'ERRFILE', 'PREPAREDSTATEMENTS']
 COPY_TO_OPTIONS = ['ENCODING', 'PAGESIZE', 'PAGETIMEOUT', 'BEGINTOKEN', 'ENDTOKEN', 'MAXOUTPUTSIZE', 'MAXREQUESTS']
 
 
@@ -1887,22 +1886,14 @@ class Shell(cmd.Cmd):
           SKIPROWS=0              - the number of rows to skip
           SKIPCOLS=''             - a comma separated list of column names to skip
           MAXPARSEERRORS=-1       - the maximum global number of parsing errors, -1 means no maximum
-          MAXINSERTERRORS=-1      - the maximum global number of insert errors, -1 means no maximum
+          MAXINSERTERRORS=1000    - the maximum global number of insert errors, -1 means no maximum
           ERRFILE=''              - a file where to store all rows that could not be imported, by default this is
                                     import_ks_table.err where <ks> is your keyspace and <table> is your table name.
           PREPAREDSTATEMENTS=True - whether to use prepared statements when importing, by default True. Set this to
                                     False if you don't mind shifting data parsing to the cluster. The cluster will also
                                     have to compile every batch statement. For large and oversized clusters
                                     this will result in a faster import but for smaller clusters it may generate
-                                    timeouts
-         MAXINFLIGHTMESSAGES=512  - the maximum number of messages not yet acknowledged by a replica, before the
-                                    back-off policy in worker processes kicks in
-         MAXBACKOFFATTEMPTS=32    - the maximum number of back-off attempts in worker processes. During each attempt,
-                                    if no replica with less than MAXINFLIGHTMESSAGES pending is found, there is a pause
-                                    in the worker process for an amount of time that is drawn at random between
-                                    1 and 2^num-attempts seconds
-         MAXPENDINGCHUNKS=24      - the maximum number of chunks not yet read by a working process, once this number
-                                    is reached, no new chunks are sent from the feeding process to the worker process
+                                    timeouts.
 
         Available COPY TO options and defaults:
 

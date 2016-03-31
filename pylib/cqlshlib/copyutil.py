@@ -111,7 +111,7 @@ class OneWayChannel(object):
                     msg = pending_messages.get()
                     send(msg)
                 except Exception, e:
-                    printdebugmsg('%s: %s' % (e.__class__.__name__, e.message))
+                    printmsg('%s: %s' % (e.__class__.__name__, e.message))
 
         feeding_thread = threading.Thread(target=feed)
         feeding_thread.setDaemon(True)
@@ -324,13 +324,16 @@ class CopyTask(object):
         copy_options['skiprows'] = int(opts.pop('skiprows', '0'))
         copy_options['skipcols'] = opts.pop('skipcols', '')
         copy_options['maxparseerrors'] = int(opts.pop('maxparseerrors', '-1'))
-        copy_options['maxinserterrors'] = int(opts.pop('maxinserterrors', '-1'))
+        copy_options['maxinserterrors'] = int(opts.pop('maxinserterrors', '1000'))
         copy_options['errfile'] = safe_normpath(opts.pop('errfile', 'import_%s_%s.err' % (self.ks, self.table,)))
         copy_options['ratefile'] = safe_normpath(opts.pop('ratefile', ''))
         copy_options['maxoutputsize'] = int(opts.pop('maxoutputsize', '-1'))
         copy_options['preparedstatements'] = bool(opts.pop('preparedstatements', 'true').lower() == 'true')
+
+        # Hidden properties, they do not appear in the documentation but can be set in config files
+        # or on the cmd line but w/o completion
         copy_options['maxinflightmessages'] = int(opts.pop('maxinflightmessages', '512'))
-        copy_options['maxbackoffattempts'] = int(opts.pop('maxbackoffattempts', '32'))
+        copy_options['maxbackoffattempts'] = int(opts.pop('maxbackoffattempts', '12'))
         copy_options['maxpendingchunks'] = int(opts.pop('maxpendingchunks', '24'))
 
         self.check_options(copy_options)
@@ -1498,8 +1501,8 @@ class ExportProcess(ChildProcess):
             msg = err
         elif isinstance(err, BaseException):
             msg = "%s - %s" % (err.__class__.__name__, err)
-            if print_traceback:
-                traceback.print_exc(err)
+            if print_traceback and sys.exc_info()[1] == err:
+                traceback.print_exc()
         else:
             msg = str(err)
         return msg
@@ -2071,17 +2074,19 @@ class FastTokenAwarePolicy(DCAwareRoundRobinPolicy):
                         if r not in replicas])
 
         if replicas:
-            def filter_replica(r):
+            def replica_is_not_overloaded(r):
                 if r.address in connections:
                     conn = connections[r.address]
                     return conn.in_flight < min(conn.max_request_id, self.max_inflight_messages)
                 return True
 
             for i in xrange(self.max_backoff_attempts):
-                for r in filter(filter_replica, replicas):
+                for r in filter(replica_is_not_overloaded, replicas):
                     yield r
 
-                delay = randint(1, pow(2, i + 1))
+                # the back-off starts at 10 ms (0.01) and it can go up to to 2^max_backoff_attempts,
+                # which is currently 12, so 2^12 = 4096 = ~40 seconds when dividing by 0.01
+                delay = randint(1, pow(2, i + 1)) * 0.01
                 printdebugmsg("All replicas busy, sleeping for %d second(s)..." % (delay,))
                 time.sleep(delay)
 
@@ -2094,11 +2099,11 @@ class ConnectionWrapper(DefaultConnection):
     The newly created connection is registered into a global dictionary so that FastTokenAwarePolicy
     is able to determine if a connection has too many in flight requests.
     """
+    connections = dict()
+
     def __init__(self, *args, **kwargs):
         DefaultConnection.__init__(self, *args, **kwargs)
         self.connections[self.host] = self
-
-ConnectionWrapper.connections = dict()
 
 
 class ImportProcess(ChildProcess):
@@ -2221,9 +2226,10 @@ class ImportProcess(ChildProcess):
                 chunk['rows'] = convert_rows(conv, chunk)
                 for replicas, batch in split_into_batches(chunk, conv, tm):
                     statement = make_statement(query, conv, chunk, batch, replicas)
-                    future = session.execute_async(statement)
-                    future.add_callbacks(callback=result_callback, callback_args=(batch, chunk),
-                                         errback=err_callback, errback_args=(batch, chunk, replicas))
+                    if statement:
+                        future = session.execute_async(statement)
+                        future.add_callbacks(callback=result_callback, callback_args=(batch, chunk),
+                                             errback=err_callback, errback_args=(batch, chunk, replicas))
 
             except Exception, exc:
                 self.report_error(exc, chunk, chunk['rows'])
@@ -2405,8 +2411,8 @@ class ImportProcess(ChildProcess):
                                  errback=self.err_callback, errback_args=(batch, chunk, replicas))
 
     def report_error(self, err, chunk, rows=None, attempts=1, final=True):
-        if self.debug:
-            traceback.print_exc(err)
+        if self.debug and sys.exc_info()[1] == err:
+            traceback.print_exc()
         self.outmsg.send(ImportTaskError(err.__class__.__name__, err.message, rows, attempts, final))
         if final:
             self.update_chunk(rows, chunk)
