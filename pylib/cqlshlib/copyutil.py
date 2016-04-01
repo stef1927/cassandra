@@ -1436,7 +1436,6 @@ class ExportProcess(ChildProcess):
         self.hosts_to_sessions = dict()
         self.formatters = dict()
         self.options = options
-        self.responses = None
 
     def run(self):
         try:
@@ -1454,8 +1453,6 @@ class ExportProcess(ChildProcess):
         we can signal a global error by sending (None, error).
         We terminate when the inbound queue is closed.
         """
-        self.init_feeder_thread()
-
         while True:
             if self.num_requests() > self.max_requests:
                 time.sleep(0.001)  # 1 millisecond
@@ -1463,37 +1460,6 @@ class ExportProcess(ChildProcess):
 
             token_range, info = self.inmsg.recv()
             self.start_request(token_range, info)
-
-    def init_feeder_thread(self):
-        """
-        Start a thread to feed response messages to the parent process.
-
-        It is not safe to write on the pipe from the main thread if the parent process is still sending work and
-        not receiving yet. This will in fact block the main thread on the send, which in turn won't be able to call
-        recv(), and will therefore block the parent process on its send().
-
-        It is also not safe to write on the pipe from the driver receiving thread whilst the parent process is
-        sending work, because if the receiving thread stops making progress, then the main thread may no longer
-        call recv() due to the check on the maximum number of requests in inner_run().
-
-        These deadlocks are easiest to reproduce with a single worker process, but may well affect multiple worker
-        processes too.
-
-        It is important that the order of the responses in the queue is respected, or else the parent process may
-        kill off worker processes before it has received all the pages of the last token range.
-        """
-        def feed_errors():
-            while True:
-                try:
-                    self.outmsg.send(self.responses.get())
-                except Exception, e:
-                    self.printdebugmsg(e.message)
-
-        self.responses = Queue()
-
-        thread = threading.Thread(target=feed_errors)
-        thread.setDaemon(True)
-        thread.start()
 
     @staticmethod
     def get_error_message(err, print_traceback=False):
@@ -1513,7 +1479,7 @@ class ExportProcess(ChildProcess):
         self.send((token_range, Exception(msg)))
 
     def send(self, response):
-        self.responses.put(response)
+        self.outmsg.send(response)
 
     def start_request(self, token_range, info):
         """
