@@ -1163,12 +1163,12 @@ class ImportTask(CopyTask):
             self.shell.printerr("{} child process(es) died unexpectedly, aborting"
                                 .format(self.num_processes - self.num_live_processes()))
         else:
-            # it is only safe to write to processes if they are all running because the feeder process
-            # at the moment hangs whilst sending messages to a crashed worker process; in future
-            # we could do something about this by using a BoundedSemaphore to keep track of how many messages are
-            # queued on a pipe
+            if self.error_handler.max_exceeded():
+                self.processes[-1].terminate()  # kill the feeder
+
             for i, _ in enumerate(self.processes):
-                self.outmsg.channels[i].send(None)
+                if self.processes[i].is_alive():
+                    self.outmsg.channels[i].send(None)
 
         # allow time for worker processes to exit cleanly
         attempts = 50  # 100 milliseconds per attempt, so 5 seconds total
