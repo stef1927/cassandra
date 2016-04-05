@@ -31,6 +31,8 @@ public class SettingsTokenRange
     public final boolean prefetch;
     public final boolean stream;
     public final boolean localRouting;
+    public final boolean saveData;
+    public final String dataFileName;
 
     public SettingsTokenRange(TokenRangeOptions options)
     {
@@ -39,6 +41,8 @@ public class SettingsTokenRange
         this.prefetch = options.prefetch.setByUser();
         this.stream = options.stream.setByUser();
         this.localRouting = options.localRouting.setByUser();
+        this.saveData = options.saveData.setByUser();
+        this.dataFileName = options.saveData.value();
 
         if (this.prefetch && this.stream)
             throw new IllegalArgumentException("stream and prefetch cannot be both set, please remove one");
@@ -50,13 +54,14 @@ public class SettingsTokenRange
         final OptionSimple splitFactor = new OptionSimple("split-factor=", "[0-9]+[bmk]?", "1", "Split every token range by this factor", false);
         final OptionSimple prefetch = new OptionSimple("prefetch", "", null, "When processing a page result, pre-fetch the next page", false);
         final OptionSimple stream = new OptionSimple("stream", "", null, "Ask the server to stream all data available by splitting it into pages", false);
-        final OptionSimple localRouting = new OptionSimple("localRouting", "", null, "Route queries to a local replica, ignored if a node white list is specified", false);
+        final OptionSimple localRouting = new OptionSimple("localRouting", "", null, "Route queries to a local replica", false);
+        final OptionSimple saveData = new OptionSimple("savedata=", ".+", "stress-data.txt", "Save data to a file", false);
 
 
         @Override
         public List<? extends Option> options()
         {
-            return ImmutableList.<Option>builder().add(wrap, splitFactor, prefetch, stream, localRouting).build();
+            return ImmutableList.<Option>builder().add(wrap, splitFactor, prefetch, stream, localRouting, saveData).build();
         }
     }
 

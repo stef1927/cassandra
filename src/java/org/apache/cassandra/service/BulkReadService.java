@@ -32,6 +32,7 @@ import org.apache.cassandra.cql3.QueryOptions;
 import org.apache.cassandra.cql3.ResultSet;
 import org.apache.cassandra.cql3.selection.Selection;
 import org.apache.cassandra.cql3.statements.SelectStatement;
+import org.apache.cassandra.db.PartitionRangeReadCommand;
 import org.apache.cassandra.db.ReadExecutionController;
 import org.apache.cassandra.db.ReadQuery;
 import org.apache.cassandra.db.filter.DataLimits;
@@ -70,6 +71,12 @@ public class BulkReadService
     {
         try
         {
+            if (query instanceof PartitionRangeReadCommand)
+            { //TODO FIXME
+                PartitionRangeReadCommand rc = (PartitionRangeReadCommand)query;
+                logger.info("About to stream {}", rc.dataRange().toString(rc.metadata()));
+            }
+
             CompletableFuture<ResultMessage.Rows> firstMessage = new CompletableFuture<>();
             StageManager.getStage(Stage.READ).execute(new ReadRunnable(firstMessage, statement, query, options, state, nowInSec, pageSize));
             return firstMessage.get();

@@ -48,22 +48,6 @@ public class TokenRangeRoutingPolicy implements ChainableLoadBalancingPolicy
     private final boolean shuffleReplicas;
     private volatile Metadata clusterMetadata;
 
-    private final static class StatementWithToken extends SimpleStatement
-    {
-        public final TokenRange range;
-
-        public StatementWithToken(String query, TokenRange range)
-        {
-            super(query);
-            this.range = range;
-        }
-    }
-
-    public static SimpleStatement makeStatement(String query, TokenRange range)
-    {
-        return new StatementWithToken(query, range);
-    }
-
     public TokenRangeRoutingPolicy(LoadBalancingPolicy childPolicy, boolean shuffleReplicas) {
         this.childPolicy = childPolicy;
         this.shuffleReplicas = shuffleReplicas;
@@ -96,10 +80,10 @@ public class TokenRangeRoutingPolicy implements ChainableLoadBalancingPolicy
         if (keyspace == null)
             keyspace = loggedKeyspace;
 
-        if (!(statement instanceof StatementWithToken))
+        TokenRange range = statement.getRoutingTokenRange();
+        if (range == null)
             return childPolicy.newQueryPlan(keyspace, statement);
 
-        TokenRange range = ((StatementWithToken)statement).range;
         final Set<Host> replicas = clusterMetadata.getReplicas(Metadata.quote(keyspace), range);
         if (replicas.isEmpty())
             return childPolicy.newQueryPlan(loggedKeyspace, statement);

@@ -172,7 +172,7 @@ public class BulkReadTest extends CQLTester
             statement.setFetchSize(pageSize);
 
 
-            Iterator<ResultSetFuture> it = session.streamAsync(statement);
+            Iterator<ResultSetFuture> it = session.stream(statement);
 
             //Schedule the conversions
             List<CompletableFuture<Integer>> results = new ArrayList<>();

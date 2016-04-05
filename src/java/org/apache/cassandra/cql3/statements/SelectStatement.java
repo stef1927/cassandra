@@ -244,7 +244,9 @@ public class SelectStatement implements CQLStatement
                                      "limits or aggregate queries.");
         }
 
-        if (READ_LOCAL_OPTIMIZATION && isLocalOnly(options)) //TODO: this is temporary for testing only
+        // TODO: this is temporary just for testing
+        // Actual implementation will be delivered by CASSANADRA-11520
+        if (READ_LOCAL_OPTIMIZATION && isLocalOnly(options))
             return executeInternal(state, options);
 
         if (pageSize <= 0 || query.limits().count() <= pageSize)

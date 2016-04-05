@@ -19,6 +19,7 @@
 package org.apache.cassandra.stress.operations.userdefined;
 
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -30,7 +31,9 @@ import javax.naming.OperationNotSupportedException;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.RateLimiter;
 
+import com.datastax.driver.core.ColumnDefinitions;
 import com.datastax.driver.core.ColumnMetadata;
+import com.datastax.driver.core.DataType;
 import com.datastax.driver.core.PagingState;
 import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.ResultSetFuture;
@@ -39,6 +42,7 @@ import com.datastax.driver.core.Statement;
 import com.datastax.driver.core.TableMetadata;
 import com.datastax.driver.core.Token;
 import com.datastax.driver.core.TokenRange;
+import com.sun.javafx.scene.layout.region.Margins;
 import org.apache.cassandra.stress.Operation;
 import org.apache.cassandra.stress.StressYaml;
 import org.apache.cassandra.stress.WorkManager;
@@ -59,6 +63,7 @@ public class TokenRangeQuery extends Operation
     private final int pageSize;
     private final boolean isWarmup;
     private final SettingsTokenRange settings;
+    private final PrintWriter resultsWriter;
 
     public TokenRangeQuery(Timer timer,
                            StressSettings settings,
@@ -74,6 +79,19 @@ public class TokenRangeQuery extends Operation
         this.pageSize = isWarmup ? Math.min(100, def.page_size) : def.page_size;
         this.isWarmup = isWarmup;
         this.settings = settings.tokenRange;
+        this.resultsWriter = maybeCreateResultsWriter(settings.tokenRange);
+    }
+
+    private static PrintWriter maybeCreateResultsWriter(SettingsTokenRange settings)
+    {
+        try
+        {
+            return settings.saveData ? new PrintWriter(settings.dataFileName, "UTF-8") : null;
+        }
+        catch (IOException ex)
+        {
+            throw new RuntimeException(ex);
+        }
     }
 
     /**
@@ -163,8 +181,48 @@ public class TokenRangeQuery extends Operation
                     state.partitions.add(partition);
                 }
 
+                if (shouldSaveResults())
+                    saveRow(row);
+
                 if (--remaining == 0)
                     break;
+            }
+
+            if (shouldSaveResults())
+                flushResults();
+
+        }
+
+        private boolean shouldSaveResults()
+        {
+            return resultsWriter != null && !isWarmup;
+        }
+
+        private void flushResults()
+        {
+            synchronized (resultsWriter)
+            {
+                resultsWriter.flush();
+            }
+        }
+
+        private void saveRow(Row row)
+        {
+            assert resultsWriter != null;
+            synchronized (resultsWriter)
+            {
+                for (ColumnDefinitions.Definition cd : row.getColumnDefinitions())
+                {
+                    Object value = row.getObject(cd.getName());
+
+                    if (value instanceof String)
+                        resultsWriter.print(((String)value).replaceAll("\\p{C}", "?"));
+                    else
+                        resultsWriter.print(value.toString());
+
+                    resultsWriter.print(',');
+                }
+                resultsWriter.print(System.lineSeparator());
             }
         }
     }
@@ -307,7 +365,7 @@ public class TokenRangeQuery extends Operation
         {
             Statement statement = client.makeTokenRangeStatement(state.query, state.tokenRange);
             statement.setFetchSize(pageSize);
-            state.resultSetFutureIterator = client.getSession().streamAsync(statement);
+            state.resultSetFutureIterator = client.getSession().stream(statement);
             return state.resultSetFutureIterator.next().get();
         }
     }
