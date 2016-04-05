@@ -23,20 +23,27 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
 
+import com.google.common.collect.ImmutableMap;
+import com.datastax.driver.core.ProtocolVersion;
+import com.datastax.driver.core.TypeCodec;
 import org.apache.cassandra.config.*;
 import org.apache.cassandra.cql3.*;
+import org.apache.cassandra.cql3.functions.UDHelper;
 import org.apache.cassandra.cql3.statements.CFStatement;
 import org.apache.cassandra.cql3.statements.CreateTableStatement;
+import org.apache.cassandra.cql3.statements.CreateTypeStatement;
 import org.apache.cassandra.cql3.statements.ParsedStatement;
 import org.apache.cassandra.cql3.statements.UpdateStatement;
 import org.apache.cassandra.db.Clustering;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.marshal.AbstractType;
+import org.apache.cassandra.db.marshal.UserType;
 import org.apache.cassandra.db.partitions.Partition;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Murmur3Partitioner;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.exceptions.RequestValidationException;
+import org.apache.cassandra.exceptions.SyntaxException;
 import org.apache.cassandra.io.sstable.format.SSTableFormat;
 import org.apache.cassandra.schema.KeyspaceMetadata;
 import org.apache.cassandra.schema.KeyspaceParams;
@@ -92,12 +99,15 @@ public class CQLSSTableWriter implements Closeable
     private final AbstractSSTableSimpleWriter writer;
     private final UpdateStatement insert;
     private final List<ColumnSpecification> boundNames;
+    private final  Map<String, com.datastax.driver.core.UserType> codecs;
 
-    private CQLSSTableWriter(AbstractSSTableSimpleWriter writer, UpdateStatement insert, List<ColumnSpecification> boundNames)
+    private CQLSSTableWriter(AbstractSSTableSimpleWriter writer, UpdateStatement insert, List<ColumnSpecification> boundNames,
+                             Map<String, com.datastax.driver.core.UserType> codecs)
     {
         this.writer = writer;
         this.insert = insert;
         this.boundNames = boundNames;
+        this.codecs = codecs;
     }
 
     /**
@@ -145,8 +155,14 @@ public class CQLSSTableWriter implements Closeable
     {
         int size = Math.min(values.size(), boundNames.size());
         List<ByteBuffer> rawValues = new ArrayList<>(size);
+
         for (int i = 0; i < size; i++)
-            rawValues.add(values.get(i) == null ? null : ((AbstractType)boundNames.get(i).type).decompose(values.get(i)));
+        {
+            TypeCodec typeCodec = UDHelper.codecFor(UDHelper.driverType(boundNames.get(i).type));
+            rawValues.add(values.get(i) == null ? null : typeCodec.serialize(values.get(i),
+                                                                             ProtocolVersion.NEWEST_SUPPORTED));
+        }
+
         return rawAddRow(rawValues);
     }
 
@@ -270,6 +286,17 @@ public class CQLSSTableWriter implements Closeable
     }
 
     /**
+     * Returns the User Defined type, used in this SSTable Writer, that can
+     * be used to create UDTValue instances.
+     *
+     * @param dataType name of the User Defined type
+     * @return user defined type
+     */
+    public com.datastax.driver.core.UserType getUDType(String dataType) {
+        return codecs.get(dataType);
+    }
+
+    /**
      * Close this writer.
      * <p>
      * This method should be called, otherwise the produced sstables are not
@@ -292,11 +319,15 @@ public class CQLSSTableWriter implements Closeable
         private CFMetaData schema;
         private UpdateStatement insert;
         private List<ColumnSpecification> boundNames;
+        private List<UserType> typeDefs;
 
         private boolean sorted = false;
         private long bufferSizeInMB = 128;
 
-        protected Builder() {}
+        protected Builder()
+        {
+            typeDefs = new LinkedList<>();
+        }
 
         /**
          * The directory where to write the sstables.
@@ -334,6 +365,41 @@ public class CQLSSTableWriter implements Closeable
             return this;
         }
 
+        public Builder withType(String typeDefinition) throws SyntaxException
+        {
+
+            synchronized (CQLSSTableWriter.class)
+            {
+                try
+                {
+                    ParsedStatement parsedStatement = QueryProcessor.parseStatement(typeDefinition);
+
+                    if (!parsedStatement.getClass().equals(CreateTypeStatement.class))
+                        throw new IllegalArgumentException("Only `CREATE TYPE` queries are allowed");
+
+                    CreateTypeStatement typeStatement = (CreateTypeStatement) parsedStatement;
+
+                    KeyspaceMetadata ksm = Schema.instance.getKSMetaData(typeStatement.keyspace());
+                    if (ksm == null)
+                    {
+                        Schema.instance.load(KeyspaceMetadata.create(typeStatement.keyspace(), KeyspaceParams.simple(1)));
+                    }
+
+                    typeStatement.validate(ClientState.forInternalCalls());
+                    UserType userType = typeStatement.createType();
+                    CreateTypeStatement.checkForDuplicateNames(userType);
+
+                    typeDefs.add(userType);
+                }
+                catch (RequestValidationException e)
+                {
+                    throw new IllegalArgumentException(e);
+                }
+            }
+
+            return this;
+        }
+
         /**
          * The schema (CREATE TABLE statement) for the table for which sstable are to be created.
          * <p>
@@ -354,7 +420,7 @@ public class CQLSSTableWriter implements Closeable
             {
                 synchronized (CQLSSTableWriter.class)
                 {
-                    this.schema = getTableMetadata(schema);
+                    this.schema = getTableMetadata(schema, typeDefs);
 
                     // We need to register the keyspace/table metadata through Schema, otherwise we won't be able to properly
                     // build the insert statement in using().
@@ -490,12 +556,14 @@ public class CQLSSTableWriter implements Closeable
             return this;
         }
 
-        private static CFMetaData getTableMetadata(String schema)
+        private static CFMetaData getTableMetadata(String schema, List<UserType> userTypes)
         {
             CFStatement parsed = (CFStatement)QueryProcessor.parseStatement(schema);
             // tables with UDTs are currently not supported by CQLSSTableWrite, so we just use Types.none(), for now
             // see CASSANDRA-10624 for more details
-            CreateTableStatement statement = (CreateTableStatement) ((CreateTableStatement.RawStatement) parsed).prepare(Types.none()).statement;
+            UserType[] typesArray = new UserType[userTypes.size()];
+            userTypes.toArray(typesArray);
+            CreateTableStatement statement = (CreateTableStatement) ((CreateTableStatement.RawStatement) parsed).prepare(Types.of(typesArray)).statement;
             statement.validate(ClientState.forInternalCalls());
             return statement.getCFMetaData();
         }
@@ -537,7 +605,12 @@ public class CQLSSTableWriter implements Closeable
             if (formatType != null)
                 writer.setSSTableFormatType(formatType);
 
-            return new CQLSSTableWriter(writer, insert, boundNames);
+            ImmutableMap.Builder<String, com.datastax.driver.core.UserType> codecMap = ImmutableMap.builder();
+            for (UserType type: typeDefs) {
+                codecMap.put(type.getNameAsString(), (com.datastax.driver.core.UserType) UDHelper.driverType(type));
+            }
+
+            return new CQLSSTableWriter(writer, insert, boundNames, codecMap.build());
         }
     }
 }

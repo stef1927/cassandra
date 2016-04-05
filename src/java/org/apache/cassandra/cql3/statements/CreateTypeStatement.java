@@ -99,7 +99,7 @@ public class CreateTypeStatement extends SchemaAlteringStatement
         return name.getKeyspace();
     }
 
-    private UserType createType() throws InvalidRequestException
+    public UserType createType() throws InvalidRequestException
     {
         List<ByteBuffer> names = new ArrayList<>(columnNames.size());
         for (ColumnIdentifier name : columnNames)
