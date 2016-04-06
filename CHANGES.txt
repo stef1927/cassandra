@@ -6,6 +6,8 @@ Merged from 2.1:
 
 
 2.2.6
+ * cqlsh: COPY FROM should use regular inserts for single statement batches and
+          report errors correctly if workers processes crash on initialization (CASSANDRA-11474)
  * Allow only DISTINCT queries with partition keys restrictions (CASSANDRA-11339)
  * CqlConfigHelper no longer requires both a keystore and truststore to work (CASSANDRA-11532)
  * Make deprecated repair methods backward-compatible with previous notification service (CASSANDRA-11430)
