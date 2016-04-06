@@ -23,7 +23,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
 
-import com.google.common.collect.ImmutableMap;
 import com.datastax.driver.core.ProtocolVersion;
 import com.datastax.driver.core.TypeCodec;
 import org.apache.cassandra.config.*;
@@ -50,6 +49,7 @@ import org.apache.cassandra.schema.KeyspaceParams;
 import org.apache.cassandra.schema.Tables;
 import org.apache.cassandra.schema.Types;
 import org.apache.cassandra.service.ClientState;
+import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.Pair;
 
 /**
@@ -99,15 +99,12 @@ public class CQLSSTableWriter implements Closeable
     private final AbstractSSTableSimpleWriter writer;
     private final UpdateStatement insert;
     private final List<ColumnSpecification> boundNames;
-    private final  Map<String, com.datastax.driver.core.UserType> codecs;
 
-    private CQLSSTableWriter(AbstractSSTableSimpleWriter writer, UpdateStatement insert, List<ColumnSpecification> boundNames,
-                             Map<String, com.datastax.driver.core.UserType> codecs)
+    private CQLSSTableWriter(AbstractSSTableSimpleWriter writer, UpdateStatement insert, List<ColumnSpecification> boundNames)
     {
         this.writer = writer;
         this.insert = insert;
         this.boundNames = boundNames;
-        this.codecs = codecs;
     }
 
     /**
@@ -292,8 +289,11 @@ public class CQLSSTableWriter implements Closeable
      * @param dataType name of the User Defined type
      * @return user defined type
      */
-    public com.datastax.driver.core.UserType getUDType(String dataType) {
-        return codecs.get(dataType);
+    public com.datastax.driver.core.UserType getUDType(String dataType)
+    {
+        KeyspaceMetadata ksm = Schema.instance.getKSMetaData(insert.keyspace());
+        UserType ut = ksm.types.getNullable(ByteBufferUtil.bytes(dataType));
+        return (com.datastax.driver.core.UserType) UDHelper.driverType(ut);
     }
 
     /**
@@ -319,14 +319,14 @@ public class CQLSSTableWriter implements Closeable
         private CFMetaData schema;
         private UpdateStatement insert;
         private List<ColumnSpecification> boundNames;
-        private List<UserType> typeDefs;
+        private Types userTypes;
 
         private boolean sorted = false;
         private long bufferSizeInMB = 128;
 
         protected Builder()
         {
-            typeDefs = new LinkedList<>();
+            userTypes = Types.none();
         }
 
         /**
@@ -381,15 +381,13 @@ public class CQLSSTableWriter implements Closeable
 
                     KeyspaceMetadata ksm = Schema.instance.getKSMetaData(typeStatement.keyspace());
                     if (ksm == null)
-                    {
                         Schema.instance.load(KeyspaceMetadata.create(typeStatement.keyspace(), KeyspaceParams.simple(1)));
-                    }
 
                     typeStatement.validate(ClientState.forInternalCalls());
                     UserType userType = typeStatement.createType();
                     CreateTypeStatement.checkForDuplicateNames(userType);
 
-                    typeDefs.add(userType);
+                    userTypes = userTypes.with(userType);
                 }
                 catch (RequestValidationException e)
                 {
@@ -420,7 +418,7 @@ public class CQLSSTableWriter implements Closeable
             {
                 synchronized (CQLSSTableWriter.class)
                 {
-                    this.schema = getTableMetadata(schema, typeDefs);
+                    this.schema = getTableMetadata(schema, userTypes);
 
                     // We need to register the keyspace/table metadata through Schema, otherwise we won't be able to properly
                     // build the insert statement in using().
@@ -433,6 +431,8 @@ public class CQLSSTableWriter implements Closeable
                     {
                         addTableToKeyspace(ksm, this.schema);
                     }
+
+                    Schema.instance.setKeyspaceMetadata(Schema.instance.getKSMetaData(this.schema.ksName).withSwapped(userTypes));
                     return this;
                 }
             }
@@ -556,14 +556,10 @@ public class CQLSSTableWriter implements Closeable
             return this;
         }
 
-        private static CFMetaData getTableMetadata(String schema, List<UserType> userTypes)
+        private static CFMetaData getTableMetadata(String schema, Types userTypes)
         {
             CFStatement parsed = (CFStatement)QueryProcessor.parseStatement(schema);
-            // tables with UDTs are currently not supported by CQLSSTableWrite, so we just use Types.none(), for now
-            // see CASSANDRA-10624 for more details
-            UserType[] typesArray = new UserType[userTypes.size()];
-            userTypes.toArray(typesArray);
-            CreateTableStatement statement = (CreateTableStatement) ((CreateTableStatement.RawStatement) parsed).prepare(Types.of(typesArray)).statement;
+            CreateTableStatement statement = (CreateTableStatement) ((CreateTableStatement.RawStatement) parsed).prepare(userTypes).statement;
             statement.validate(ClientState.forInternalCalls());
             return statement.getCFMetaData();
         }
@@ -605,12 +601,7 @@ public class CQLSSTableWriter implements Closeable
             if (formatType != null)
                 writer.setSSTableFormatType(formatType);
 
-            ImmutableMap.Builder<String, com.datastax.driver.core.UserType> codecMap = ImmutableMap.builder();
-            for (UserType type: typeDefs) {
-                codecMap.put(type.getNameAsString(), (com.datastax.driver.core.UserType) UDHelper.driverType(type));
-            }
-
-            return new CQLSSTableWriter(writer, insert, boundNames, codecMap.build());
+            return new CQLSSTableWriter(writer, insert, boundNames);
         }
     }
 }
