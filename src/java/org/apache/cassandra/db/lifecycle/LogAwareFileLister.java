@@ -13,6 +13,9 @@ import java.util.stream.StreamSupport;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.apache.cassandra.db.Directories;
 
 import static org.apache.cassandra.db.Directories.*;
@@ -22,6 +25,8 @@ import static org.apache.cassandra.db.Directories.*;
  */
 final class LogAwareFileLister
 {
+    private static final Logger logger = LoggerFactory.getLogger(LogAwareFileLister.class);
+
     // The folder to scan
     private final Path folder;
 
@@ -142,6 +147,15 @@ final class LogAwareFileLister
             setTemporary(txnFile, oldFiles.values(), newFiles.values());
             return;
         }
+
+        logger.error("Failed to classify files in {}\n" +
+                     "Some files are missing but the txn log is still there and not completed\n" +
+                     "Files in folder:\n{}\nTxn: {}",
+                     folder,
+                     files.isEmpty()
+                        ? "\t-"
+                        : String.join("\n", files.keySet().stream().map(f -> String.format("\t%s", f)).collect(Collectors.toList())),
+                     txnFile.toString(true));
 
         // some files are missing and yet the txn is still there and not completed
         // something must be wrong (see comment at the top of this file requiring txn to be
