@@ -429,6 +429,39 @@ public class CQLSSTableWriterTest
         }
     }
 
+    @Test
+    public void testSize() throws Exception
+    {
+        String KS = "cql_keyspace";
+        String TABLE = "table1";
+
+        File tempdir = Files.createTempDir();
+        File dataDir = new File(tempdir.getAbsolutePath() + File.separator + KS + File.separator + TABLE);
+        assert dataDir.mkdirs();
+
+        String schema = "CREATE TABLE cql_keyspace.table1 ("
+                        + "  k int PRIMARY KEY,"
+                        + "  v1 text,"
+                        + "  v2 int"
+                        + ");";// with compression = {};";
+        String insert = "INSERT INTO cql_keyspace.table1 (k, v1, v2) VALUES (?, ?, ?)";
+        CQLSSTableWriter writer = CQLSSTableWriter.builder()
+                                                  .sorted()
+                                                  .inDirectory(dataDir)
+                                                  .forTable(schema)
+                                                  .using(insert).build();
+
+
+        long start = System.nanoTime();
+        for (int i = 0; i < 10000000; i++)
+            writer.addRow(i, "test1", 24);
+
+        System.out.println(String.format("Took %d milliseconds to write to %s",
+                                         (System.nanoTime() - start) / 1000000,
+                                         dataDir));
+        writer.close();
+    }
+
     private static void loadSSTables(File dataDir, String ks) throws ExecutionException, InterruptedException
     {
         SSTableLoader loader = new SSTableLoader(dataDir, new SSTableLoader.Client()
