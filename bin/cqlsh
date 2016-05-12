@@ -41,6 +41,7 @@ import optparse
 import os
 import platform
 import sys
+import time
 import traceback
 import warnings
 
@@ -1610,6 +1611,10 @@ class Shell(cmd.Cmd):
             raise SyntaxError("Unknown direction %s" % direction)
 
         task.run()
+
+        # CASSANDRA-11749: we may get SSL exceptions server side if we don't pause for a bit
+        if self.ssl:
+            time.sleep(1)
 
     def do_show(self, parsed):
         """
