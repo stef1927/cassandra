@@ -786,15 +786,15 @@ server_encryption_options:
 
 # enable or disable client/server encryption.
 client_encryption_options:
-    enabled: false
+    enabled: true
     # If enabled and optional is set to true encrypted and unencrypted connections are handled.
     optional: false
-    keystore: conf/.keystore
+    keystore: /home/stefi/Documents/tests/security/keystore.node0
     keystore_password: cassandra
-    # require_client_auth: false
+    require_client_auth: true
     # Set trustore and truststore_password if require_client_auth is true
-    # truststore: conf/.truststore
-    # truststore_password: cassandra
+    truststore: /home/stefi/Documents/tests/security/truststore.node0
+    truststore_password: cassandra
     # More advanced defaults below:
     # protocol: TLS
     # algorithm: SunX509

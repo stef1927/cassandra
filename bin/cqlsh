@@ -1613,8 +1613,8 @@ class Shell(cmd.Cmd):
         task.run()
 
         # CASSANDRA-11749: we may get SSL exceptions server side if we don't pause for a bit
-        if self.ssl:
-            time.sleep(1)
+        # if self.ssl:
+        #     time.sleep(1)
 
     def do_show(self, parsed):
         """
