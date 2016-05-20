@@ -2034,7 +2034,6 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         if (ready)
         {
             notifyUp(endpoint);
-            notifyJoined(endpoint);
         }
         else
         {
@@ -2059,7 +2058,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
     private void notifyJoined(InetAddress endpoint)
     {
-        if (!isRpcReady(endpoint) || !isStatus(endpoint, VersionedValue.STATUS_NORMAL))
+        if (!isStatus(endpoint, VersionedValue.STATUS_NORMAL))
             return;
 
         for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
@@ -2267,7 +2266,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             tokenMetadata.removeFromMoving(endpoint);
             notifyMoved(endpoint);
         }
-        else
+        else if (existing == null)
         {
             notifyJoined(endpoint);
         }

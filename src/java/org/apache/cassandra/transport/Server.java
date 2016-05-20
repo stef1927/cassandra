@@ -547,8 +547,8 @@ public class Server implements CassandraDaemon.Server
 
         private void onTopologyChange(InetAddress endpoint, Event.TopologyChange event)
         {
-            if (logger.isTraceEnabled())
-                logger.trace("Topology changed event : {}, {}", endpoint, event.change);
+            if (logger.isDebugEnabled())
+                logger.debug("Topology changed event : {}, {}", endpoint, event.change);
 
             LatestEvent prev = latestEvents.get(endpoint);
             if (prev == null || prev.topology != event.change)
@@ -561,8 +561,8 @@ public class Server implements CassandraDaemon.Server
 
         private void onStatusChange(InetAddress endpoint, Event.StatusChange event)
         {
-            if (logger.isTraceEnabled())
-                logger.trace("Status changed event : {}, {}", endpoint, event.status);
+            if (logger.isDebugEnabled())
+                logger.debug("Status changed event : {}, {}", endpoint, event.status);
 
             LatestEvent prev = latestEvents.get(endpoint);
             if (prev == null || prev.status != event.status)
