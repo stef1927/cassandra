@@ -14,6 +14,9 @@ Merged from 3.0:
  * Add TimeWindowCompactionStrategy (CASSANDRA-9666)
 Merged from 2.2:
  * StorageService shutdown hook should use a volatile variable (CASSANDRA-11984)
+Merged from 2.1:
+ * StorageService shutdown hook should use a volatile variable (CASSANDRA-11984)
+
 
 3.7
  * Support multiple folders for user defined compaction tasks (CASSANDRA-11765)
@@ -163,6 +166,7 @@ Merged from 2.2:
  * Make deprecated repair methods backward-compatible with previous notification service (CASSANDRA-11430)
  * IncomingStreamingConnection version check message wrong (CASSANDRA-11462)
 Merged from 2.1:
+ * Shut down parent cluster after forking to avoid corrupting SSL connections (CASSANDRA-11749)
  * Add option to disable use of severity in DynamicEndpointSnitch (CASSANDRA-11737)
  * cqlsh COPY FROM fails for null values with non-prepared statements (CASSANDRA-11631)
  * Make cython optional in pylib/setup.py (CASSANDRA-11630)
