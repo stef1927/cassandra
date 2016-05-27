@@ -37,11 +37,11 @@ import ConfigParser
 import csv
 import getpass
 import locale
+import logging
 import optparse
 import os
 import platform
 import sys
-import time
 import traceback
 import warnings
 
@@ -1612,10 +1612,6 @@ class Shell(cmd.Cmd):
 
         task.run()
 
-        # CASSANDRA-11749: we may get SSL exceptions server side if we don't pause for a bit
-        # if self.ssl:
-        #     time.sleep(1)
-
     def do_show(self, parsed):
         """
         SHOW [cqlsh only]
@@ -2180,6 +2176,7 @@ def main(options, hostname, port):
             sys.exit("Can't open %r: %s" % (options.file, e))
 
     if options.debug:
+        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(process)s %(thread)s: %(message)s")
         sys.stderr.write("Using CQL driver: %s\n" % (cassandra,))
         sys.stderr.write("Using connect timeout: %s seconds\n" % (options.connect_timeout,))
 

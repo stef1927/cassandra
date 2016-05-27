@@ -43,6 +43,7 @@ from select import select
 from uuid import UUID
 from util import profile_on, profile_off
 
+from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster
 from cassandra.cqltypes import ReversedType, UserType
 from cassandra.metadata import protect_name, protect_names, protect_value
@@ -1490,12 +1491,14 @@ class ExportProcess(ChildProcess):
             session.add_request()
             return session
 
+        auth_provider = PlainTextAuthProvider(username=self.auth_provider.username,
+                                              password=self.auth_provider.password)
         new_cluster = Cluster(
             contact_points=(host,),
             port=self.port,
             cql_version=self.cql_version,
             protocol_version=self.protocol_version,
-            auth_provider=self.auth_provider,
+            auth_provider=auth_provider,
             ssl_options=ssl_settings(host, self.config_file) if self.ssl else None,
             load_balancing_policy=WhiteListRoundRobinPolicy([host]),
             default_retry_policy=ExpBackoffRetryPolicy(self),
@@ -2037,12 +2040,14 @@ class ImportProcess(ChildProcess):
     @property
     def session(self):
         if not self._session:
+            auth_provider = PlainTextAuthProvider(username=self.auth_provider.username,
+                                                  password=self.auth_provider.password)
             cluster = Cluster(
                 contact_points=(self.hostname,),
                 port=self.port,
                 cql_version=self.cql_version,
                 protocol_version=self.protocol_version,
-                auth_provider=self.auth_provider,
+                auth_provider=auth_provider,
                 load_balancing_policy=FastTokenAwarePolicy(local_dc=self.local_dc),
                 ssl_options=ssl_settings(self.hostname, self.config_file) if self.ssl else None,
                 default_retry_policy=ExpBackoffRetryPolicy(self),
