@@ -20,16 +20,38 @@
  */
 package org.apache.cassandra.net;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
+import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
+import org.apache.cassandra.config.DatabaseDescriptor;
+
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class MessagingServiceTest
 {
-    private final MessagingService messagingService = MessagingService.test();
+    private static volatile MessagingService messagingService;
 
+    @BeforeClass
+    public static void beforeClass()
+    {
+        DatabaseDescriptor.setBackPressureStrategy("org.apache.cassandra.net.MessagingServiceTest$MockBackPressureStrategy()");
+        messagingService = MessagingService.test();
+    }
+
+    @Before
+    public void before()
+    {
+        messagingService.destroyConnectionPool(InetAddress.getLoopbackAddress());
+    }
+    
     @Test
     public void testDroppedMessages()
     {
@@ -54,4 +76,109 @@ public class MessagingServiceTest
         assertEquals(7500, (int)messagingService.getDroppedMessages().get(verb.toString()));
     }
 
+    @Test
+    public void testUpdatesBackPressureStateWhenEnabledAndWithSupportedCallback()
+    {
+        BackPressureState backPressureState = messagingService.getConnectionPool(InetAddress.getLoopbackAddress()).getBackPressureState();
+        IAsyncCallback bpCallback = new BackPressureCallback();
+        IAsyncCallback noCallback = new NoBackPressureCallback();
+
+        DatabaseDescriptor.setBackPressureEnabled(true);
+        messagingService.updateBackPressureState(InetAddress.getLoopbackAddress(), noCallback);
+        assertEquals(0.0, backPressureState.incomingRate.get(TimeUnit.SECONDS), 0.0);
+
+        DatabaseDescriptor.setBackPressureEnabled(false);
+        messagingService.updateBackPressureState(InetAddress.getLoopbackAddress(), bpCallback);
+        assertEquals(0.0, backPressureState.incomingRate.get(TimeUnit.SECONDS), 0.0);
+
+        DatabaseDescriptor.setBackPressureEnabled(true);
+        messagingService.updateBackPressureState(InetAddress.getLoopbackAddress(), bpCallback);
+        assertEquals(1.0, backPressureState.incomingRate.get(TimeUnit.SECONDS), 0.0);
+    }
+
+    @Test
+    public void testAppliesBackPressureWhenEnabled()
+    {
+        BackPressureState backPressureState = messagingService.getConnectionPool(InetAddress.getLoopbackAddress()).getBackPressureState();
+        
+        DatabaseDescriptor.setBackPressureEnabled(false);
+        messagingService.applyBackPressure(InetAddress.getLoopbackAddress());
+        assertFalse(MockBackPressureStrategy.applied);
+        assertEquals(0.0, backPressureState.outgoingRate.get(TimeUnit.SECONDS), 0.0);
+
+        DatabaseDescriptor.setBackPressureEnabled(true);
+        messagingService.applyBackPressure(InetAddress.getLoopbackAddress());
+        assertTrue(MockBackPressureStrategy.applied);
+        assertEquals(1.0, backPressureState.outgoingRate.get(TimeUnit.SECONDS), 0.0);
+    }
+    
+    @Test
+    public void testDoesntIncrementOutgoingRateWhenOverloaded()
+    {
+        BackPressureState backPressureState = messagingService.getConnectionPool(InetAddress.getLoopbackAddress()).getBackPressureState();
+        
+        backPressureState.overload.set(true);
+
+        DatabaseDescriptor.setBackPressureEnabled(true);
+        messagingService.applyBackPressure(InetAddress.getLoopbackAddress());
+        assertTrue(MockBackPressureStrategy.applied);
+        assertEquals(0.0, backPressureState.outgoingRate.get(TimeUnit.SECONDS), 0.0);
+    }
+    
+    public static class MockBackPressureStrategy implements BackPressureStrategy
+    {
+        public static volatile boolean applied = false;
+
+        public MockBackPressureStrategy(String[] args)
+        {
+        }
+
+        @Override
+        public void apply(BackPressureState state)
+        {
+            applied = true;
+        }
+    }
+
+    private static class BackPressureCallback implements IAsyncCallback
+    {
+        @Override
+        public boolean supportsBackPressure()
+        {
+            return true;
+        }
+
+        @Override
+        public boolean isLatencyForSnitch()
+        {
+            return false;
+        }
+
+        @Override
+        public void response(MessageIn msg)
+        {
+            throw new UnsupportedOperationException("Not supported.");
+        }
+    }
+
+    private static class NoBackPressureCallback implements IAsyncCallback
+    {
+        @Override
+        public boolean supportsBackPressure()
+        {
+            return false;
+        }
+
+        @Override
+        public boolean isLatencyForSnitch()
+        {
+            return false;
+        }
+
+        @Override
+        public void response(MessageIn msg)
+        {
+            throw new UnsupportedOperationException("Not supported.");
+        }
+    }
 }

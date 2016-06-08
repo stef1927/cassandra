@@ -19,6 +19,7 @@ package org.apache.cassandra.config;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.net.*;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
@@ -26,6 +27,8 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
@@ -48,6 +51,7 @@ import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.io.sstable.format.SSTableFormat;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.locator.*;
+import org.apache.cassandra.net.BackPressureStrategy;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.scheduler.IRequestScheduler;
 import org.apache.cassandra.scheduler.NoScheduler;
@@ -1122,8 +1126,9 @@ public class DatabaseDescriptor
                 return getRangeRpcTimeout();
             case TRUNCATE:
                 return getTruncateRpcTimeout();
-            case READ_REPAIR:
             case MUTATION:
+                return backPressureEnabled() ? getBackPressureTimeoutOverride() : getWriteRpcTimeout();
+            case READ_REPAIR:
             case PAXOS_COMMIT:
             case PAXOS_PREPARE:
             case PAXOS_PROPOSE:
@@ -1984,4 +1989,56 @@ public class DatabaseDescriptor
         return conf.gc_warn_threshold_in_ms;
     }
 
+    public static void setBackPressureEnabled(boolean backPressureEnabled)
+    {
+        conf.back_pressure_enabled = backPressureEnabled;
+    }
+
+    public static boolean backPressureEnabled()
+    {
+        return conf.back_pressure_enabled;
+    }
+    
+    public static long getBackPressureTimeoutOverride()
+    {
+        return conf.back_pressure_timeout_override;
+    }
+    
+    @VisibleForTesting
+    public static void setBackPressureStrategy(String strategy)
+    {
+        conf.back_pressure_strategy = strategy;
+    }
+
+    public static BackPressureStrategy getBackPressureStrategy()
+    {
+        try
+        {
+            Pattern pattern = Pattern.compile("(.+)\\((.*)\\)");
+            Matcher matcher = pattern.matcher(conf.back_pressure_strategy);
+            if (matcher.find())
+            {
+                String strategy = matcher.group(1);
+                String[] arguments = matcher.group(2).split(",");
+
+                Class<?> clazz = Class.forName(strategy);
+                if (!BackPressureStrategy.class.isAssignableFrom(clazz))
+                    throw new ConfigurationException(strategy + " is not an instance of " + BackPressureStrategy.class.getCanonicalName(), false);
+
+                Constructor<?> ctor = clazz.getConstructor(String[].class);
+                BackPressureStrategy instance = (BackPressureStrategy) ctor.newInstance((Object) arguments);
+                logger.info("Back-pressure is {} with strategy {}.", backPressureEnabled() ? "enabled" : "disabled", conf.back_pressure_strategy);
+                return instance;
+            }
+            throw new ConfigurationException("Wrong back-pressure strategy configuration: " + conf.back_pressure_strategy, false);
+        }
+        catch (ConfigurationException ex)
+        {
+            throw ex;
+        }
+        catch (Exception ex)
+        {
+            throw new ConfigurationException("Error configuring back-pressure strategy: " + conf.back_pressure_strategy, ex);
+        }
+    }
 }

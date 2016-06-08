@@ -25,6 +25,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 
@@ -32,7 +33,9 @@ import com.google.common.base.Predicate;
 import com.google.common.cache.CacheLoader;
 import com.google.common.collect.*;
 import com.google.common.util.concurrent.Uninterruptibles;
+
 import org.apache.commons.lang3.StringUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -70,8 +73,6 @@ import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.triggers.TriggerExecutor;
 import org.apache.cassandra.utils.*;
 import org.apache.cassandra.utils.AbstractIterator;
-
-import static com.google.common.collect.Iterables.contains;
 
 public class StorageProxy implements StorageProxyMBean
 {
@@ -509,6 +510,7 @@ public class StorageProxy implements StorageProxyMBean
         {
             AbstractReplicationStrategy rs = keyspace.getReplicationStrategy();
             responseHandler = rs.getWriteResponseHandler(naturalEndpoints, pendingEndpoints, consistencyLevel, null, WriteType.SIMPLE);
+            responseHandler.setSupportsBackPressure(false);
         }
 
         MessageOut<Commit> message = new MessageOut<Commit>(MessagingService.Verb.PAXOS_COMMIT, proposal, Commit.serializer);
@@ -1192,6 +1194,7 @@ public class StorageProxy implements StorageProxyMBean
         for (InetAddress destination : targets)
         {
             checkHintOverload(destination);
+            applyBackPressure(destination);
 
             if (FailureDetector.instance.isAlive(destination))
             {
@@ -1266,6 +1269,16 @@ public class StorageProxy implements StorageProxyMBean
             throw new OverloadedException("Too many in flight hints: " + StorageMetrics.totalHintsInProgress.getCount() +
                                           " destination: " + destination +
                                           " destination hints: " + getHintsInProgressFor(destination).get());
+        }
+    }
+    
+    private static void applyBackPressure(InetAddress destination)
+    {
+        if (!destination.equals(FBUtilities.getBroadcastAddress()))
+        {
+            boolean overloaded = MessagingService.instance().applyBackPressure(destination);
+            if (overloaded)
+                throw new OverloadedException("Back-pressure overloading for destination: " + destination);
         }
     }
 

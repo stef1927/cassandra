@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.EncryptionOptions.ClientEncryptionOptions;
 import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions;
+import org.apache.cassandra.net.RateBasedBackPressure;
 
 /**
  * A class that contains configuration properties for the cassandra node it runs within.
@@ -49,6 +50,12 @@ public class Config
      */
     public static final String PROPERTY_PREFIX = "cassandra.";
 
+    /**
+     * Rate-based back-pressure defaults.
+     */
+    private static final double BACK_PRESSURE_HIGH_RATIO = 0.90;
+    private static final double BACK_PRESSURE_LOW_RATIO = 0.10;
+    private static final int BACK_PRESSURE_FACTOR = 25;
 
     public String cluster_name = "Test Cluster";
     public String authenticator;
@@ -321,7 +328,15 @@ public class Config
      * (Only valid, if enable_user_defined_functions_threads==true)
      */
     public UserFunctionTimeoutPolicy user_function_timeout_policy = UserFunctionTimeoutPolicy.die;
-
+    
+    public volatile boolean back_pressure_enabled = false;
+    public volatile long back_pressure_timeout_override = 5000;
+    public volatile String back_pressure_strategy = String.format("%s(%s,%s,%s)",
+                                                        RateBasedBackPressure.class.getName(),
+                                                        BACK_PRESSURE_HIGH_RATIO,
+                                                        BACK_PRESSURE_LOW_RATIO,
+                                                        BACK_PRESSURE_FACTOR);
+    
     public static boolean getOutboundBindAny()
     {
         return outboundBindAny;

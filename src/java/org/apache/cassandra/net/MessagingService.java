@@ -39,8 +39,10 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 
 import org.cliffc.high_scale_lib.NonBlockingHashMap;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import org.apache.cassandra.concurrent.ExecutorLocals;
 import org.apache.cassandra.concurrent.ScheduledExecutors;
 import org.apache.cassandra.concurrent.Stage;
@@ -318,8 +320,7 @@ public final class MessagingService implements MessagingServiceMBean
                                                                    Verb.REQUEST_RESPONSE,
                                                                    Verb.BATCH_STORE,
                                                                    Verb.BATCH_REMOVE);
-
-
+    
     private static final class DroppedMessages
     {
         final DroppedMessageMetrics metrics;
@@ -344,16 +345,11 @@ public final class MessagingService implements MessagingServiceMBean
 
     // message sinks are a testing hook
     private final Set<IMessageSink> messageSinks = new CopyOnWriteArraySet<>();
-
-    public void addMessageSink(IMessageSink sink)
-    {
-        messageSinks.add(sink);
-    }
-
-    public void clearMessageSinks()
-    {
-        messageSinks.clear();
-    }
+    
+    // back-pressure window size is equal to the back-pressure write timeout
+    private final long backPressureWindowSize = DatabaseDescriptor.getBackPressureTimeoutOverride();
+    // back-pressure implementation
+    private final BackPressureStrategy backPressure = DatabaseDescriptor.getBackPressureStrategy();
 
     private static class MSHandle
     {
@@ -437,7 +433,53 @@ public final class MessagingService implements MessagingServiceMBean
             }
         }
     }
+    
+    public void addMessageSink(IMessageSink sink)
+    {
+        messageSinks.add(sink);
+    }
 
+    public void clearMessageSinks()
+    {
+        messageSinks.clear();
+    }
+    
+    /**
+     * Updates the back-pressure state for the given host if enabled and the given message callback supports it.
+     * 
+     * @param host The replica host the back-pressure state refers to.
+     * @param callback The message callback.
+     */
+    public void updateBackPressureState(InetAddress host, IAsyncCallback callback)
+    {
+        if (DatabaseDescriptor.backPressureEnabled() && callback.supportsBackPressure())
+        {
+            getConnectionPool(host).getBackPressureState().incomingRate.update(1);
+        }
+    }
+    
+    /**
+     * Applies back-pressure for teh given host, according to the configured strategy.
+     * 
+     * @param host The destination host to apply back-pressure to.
+     * @return True if overloaded, false otherwise.
+     */
+    public boolean applyBackPressure(InetAddress host)
+    {
+        if (DatabaseDescriptor.backPressureEnabled())
+        {
+            BackPressureState state = getConnectionPool(host).getBackPressureState();
+            backPressure.apply(state);
+            boolean overloaded =  state.overload.get();
+            if (!overloaded)
+                state.outgoingRate.update(1);
+            
+            return overloaded;
+        }
+        
+        return false;
+    }
+    
     /**
      * Track latency information for the dynamic snitch
      *
@@ -592,7 +634,7 @@ public final class MessagingService implements MessagingServiceMBean
         OutboundTcpConnectionPool cp = connectionManagers.get(to);
         if (cp == null)
         {
-            cp = new OutboundTcpConnectionPool(to);
+            cp = new OutboundTcpConnectionPool(to, backPressureWindowSize);
             OutboundTcpConnectionPool existingPool = connectionManagers.putIfAbsent(to, cp);
             if (existingPool != null)
                 cp = existingPool;
@@ -748,7 +790,7 @@ public final class MessagingService implements MessagingServiceMBean
 
         if (to.equals(FBUtilities.getBroadcastAddress()))
             logger.trace("Message-to-self {} going over MessagingService", message);
-
+        
         // message sinks are a testing hook
         for (IMessageSink ms : messageSinks)
             if (!ms.allowOutgoingMessage(message, id, to))
@@ -1213,6 +1255,27 @@ public final class MessagingService implements MessagingServiceMBean
             result.put(ip, recent);
         }
         return result;
+    }
+    
+    public Map<String, Double> getBackPressurePerHost()
+    {
+        Map<String, Double> map = new HashMap<>(connectionManagers.size());
+        for (Map.Entry<InetAddress, OutboundTcpConnectionPool> entry : connectionManagers.entrySet())
+            map.put(entry.getKey().getHostAddress(), entry.getValue().getBackPressureState().outgoingLimiter.getRate());
+
+        return map;
+    }
+
+    @Override
+    public void setBackPressureEnabled(boolean enabled)
+    {
+        DatabaseDescriptor.setBackPressureEnabled(enabled);
+    }
+
+    @Override
+    public boolean isBackPressureEnabled()
+    {
+        return DatabaseDescriptor.backPressureEnabled();
     }
 
     public static IPartitioner globalPartitioner()

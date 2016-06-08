@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
 import com.google.common.collect.Iterables;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,7 +32,6 @@ import org.apache.cassandra.db.ConsistencyLevel;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.WriteType;
 import org.apache.cassandra.exceptions.*;
-import org.apache.cassandra.net.IAsyncCallback;
 import org.apache.cassandra.net.IAsyncCallbackWithFailure;
 import org.apache.cassandra.net.MessageIn;
 import org.apache.cassandra.utils.concurrent.SimpleCondition;
@@ -51,6 +51,7 @@ public abstract class AbstractWriteResponseHandler<T> implements IAsyncCallbackW
     private static final AtomicIntegerFieldUpdater<AbstractWriteResponseHandler> failuresUpdater
         = AtomicIntegerFieldUpdater.newUpdater(AbstractWriteResponseHandler.class, "failures");
     private volatile int failures = 0;
+    private volatile boolean supportsBackPressure = true;
 
     /**
      * @param callback A callback to be called when the write is successful.
@@ -164,5 +165,16 @@ public abstract class AbstractWriteResponseHandler<T> implements IAsyncCallbackW
 
         if (totalBlockFor() + n > totalEndpoints())
             signal();
+    }
+
+    @Override
+    public boolean supportsBackPressure()
+    {
+        return supportsBackPressure;
+    }
+
+    public void setSupportsBackPressure(boolean supportsBackPressure)
+    {
+        this.supportsBackPressure = supportsBackPressure;
     }
 }

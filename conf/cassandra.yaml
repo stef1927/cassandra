@@ -950,3 +950,16 @@ windows_timer_interval: 1
 # early. Any value size larger than this threshold will result into marking an SSTable
 # as corrupted.
 # max_value_size_in_mb: 256
+
+# Back-pressure settings #
+# If enabled, the coordinator will apply the back-pressure algorithm to each mutation sent to replicas:
+back_pressure_enabled: false
+# Overrides the write timeout when back-pressure is enabled.
+back_pressure_timeout_override: 5000
+# The back-pressure strategy to eventually apply, with arguments passed between parenthesis.
+# The default takes three arguments: high ratio, low ratio and factor, and uses the ratio between incoming mutation 
+# responses and outgoing mutation requests. If below low ratio, an OverloadedException is sent to the replica; 
+# if between low ratio and high ratio, outgoing mutations are rate limited according to the incoming rate; if above
+# high ratio, the rate is increased; the factor represents the percentage by which the rate limiting is increased or 
+# decreased.
+back_pressure_strategy: org.apache.cassandra.net.RateBasedBackPressure(0.90,0.10,25)
