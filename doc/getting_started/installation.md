@@ -2,9 +2,13 @@
 
 This document explains how to install and run Cassandra on a local node. 
 
-## Prerequisites 
+## How to get in touch
 
-* The latest version of Java 8, either the [Oracle Java Standard Edition 8](http://www.oracle.com/technetwork/java/javase/downloads/index.html) or [OpenJDK 8] (http://openjdk.java.net/). To verify that you have the correct version of java installed, type `java -version`.
+Should you have problems you can get in touch with the Cassandra community [here](contact_us.md).
+
+## Prerequisites
+
+* The latest version of Java 8, either the [Oracle Java Standard Edition 8](http://www.oracle.com/technetwork/java/javase/downloads/index.html) or [OpenJDK 8](http://openjdk.java.net/). To verify that you have the correct version of java installed, type `java -version`.
 
 * For using cqlsh, the latest version of [Python 2.7](https://www.python.org/downloads/). To verify that you have the correct version of Python installed, type `python --version`.
 
