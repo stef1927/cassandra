@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -42,7 +42,7 @@ public class BufferedRandomAccessFileTest
     {
         SequentialWriter w = createTempFile("braf");
 
-        // writting string of data to the file
+        // writing string of data to the file
         byte[] data = "Hello".getBytes();
         w.write(data);
         assertEquals(data.length, w.length());
@@ -53,7 +53,8 @@ public class BufferedRandomAccessFileTest
         // reading small amount of data from file, this is handled by initial buffer
         try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath()))
         {
-            try (RandomAccessReader r = builder.complete().createReader())
+            try (FileHandle fh = builder.complete();
+                 RandomAccessReader r = fh.createReader())
             {
 
                 byte[] buffer = new byte[data.length];
@@ -77,7 +78,8 @@ public class BufferedRandomAccessFileTest
             w.sync();
 
             // re-opening file in read-only mode
-            try (RandomAccessReader r = builder.complete().createReader())
+            try (FileHandle fh = builder.complete();
+                 RandomAccessReader r = fh.createReader())
             {
 
                 // reading written buffer
@@ -141,7 +143,8 @@ public class BufferedRandomAccessFileTest
         w.write(in);
 
         try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath());
-             RandomAccessReader r = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader r = fh.createReader())
         {
             // Read it into a same size array.
             byte[] out = new byte[RandomAccessReader.DEFAULT_BUFFER_SIZE];
@@ -181,7 +184,8 @@ public class BufferedRandomAccessFileTest
 
         // will use cachedlength
         try (FileHandle.Builder builder = new FileHandle.Builder(tmpFile.getPath());
-             RandomAccessReader r = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader r = fh.createReader())
         {
             assertEquals(lessThenBuffer.length + biggerThenBuffer.length, r.length());
         }
@@ -203,7 +207,8 @@ public class BufferedRandomAccessFileTest
         w.sync();
 
         try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath());
-             RandomAccessReader r = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader r = fh.createReader())
         {
 
             ByteBuffer content = ByteBufferUtil.read(r, (int) r.length());
@@ -233,7 +238,8 @@ public class BufferedRandomAccessFileTest
         w.finish();
 
         try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath());
-             RandomAccessReader file = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader file = fh.createReader())
         {
             file.seek(0);
             assertEquals(file.getFilePointer(), 0);
@@ -264,7 +270,8 @@ public class BufferedRandomAccessFileTest
         w.finish();
 
         try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath());
-             RandomAccessReader file = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader file = fh.createReader())
         {
 
             file.seek(0); // back to the beginning of the file
@@ -299,7 +306,8 @@ public class BufferedRandomAccessFileTest
         w.sync();
 
         try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath());
-             RandomAccessReader r = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader r = fh.createReader())
         {
 
             // position should change after skip bytes
@@ -336,7 +344,8 @@ public class BufferedRandomAccessFileTest
             {
                 File file1 = writeTemporaryFile(new byte[16]);
                 try (FileHandle.Builder builder = new FileHandle.Builder(file1.getPath()).bufferSize(bufferSize);
-                     RandomAccessReader file = builder.complete().createReader())
+                     FileHandle fh = builder.complete();
+                     RandomAccessReader file = fh.createReader())
                 {
                     expectEOF(() -> { file.readFully(target, offset, 17); return null; });
                 }
@@ -347,7 +356,8 @@ public class BufferedRandomAccessFileTest
             {
                 File file1 = writeTemporaryFile(new byte[16]);
                 try (FileHandle.Builder builder = new FileHandle.Builder(file1.getPath()).bufferSize(bufferSize);
-                     RandomAccessReader file = builder.complete().createReader())
+                     FileHandle fh = builder.complete();
+                     RandomAccessReader file = fh.createReader())
                 {
                     expectEOF(() -> {
                         while (true)
@@ -379,7 +389,8 @@ public class BufferedRandomAccessFileTest
         w.sync();
 
         try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath());
-             RandomAccessReader r = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader r = fh.createReader())
         {
 
             assertEquals(r.bytesRemaining(), toWrite);
@@ -406,7 +417,8 @@ public class BufferedRandomAccessFileTest
 
         // Create the BRAF by filename instead of by file.
         try (FileHandle.Builder builder = new FileHandle.Builder(tmpFile.getPath());
-             RandomAccessReader r = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader r = fh.createReader())
         {
             assert tmpFile.getPath().equals(r.getPath());
 
@@ -459,7 +471,8 @@ public class BufferedRandomAccessFileTest
         w.finish();
 
         try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath());
-             RandomAccessReader file = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader file = fh.createReader())
         {
             file.seek(10);
             DataPosition mark = file.mark();
@@ -494,7 +507,8 @@ public class BufferedRandomAccessFileTest
             w.flush();
 
             try (FileHandle.Builder builder = new FileHandle.Builder(w.getPath());
-                 RandomAccessReader r = builder.complete().createReader())
+                 FileHandle fh = builder.complete();
+                 RandomAccessReader r = fh.createReader())
             {
                 r.seek(10);
                 r.mark();

@@ -52,12 +52,12 @@ public class RandomAccessReaderTest
 
     private static final class Parameters
     {
-        public final long fileLength;
-        public final int bufferSize;
+        final long fileLength;
+        final int bufferSize;
 
-        public BufferType bufferType;
-        public int maxSegmentSize;
-        public boolean mmappedRegions;
+        BufferType bufferType;
+        int maxSegmentSize;
+        boolean mmappedRegions;
         public byte[] expected;
 
         Parameters(long fileLength, int bufferSize)
@@ -70,19 +70,19 @@ public class RandomAccessReaderTest
             this.expected = "The quick brown fox jumps over the lazy dog".getBytes(FileUtils.CHARSET);
         }
 
-        public Parameters mmappedRegions(boolean mmappedRegions)
+        Parameters mmappedRegions(boolean mmappedRegions)
         {
             this.mmappedRegions = mmappedRegions;
             return this;
         }
 
-        public Parameters bufferType(BufferType bufferType)
+        Parameters bufferType(BufferType bufferType)
         {
             this.bufferType = bufferType;
             return this;
         }
 
-        public Parameters maxSegmentSize(int maxSegmentSize)
+        Parameters maxSegmentSize(int maxSegmentSize)
         {
             this.maxSegmentSize = maxSegmentSize;
             return this;
@@ -136,7 +136,8 @@ public class RandomAccessReaderTest
         try (ChannelProxy channel = new ChannelProxy("abc", new FakeFileChannel(SIZE));
              FileHandle.Builder builder = new FileHandle.Builder(channel)
                                                      .bufferType(params.bufferType).bufferSize(params.bufferSize);
-             RandomAccessReader reader = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader reader = fh.createReader())
         {
             assertEquals(channel.size(), reader.length());
             assertEquals(channel.size(), reader.bytesRemaining());
@@ -284,7 +285,8 @@ public class RandomAccessReaderTest
                                                      .bufferType(params.bufferType).bufferSize(params.bufferSize))
         {
             builder.mmapped(params.mmappedRegions);
-            try (RandomAccessReader reader = builder.complete().createReader())
+            try (FileHandle fh = builder.complete();
+                 RandomAccessReader reader = fh.createReader())
             {
                 assertEquals(f.getAbsolutePath(), reader.getPath());
                 assertEquals(f.length(), reader.length());
@@ -321,7 +323,8 @@ public class RandomAccessReaderTest
         assert f.exists();
 
         try (FileHandle.Builder builder = new FileHandle.Builder(f.getPath());
-             RandomAccessReader reader = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader reader = fh.createReader())
         {
             assertEquals(f.getAbsolutePath(), reader.getPath());
             assertEquals(expected.length(), reader.length());
@@ -351,7 +354,8 @@ public class RandomAccessReaderTest
         assert f.exists();
 
         try (FileHandle.Builder builder = new FileHandle.Builder(f.getPath());
-             RandomAccessReader reader = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader reader = fh.createReader())
         {
             assertEquals(expected.length() * numIterations, reader.length());
 
@@ -433,7 +437,8 @@ public class RandomAccessReaderTest
         {
             final Runnable worker = () ->
             {
-                try (RandomAccessReader reader = builder.complete().createReader())
+                try (FileHandle fh = builder.complete();
+                     RandomAccessReader reader = fh.createReader())
                 {
                     assertEquals(expected.length, reader.length());
 

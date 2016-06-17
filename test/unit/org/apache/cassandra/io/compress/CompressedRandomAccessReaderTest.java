@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -93,7 +93,8 @@ public class CompressedRandomAccessReaderTest
                                                               .withCompressionMetadata(new CompressionMetadata(filename + ".metadata",
                                                                                                                f.length(),
                                                                                                                ChecksumType.CRC32));
-             RandomAccessReader reader = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader reader = fh.createReader())
         {
             String res = reader.readLine();
             assertEquals(res, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
@@ -135,7 +136,8 @@ public class CompressedRandomAccessReaderTest
 
         CompressionMetadata compressionMetadata = compressed ? new CompressionMetadata(filename + ".metadata", f.length(), ChecksumType.CRC32) : null;
         try (FileHandle.Builder builder = new FileHandle.Builder(filename).mmapped(usemmap).withCompressionMetadata(compressionMetadata);
-             RandomAccessReader reader = builder.complete().createReader())
+             FileHandle fh = builder.complete();
+             RandomAccessReader reader = fh.createReader())
         {
             String expected = "The quick brown fox jumps over the lazy dog";
             assertEquals(expected.length(), reader.length());
@@ -179,9 +181,9 @@ public class CompressedRandomAccessReaderTest
         CompressionMetadata.Chunk chunk = meta.chunkFor(0);
 
         try (FileHandle.Builder builder = new FileHandle.Builder(file.getPath()).withCompressionMetadata(meta);
-             FileHandle f = builder.complete())
+             FileHandle fh = builder.complete();
+             RandomAccessReader reader = fh.createReader())
         {// read and verify compressed data
-            RandomAccessReader reader = f.createReader();
             assertEquals(CONTENT, reader.readLine());
 
             Random random = new Random();
@@ -205,7 +207,7 @@ public class CompressedRandomAccessReaderTest
                     checksumModifier.write(random.nextInt());
                     SyncUtil.sync(checksumModifier); // making sure that change was synced with disk
 
-                    try (final RandomAccessReader r = f.createReader())
+                    try (final RandomAccessReader r = fh.createReader())
                     {
                         Throwable exception = null;
                         try
@@ -225,7 +227,7 @@ public class CompressedRandomAccessReaderTest
                 // lets write original checksum and check if we can read data
                 updateChecksum(checksumModifier, chunk.length, checksum);
 
-                try (RandomAccessReader cr = f.createReader())
+                try (RandomAccessReader cr = fh.createReader())
                 {
                     // read and verify compressed data
                     assertEquals(CONTENT, cr.readLine());

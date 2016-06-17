@@ -27,11 +27,19 @@ public final class ChecksummedRandomAccessReader
     public static RandomAccessReader open(File file, File crcFile) throws IOException
     {
         ChannelProxy channel = new ChannelProxy(file);
-        DataIntegrityMetadata.ChecksumValidator validator = new DataIntegrityMetadata.ChecksumValidator(ChecksumType.CRC32,
-                                                                     RandomAccessReader.open(crcFile),
-                                                                     file.getPath());
-        Rebufferer rebufferer = new ChecksummedRebufferer(channel, validator);
-        // Always own and close the channel.
-        return new RandomAccessReader.RandomAccessReaderWithOwnChannel(rebufferer);
+        try
+        {
+            DataIntegrityMetadata.ChecksumValidator validator = new DataIntegrityMetadata.ChecksumValidator(ChecksumType.CRC32,
+                                                                                                            RandomAccessReader.open(crcFile),
+                                                                                                            file.getPath());
+            Rebufferer rebufferer = new ChecksummedRebufferer(channel, validator);
+            // Always own and close the channel.
+            return new RandomAccessReader.RandomAccessReaderWithOwnChannel(rebufferer);
+        }
+        catch (Throwable t)
+        {
+            channel.close();
+            throw t;
+        }
     }
 }

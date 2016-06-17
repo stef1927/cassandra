@@ -35,13 +35,16 @@ import org.apache.cassandra.utils.concurrent.SharedCloseableImpl;
 import static org.apache.cassandra.utils.Throwables.maybeFail;
 
 /**
- * {@link FileHandle} provides access to the file, including the one written by various {@link SequentialWriter}.
+ * {@link FileHandle} provides access to a file for reading, including the ones written by various {@link SequentialWriter}
+ * instances, and it is typically used by {@link org.apache.cassandra.io.sstable.format.SSTableReader}.
  *
- * Use {@link FileHandle.Builder} to create instance, and call {@link #createReader()} (and its variants) to access reader.
+ * Use {@link FileHandle.Builder} to create an instance, and call {@link #createReader()} (and its variants) to
+ * access the readers for the underlying file.
  *
- * One can use {@link Builder#complete()} several times during its lifecycle with different {@code overrideLength}(i.e. early opening file).
- * For that reason it keeps reference to the file and make copy for each {@code complete} call.
- * so it is important to close {@link Builder} when it is no longer needed.
+ * You can use {@link Builder#complete()} several times during its lifecycle with different {@code overrideLength}(i.e. early opening file).
+ * For that reason, the builder keeps a reference to the file channel and makes a copy for each {@link Builder#complete()} call.
+ * Therefore, it is important to close the {@link Builder} when it is no longer needed, as well as any {@link FileHandle}
+ * instances.
  */
 public class FileHandle extends SharedCloseableImpl
 {
@@ -174,7 +177,7 @@ public class FileHandle extends SharedCloseableImpl
     }
 
     /**
-     * Hanldes clean up of all resources held by {@link FileHandle}.
+     * Perform clean up of all resources held by {@link FileHandle}.
      */
     private static class Cleanup implements RefCounted.Tidy
     {
@@ -285,7 +288,7 @@ public class FileHandle extends SharedCloseableImpl
         /**
          * Set whether to use mmap for reading
          *
-         * @param mmapped true if use mmap
+         * @param mmapped true if using mmap
          * @return this instance
          */
         public Builder mmapped(boolean mmapped)
@@ -295,7 +298,7 @@ public class FileHandle extends SharedCloseableImpl
         }
 
         /**
-         * Set buffer size to use (if appropriate).
+         * Set the buffer size to use (if appropriate).
          *
          * @param bufferSize Buffer size in bytes
          * @return this instance
@@ -307,7 +310,7 @@ public class FileHandle extends SharedCloseableImpl
         }
 
         /**
-         * Set buffer type (on heap or off heap) to use (if appropriate).
+         * Set the buffer type (on heap or off heap) to use (if appropriate).
          *
          * @param bufferType Buffer type to use
          * @return this instance
@@ -329,9 +332,9 @@ public class FileHandle extends SharedCloseableImpl
         }
 
         /**
-         * Complete building {@link FileHandle} with given override length.
+         * Complete building {@link FileHandle} with the given length, which overrides the file length.
          *
-         * @param overrideLength Override file length (in bytes) so that read cannot go further than the value.
+         * @param overrideLength Override file length (in bytes) so that read cannot go further than this value.
          *                       If the value is less than or equal to 0, then the value is ignored.
          * @return Built file
          */

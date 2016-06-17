@@ -19,14 +19,11 @@ package org.apache.cassandra.io.util;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 import com.google.common.primitives.Ints;
-import com.google.common.util.concurrent.RateLimiter;
 
 import org.apache.cassandra.io.compress.BufferType;
-import org.apache.cassandra.io.compress.CompressionMetadata;
 import org.apache.cassandra.io.util.Rebufferer.BufferHolder;
 
 public class RandomAccessReader extends RebufferingInputStream implements FileDataInput
@@ -35,10 +32,10 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     public static final int DEFAULT_BUFFER_SIZE = 4096;
 
     // offset of the last file mark
-    protected long markedPointer;
+    private long markedPointer;
 
     final Rebufferer rebufferer;
-    BufferHolder bufferHolder = Rebufferer.EMPTY;
+    private BufferHolder bufferHolder = Rebufferer.EMPTY;
 
     /**
      * Only created through Builder
@@ -62,7 +59,7 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
         reBufferAt(current());
     }
 
-    public void reBufferAt(long position)
+    private void reBufferAt(long position)
     {
         bufferHolder.release();
         bufferHolder = rebufferer.rebuffer(position);
@@ -178,11 +175,11 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     /**
      * Class to hold a mark to the position of the file
      */
-    protected static class BufferedRandomAccessFileMark implements DataPosition
+    private static class BufferedRandomAccessFileMark implements DataPosition
     {
         final long pointer;
 
-        public BufferedRandomAccessFileMark(long pointer)
+        private BufferedRandomAccessFileMark(long pointer)
         {
             this.pointer = pointer;
         }
@@ -278,9 +275,9 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     // a channel but assumes the owner will keep it open and close it,
     // see CASSANDRA-9379, this thin class is just for those cases where we do
     // not have a shared channel.
-    public static class RandomAccessReaderWithOwnChannel extends RandomAccessReader
+    static class RandomAccessReaderWithOwnChannel extends RandomAccessReader
     {
-        protected RandomAccessReaderWithOwnChannel(Rebufferer rebufferer)
+        RandomAccessReaderWithOwnChannel(Rebufferer rebufferer)
         {
             super(rebufferer);
         }
@@ -307,16 +304,25 @@ public class RandomAccessReader extends RebufferingInputStream implements FileDa
     }
 
     /**
-     * Open RandomAccessReader (not compressed, not mmapped, no read throttling) that will own opened channel.
+     * Open a RandomAccessReader (not compressed, not mmapped, no read throttling) that will own its channel.
      *
-     * @param file File to open for read
-     * @return new RandomAccessReader that owns channel
+     * @param file File to open for reading
+     * @return new RandomAccessReader that owns the channel opened in this method.
      */
     @SuppressWarnings("resource")
     public static RandomAccessReader open(File file)
     {
-        ChunkReader reader = new SimpleChunkReader(new ChannelProxy(file), -1, BufferType.OFF_HEAP, DEFAULT_BUFFER_SIZE);
-        Rebufferer rebufferer = reader.instantiateRebufferer();
-        return new RandomAccessReaderWithOwnChannel(rebufferer);
+        ChannelProxy channel = new ChannelProxy(file);
+        try
+        {
+            ChunkReader reader = new SimpleChunkReader(channel, -1, BufferType.OFF_HEAP, DEFAULT_BUFFER_SIZE);
+            Rebufferer rebufferer = reader.instantiateRebufferer();
+            return new RandomAccessReaderWithOwnChannel(rebufferer);
+        }
+        catch (Throwable t)
+        {
+            channel.close();
+            throw t;
+        }
     }
 }
