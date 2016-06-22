@@ -1304,6 +1304,7 @@ class ChildProcess(mp.Process):
             self.test_failures = json.loads(os.environ.get('CQLSH_COPY_TEST_FAILURES', ''))
         else:
             self.test_failures = None
+        printmsg("Test failures: {}".format(self.test_failures))
 
     def on_fork(self):
         """
@@ -1609,6 +1610,7 @@ class ExportProcess(ChildProcess):
         normal behavior.
         """
         start_token, end_token = token_range
+        printmsg("Process {}, start token: {}, end token: {}".format(os.getpid(), start_token, end_token))
 
         if not start_token or not end_token:
             # exclude first and last ranges to make things simpler
