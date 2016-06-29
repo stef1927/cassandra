@@ -20,10 +20,15 @@ package org.apache.cassandra.net;
 
 import java.util.concurrent.TimeUnit;
 
+import com.google.common.collect.ImmutableMap;
+
 import org.junit.Test;
 
 import org.apache.cassandra.utils.TestTimeSource;
 
+import static org.apache.cassandra.net.RateBasedBackPressure.FACTOR;
+import static org.apache.cassandra.net.RateBasedBackPressure.HIGH_RATIO;
+import static org.apache.cassandra.net.RateBasedBackPressure.LOW_RATIO;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -33,49 +38,43 @@ public class RateBasedBackPressureTest
     @Test(expected = IllegalArgumentException.class)
     public void testAcceptsNoLessThanThreeArguments() throws Exception
     {
-        new RateBasedBackPressure(new String[]{"1"});
-    }
-    
-    @Test(expected = IllegalArgumentException.class)
-    public void testAcceptsNoMoreThanThreeArguments() throws Exception
-    {
-        new RateBasedBackPressure(new String[]{"1","2","3","4"});
+        new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "1"));
     }
     
     @Test(expected = IllegalArgumentException.class)
     public void testHighRatioMustBeBiggerThanZero() throws Exception
     {
-        new RateBasedBackPressure(new String[]{"0", "1", "2"});
+        new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0", LOW_RATIO, "1", FACTOR, "2"));
     }
     
     @Test(expected = IllegalArgumentException.class)
     public void testHighRatioMustBeSmallerEqualThanOne() throws Exception
     {
-        new RateBasedBackPressure(new String[]{"2", "1", "2"});
+        new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "2", LOW_RATIO, "1", FACTOR, "2"));
     }
     
     @Test(expected = IllegalArgumentException.class)
     public void testLowRatioMustBeBiggerThanZero() throws Exception
     {
-        new RateBasedBackPressure(new String[]{"0.9", "0", "2"});
+        new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0", FACTOR, "2"));
     }
     
     @Test(expected = IllegalArgumentException.class)
     public void testLowRatioMustBeSmallerEqualThanOne() throws Exception
     {
-        new RateBasedBackPressure(new String[]{"0.9", "1.1", "2"});
+        new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "1.1", FACTOR, "2"));
     }
     
     @Test(expected = IllegalArgumentException.class)
     public void testHighRatioMustBeBiggerThanLowRatio() throws Exception
     {
-        new RateBasedBackPressure(new String[]{"0.8", "0.9", "2"});
+        new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.8", LOW_RATIO, "0.9", FACTOR, "2"));
     }
     
     @Test(expected = IllegalArgumentException.class)
     public void testFactorMustBeBiggerEqualThanOne() throws Exception
     {
-        new RateBasedBackPressure(new String[]{"0.9", "0.1", "0"});
+        new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "0"));
     }
     
     @Test
@@ -84,7 +83,7 @@ public class RateBasedBackPressureTest
         long windowSize = 5000;
         TestTimeSource timeSource = new TestTimeSource();
         BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(new String[]{"0.9", "0.1", "10"});
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
         
         // Get initial rate:
         double initialRate = state.outgoingLimiter.getRate();
@@ -105,7 +104,7 @@ public class RateBasedBackPressureTest
         long windowSize = 5000;
         TestTimeSource timeSource = new TestTimeSource();
         BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(new String[]{"0.9", "0.1", "10"});
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
         
         // Get initial time:
         long current = state.getLastAcquire();
@@ -136,7 +135,7 @@ public class RateBasedBackPressureTest
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
         BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(new String[]{"0.9", "0.1", "10"});
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
         
         // Get initial rate:
         double initialRate = state.outgoingLimiter.getRate();
@@ -157,7 +156,7 @@ public class RateBasedBackPressureTest
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
         BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(new String[]{"0.9", "0.1", "10"});
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
         
         // Update incoming and outgoing rate so that the ratio is 0.5:
         state.incomingRate.update(50);
@@ -177,7 +176,7 @@ public class RateBasedBackPressureTest
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
         BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(new String[]{"0.9", "0.1", "10"});
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
          
         // Update incoming and outgoing rate so that the ratio is 0.01:
         state.incomingRate.update(1);
@@ -197,7 +196,7 @@ public class RateBasedBackPressureTest
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
         BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(new String[]{"0.9", "0.1", "10"});
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
              
         // Update incoming and outgoing rate so that the ratio is 0.01:
         state.incomingRate.update(1);
@@ -225,7 +224,7 @@ public class RateBasedBackPressureTest
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
         BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(new String[]{"0.9", "0.1", "10"});
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
                 
         // Update incoming and outgoing rate so that the ratio is 0.5:
         state.incomingRate.update(50);

@@ -17,6 +17,7 @@
  */
 package org.apache.cassandra.net;
 
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.util.concurrent.RateLimiter;
@@ -29,28 +30,31 @@ import org.slf4j.LoggerFactory;
  */
 public class RateBasedBackPressure implements BackPressureStrategy
 {
+    public static final String HIGH_RATIO = "high_ratio";
+    public static final String LOW_RATIO = "low_ratio";
+    public static final String FACTOR = "factor";
     private static final Logger logger = LoggerFactory.getLogger(RateBasedBackPressure.class);
     private final double highRatio;
     private final double lowRatio;
     private final int factor;
     
-    public RateBasedBackPressure(String[] args)
+    public RateBasedBackPressure(Map<String, Object> args)
     {
-        if (args.length != 3)
+        if (args.size() != 3)
             throw new IllegalArgumentException(RateBasedBackPressure.class.getCanonicalName()
                     + " requires 3 arguments: high ratio, low ratio, back-pressure factor.");
-        
+
         try
         {
-            highRatio = Double.parseDouble(args[0].trim());
-            lowRatio = Double.parseDouble(args[1].trim());
-            factor = Integer.parseInt(args[2].trim());
+            highRatio = Double.parseDouble(args.getOrDefault(HIGH_RATIO, "").toString().trim());
+            lowRatio = Double.parseDouble(args.getOrDefault(LOW_RATIO, "").toString().trim());
+            factor = Integer.parseInt(args.getOrDefault(FACTOR, "").toString().trim());
         }
         catch (Exception ex)
         {
             throw new IllegalArgumentException(ex.getMessage(), ex);
         }
-        
+
         if (highRatio <= 0 || highRatio > 1)
             throw new IllegalArgumentException("Back-pressure high ratio must be > 0 and <= 1");
         if (lowRatio <= 0 || lowRatio > 1)
@@ -58,7 +62,9 @@ public class RateBasedBackPressure implements BackPressureStrategy
         if (highRatio <= lowRatio)
             throw new IllegalArgumentException("Back-pressure low ratio must be smaller than high ratio");
         if (factor < 1)
-            throw new IllegalArgumentException("Back-pressure factor must be >= 1");        
+            throw new IllegalArgumentException("Back-pressure factor must be >= 1");
+        
+        logger.info("Initialized back-pressure with high ratio: {}, low ratio: {}, factor: {}.", highRatio, lowRatio, factor);
     }
 
     @Override

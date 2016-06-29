@@ -21,8 +21,9 @@
 package org.apache.cassandra.net;
 
 import java.net.InetAddress;
-import java.net.UnknownHostException;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.Before;
@@ -30,6 +31,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.config.ParameterizedClass;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -42,7 +44,7 @@ public class MessagingServiceTest
     @BeforeClass
     public static void beforeClass()
     {
-        DatabaseDescriptor.setBackPressureStrategy("org.apache.cassandra.net.MessagingServiceTest$MockBackPressureStrategy()");
+        DatabaseDescriptor.setBackPressureStrategy(new ParameterizedClass("org.apache.cassandra.net.MessagingServiceTest$MockBackPressureStrategy", Collections.emptyMap()));
         messagingService = MessagingService.test();
     }
 
@@ -129,7 +131,7 @@ public class MessagingServiceTest
     {
         public static volatile boolean applied = false;
 
-        public MockBackPressureStrategy(String[] args)
+        public MockBackPressureStrategy(Map<String, Object> args)
         {
         }
 

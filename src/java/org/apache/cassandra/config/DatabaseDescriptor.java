@@ -27,8 +27,6 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
@@ -2005,7 +2003,7 @@ public class DatabaseDescriptor
     }
     
     @VisibleForTesting
-    public static void setBackPressureStrategy(String strategy)
+    public static void setBackPressureStrategy(ParameterizedClass strategy)
     {
         conf.back_pressure_strategy = strategy;
     }
@@ -2014,23 +2012,15 @@ public class DatabaseDescriptor
     {
         try
         {
-            Pattern pattern = Pattern.compile("(.+)\\((.*)\\)");
-            Matcher matcher = pattern.matcher(conf.back_pressure_strategy);
-            if (matcher.find())
-            {
-                String strategy = matcher.group(1);
-                String[] arguments = matcher.group(2).split(",");
+            ParameterizedClass strategy = conf.back_pressure_strategy;
+            Class<?> clazz = Class.forName(strategy.class_name);
+            if (!BackPressureStrategy.class.isAssignableFrom(clazz))
+                throw new ConfigurationException(strategy + " is not an instance of " + BackPressureStrategy.class.getCanonicalName(), false);
 
-                Class<?> clazz = Class.forName(strategy);
-                if (!BackPressureStrategy.class.isAssignableFrom(clazz))
-                    throw new ConfigurationException(strategy + " is not an instance of " + BackPressureStrategy.class.getCanonicalName(), false);
-
-                Constructor<?> ctor = clazz.getConstructor(String[].class);
-                BackPressureStrategy instance = (BackPressureStrategy) ctor.newInstance((Object) arguments);
-                logger.info("Back-pressure is {} with strategy {}.", backPressureEnabled() ? "enabled" : "disabled", conf.back_pressure_strategy);
-                return instance;
-            }
-            throw new ConfigurationException("Wrong back-pressure strategy configuration: " + conf.back_pressure_strategy, false);
+            Constructor<?> ctor = clazz.getConstructor(Map.class);
+            BackPressureStrategy instance = (BackPressureStrategy) ctor.newInstance(strategy.parameters);
+            logger.info("Back-pressure is {} with strategy {}.", backPressureEnabled() ? "enabled" : "disabled", conf.back_pressure_strategy);
+            return instance;
         }
         catch (ConfigurationException ex)
         {

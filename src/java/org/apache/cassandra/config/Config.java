@@ -27,6 +27,7 @@ import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.base.Joiner;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Sets;
 
 import org.slf4j.Logger;
@@ -35,6 +36,10 @@ import org.slf4j.LoggerFactory;
 import org.apache.cassandra.config.EncryptionOptions.ClientEncryptionOptions;
 import org.apache.cassandra.config.EncryptionOptions.ServerEncryptionOptions;
 import org.apache.cassandra.net.RateBasedBackPressure;
+
+import static org.apache.cassandra.net.RateBasedBackPressure.FACTOR;
+import static org.apache.cassandra.net.RateBasedBackPressure.HIGH_RATIO;
+import static org.apache.cassandra.net.RateBasedBackPressure.LOW_RATIO;
 
 /**
  * A class that contains configuration properties for the cassandra node it runs within.
@@ -53,9 +58,9 @@ public class Config
     /**
      * Rate-based back-pressure defaults.
      */
-    private static final double BACK_PRESSURE_HIGH_RATIO = 0.90;
-    private static final double BACK_PRESSURE_LOW_RATIO = 0.10;
-    private static final int BACK_PRESSURE_FACTOR = 25;
+    private static final String BACK_PRESSURE_HIGH_RATIO = "0.90";
+    private static final String BACK_PRESSURE_LOW_RATIO = "0.10";
+    private static final String BACK_PRESSURE_FACTOR = "25";
 
     public String cluster_name = "Test Cluster";
     public String authenticator;
@@ -331,11 +336,9 @@ public class Config
     
     public volatile boolean back_pressure_enabled = false;
     public volatile long back_pressure_timeout_override = 5000;
-    public volatile String back_pressure_strategy = String.format("%s(%s,%s,%s)",
-                                                        RateBasedBackPressure.class.getName(),
-                                                        BACK_PRESSURE_HIGH_RATIO,
-                                                        BACK_PRESSURE_LOW_RATIO,
-                                                        BACK_PRESSURE_FACTOR);
+    public volatile ParameterizedClass back_pressure_strategy = new ParameterizedClass(
+            RateBasedBackPressure.class.getName(),
+            ImmutableMap.of(HIGH_RATIO, BACK_PRESSURE_HIGH_RATIO, LOW_RATIO, BACK_PRESSURE_LOW_RATIO, FACTOR, BACK_PRESSURE_FACTOR));
     
     public static boolean getOutboundBindAny()
     {
