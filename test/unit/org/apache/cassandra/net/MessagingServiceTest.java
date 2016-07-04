@@ -53,7 +53,7 @@ public class MessagingServiceTest
     {
         messagingService.destroyConnectionPool(InetAddress.getLoopbackAddress());
     }
-    
+
     @Test
     public void testDroppedMessages()
     {
@@ -102,7 +102,7 @@ public class MessagingServiceTest
     public void testAppliesBackPressureWhenEnabled()
     {
         BackPressureState backPressureState = messagingService.getConnectionPool(InetAddress.getLoopbackAddress()).getBackPressureState();
-        
+
         DatabaseDescriptor.setBackPressureEnabled(false);
         messagingService.applyBackPressure(InetAddress.getLoopbackAddress());
         assertFalse(MockBackPressureStrategy.applied);
@@ -113,12 +113,12 @@ public class MessagingServiceTest
         assertTrue(MockBackPressureStrategy.applied);
         assertEquals(1.0, backPressureState.outgoingRate.get(TimeUnit.SECONDS), 0.0);
     }
-    
+
     @Test
     public void testDoesntIncrementOutgoingRateWhenOverloaded()
     {
         BackPressureState backPressureState = messagingService.getConnectionPool(InetAddress.getLoopbackAddress()).getBackPressureState();
-        
+
         backPressureState.overload.set(true);
 
         DatabaseDescriptor.setBackPressureEnabled(true);
@@ -126,7 +126,7 @@ public class MessagingServiceTest
         assertTrue(MockBackPressureStrategy.applied);
         assertEquals(0.0, backPressureState.outgoingRate.get(TimeUnit.SECONDS), 0.0);
     }
-    
+
     public static class MockBackPressureStrategy implements BackPressureStrategy
     {
         public static volatile boolean applied = false;

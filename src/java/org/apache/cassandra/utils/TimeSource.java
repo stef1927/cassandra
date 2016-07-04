@@ -35,10 +35,10 @@ public interface TimeSource
      * not related to any other notion of system or wall-clock time.
      */
     long nanoTime();
-    
+
     /**
      * Sleep for the given amount of time uninterruptibly.
-     * 
+     *
      * @param  sleepFor given amout.
      * @param  unit time unit
      * @return The time source itself after the given sleep period.

@@ -320,7 +320,7 @@ public final class MessagingService implements MessagingServiceMBean
                                                                    Verb.REQUEST_RESPONSE,
                                                                    Verb.BATCH_STORE,
                                                                    Verb.BATCH_REMOVE);
-    
+
     private static final class DroppedMessages
     {
         final DroppedMessageMetrics metrics;
@@ -345,7 +345,7 @@ public final class MessagingService implements MessagingServiceMBean
 
     // message sinks are a testing hook
     private final Set<IMessageSink> messageSinks = new CopyOnWriteArraySet<>();
-    
+
     // back-pressure window size is equal to the back-pressure write timeout
     private final long backPressureWindowSize = DatabaseDescriptor.getBackPressureTimeoutOverride();
     // back-pressure implementation
@@ -433,7 +433,7 @@ public final class MessagingService implements MessagingServiceMBean
             }
         }
     }
-    
+
     public void addMessageSink(IMessageSink sink)
     {
         messageSinks.add(sink);
@@ -443,10 +443,10 @@ public final class MessagingService implements MessagingServiceMBean
     {
         messageSinks.clear();
     }
-    
+
     /**
      * Updates the back-pressure state for the given host if enabled and the given message callback supports it.
-     * 
+     *
      * @param host The replica host the back-pressure state refers to.
      * @param callback The message callback.
      */
@@ -457,10 +457,10 @@ public final class MessagingService implements MessagingServiceMBean
             getConnectionPool(host).getBackPressureState().incomingRate.update(1);
         }
     }
-    
+
     /**
      * Applies back-pressure for teh given host, according to the configured strategy.
-     * 
+     *
      * @param host The destination host to apply back-pressure to.
      * @return True if overloaded, false otherwise.
      */
@@ -473,13 +473,13 @@ public final class MessagingService implements MessagingServiceMBean
             boolean overloaded =  state.overload.get();
             if (!overloaded)
                 state.outgoingRate.update(1);
-            
+
             return overloaded;
         }
-        
+
         return false;
     }
-    
+
     /**
      * Track latency information for the dynamic snitch
      *
@@ -790,7 +790,7 @@ public final class MessagingService implements MessagingServiceMBean
 
         if (to.equals(FBUtilities.getBroadcastAddress()))
             logger.trace("Message-to-self {} going over MessagingService", message);
-        
+
         // message sinks are a testing hook
         for (IMessageSink ms : messageSinks)
             if (!ms.allowOutgoingMessage(message, id, to))
@@ -1256,7 +1256,7 @@ public final class MessagingService implements MessagingServiceMBean
         }
         return result;
     }
-    
+
     public Map<String, Double> getBackPressurePerHost()
     {
         Map<String, Double> map = new HashMap<>(connectionManagers.size());

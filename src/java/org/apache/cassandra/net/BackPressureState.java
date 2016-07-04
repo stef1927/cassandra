@@ -32,7 +32,7 @@ import org.apache.cassandra.utils.TimeSource;
 /**
  * The back-pressure state, tracked per replica host.
  * <br/><br/>
- * 
+ *
  * The back-pressure state is made up of the following attributes:
  * <ul>
  * <li>windowSize: the length of the back-pressure window in milliseconds (as set by {@link MessagingService}).</li>
@@ -42,7 +42,7 @@ import org.apache.cassandra.utils.TimeSource;
  * by {@link BackPressureStrategy}).</li>
  * <li>outgoingLimiter: the rate limiter to eventually apply to outgoing messages (as updated by {@link BackPressureStrategy}).</li>
  * </ul>
- * 
+ *
  * It also provides methods to exclusively acquire/release back-pressure windows: a back-pressure window can be acquired
  * only each "window size" intervals, and only by a single thread; this allows {@link BackPressureStrategy} implementations
  * to apply back-pressure only when its window has passed, and avoids concurrent modifications.
@@ -82,7 +82,7 @@ class BackPressureState
         boolean acquired = (now - lastAcquire.get() >= windowSize) && acquireLock.tryLock();
         if (acquired)
             lastAcquire.set(now);
-        
+
         return acquired;
     }
 

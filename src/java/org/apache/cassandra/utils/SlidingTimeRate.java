@@ -40,11 +40,6 @@ public class SlidingTimeRate
     private final long precisionInMillis;
     private final TimeSource timeSource;
 
-    public SlidingTimeRate(long size, int precision, TimeUnit unit)
-    {
-        this(new SystemTimeSource(), size, precision, unit);
-    }
-
     /**
      * Creates a sliding rate whose time window is of the given size, with the given precision and time unit.
      * <br/>
@@ -123,7 +118,7 @@ public class SlidingTimeRate
             {
                 sum += i.get();
             }
-            
+
             double rateInMillis = sum == 0
                                   ? sum
                                   : sum / (double) Math.max(1000, (now - toAgoInMillis) - tailCounters.firstKey());

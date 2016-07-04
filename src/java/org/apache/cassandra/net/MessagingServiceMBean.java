@@ -86,17 +86,17 @@ public interface MessagingServiceMBean
      * Number of timeouts per host
      */
     public Map<String, Long> getTimeoutsPerHost();
-    
+
     /**
      * Back-pressure rate limiting per host
      */
     public Map<String, Double> getBackPressurePerHost();
-    
+
     /**
-     * Enable/Disable back-pressure 
+     * Enable/Disable back-pressure
      */
     public void setBackPressureEnabled(boolean enabled);
-    
+
     /**
      * Get back-pressure enabled state
      */

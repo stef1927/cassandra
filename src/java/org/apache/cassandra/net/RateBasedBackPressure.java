@@ -20,10 +20,13 @@ package org.apache.cassandra.net;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.RateLimiter;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import org.apache.cassandra.config.ParameterizedClass;
 
 /**
  * Back-pressure algorithm based on rate limiting according to the ratio between incoming and outgoing rates.
@@ -33,11 +36,23 @@ public class RateBasedBackPressure implements BackPressureStrategy
     public static final String HIGH_RATIO = "high_ratio";
     public static final String LOW_RATIO = "low_ratio";
     public static final String FACTOR = "factor";
+    private static final String BACK_PRESSURE_HIGH_RATIO = "0.90";
+    private static final String BACK_PRESSURE_LOW_RATIO = "0.10";
+    private static final String BACK_PRESSURE_FACTOR = "25";
+
     private static final Logger logger = LoggerFactory.getLogger(RateBasedBackPressure.class);
     private final double highRatio;
     private final double lowRatio;
     private final int factor;
-    
+
+    public static ParameterizedClass withDefaultParams()
+    {
+        return new ParameterizedClass(RateBasedBackPressure.class.getName(),
+                                      ImmutableMap.of(HIGH_RATIO, BACK_PRESSURE_HIGH_RATIO,
+                                                      LOW_RATIO, BACK_PRESSURE_LOW_RATIO,
+                                                      FACTOR, BACK_PRESSURE_FACTOR));
+    }
+
     public RateBasedBackPressure(Map<String, Object> args)
     {
         if (args.size() != 3)
@@ -63,31 +78,28 @@ public class RateBasedBackPressure implements BackPressureStrategy
             throw new IllegalArgumentException("Back-pressure low ratio must be smaller than high ratio");
         if (factor < 1)
             throw new IllegalArgumentException("Back-pressure factor must be >= 1");
-        
+
         logger.info("Initialized back-pressure with high ratio: {}, low ratio: {}, factor: {}.", highRatio, lowRatio, factor);
     }
 
     @Override
     public void apply(BackPressureState backPressure)
-    {        
+    {
         RateLimiter limiter = backPressure.outgoingLimiter;
-        long backPressureWindowHalfSize = backPressure.windowSize / 2;
 
         if (backPressure.tryAcquireNewWindow())
         {
             try
             {
-                // Get the incoming/outgoing rates by only looking into half the window size: we do not consider the 
+                // Get the incoming/outgoing rates by only looking into half the window size: we do not consider the
                 // full window so that we don't get biased by most recent outgoing requests that didn't receive
                 // an incoming response *yet*; by looking at the first half of the window, we get instead a good
                 // approximate measure of how many requests we sent and how many we've got back.
-                double incomingRate = backPressure.incomingRate.get(
-                        TimeUnit.SECONDS.convert(backPressureWindowHalfSize, TimeUnit.MILLISECONDS),
-                        TimeUnit.SECONDS);
-                double outgoingRate = backPressure.outgoingRate.get(
-                        TimeUnit.SECONDS.convert(backPressureWindowHalfSize, TimeUnit.MILLISECONDS),
-                        TimeUnit.SECONDS);
-                
+
+                long backPressureWindowHalfSize = TimeUnit.SECONDS.convert(backPressure.windowSize / 2, TimeUnit.MILLISECONDS);
+                double incomingRate = backPressure.incomingRate.get(backPressureWindowHalfSize, TimeUnit.SECONDS);
+                double outgoingRate = backPressure.outgoingRate.get(backPressureWindowHalfSize, TimeUnit.SECONDS);
+
                 // Now compute the incoming/outgoing ratio:
                 double actualRatio = outgoingRate > 0 ? incomingRate / outgoingRate : 1;
 

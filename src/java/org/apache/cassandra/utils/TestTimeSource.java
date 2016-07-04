@@ -20,8 +20,6 @@ package org.apache.cassandra.utils;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.apache.cassandra.utils.TimeSource;
-
 public class TestTimeSource implements TimeSource
 {
     private final AtomicLong timeInMillis = new AtomicLong(System.currentTimeMillis());
@@ -43,7 +41,7 @@ public class TestTimeSource implements TimeSource
     {
         long current = timeInMillis.get();
         long sleepInMillis = TimeUnit.MILLISECONDS.convert(sleepFor, unit);
-        boolean elapsed = false;
+        boolean elapsed;
         do
         {
             long newTime = current + sleepInMillis;

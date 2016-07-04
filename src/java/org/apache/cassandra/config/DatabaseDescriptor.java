@@ -1996,12 +1996,12 @@ public class DatabaseDescriptor
     {
         return conf.back_pressure_enabled;
     }
-    
+
     public static long getBackPressureTimeoutOverride()
     {
         return conf.back_pressure_timeout_override;
     }
-    
+
     @VisibleForTesting
     public static void setBackPressureStrategy(ParameterizedClass strategy)
     {

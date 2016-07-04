@@ -49,7 +49,7 @@ public class OutboundTcpConnectionPool
     // pointer to the reset Address.
     private InetAddress resetEndpoint;
     private ConnectionMetrics metrics;
-    
+
     // back-pressure state linked to this connection:
     private final BackPressureState backPressureState;
 
@@ -62,7 +62,7 @@ public class OutboundTcpConnectionPool
         smallMessages = new OutboundTcpConnection(this);
         largeMessages = new OutboundTcpConnection(this);
         gossipMessages = new OutboundTcpConnection(this);
-        
+
         backPressureState = new BackPressureState(backPressureWindowSize);
     }
 

@@ -67,7 +67,7 @@ public class SlidingTimeRateTest
 
         Assert.assertEquals(0, rate.get(TimeUnit.SECONDS), 0.0);
     }
-    
+
     @Test
     public void testUpdateAndGetToPointInTime() throws InterruptedException
     {
@@ -85,7 +85,7 @@ public class SlidingTimeRateTest
         Assert.assertEquals(5, rate.get(TimeUnit.SECONDS), 0.0);
         Assert.assertEquals(10, rate.get(1, TimeUnit.SECONDS), 0.0);
     }
-    
+
     @Test
     public void testDecay() throws InterruptedException
     {
@@ -98,22 +98,22 @@ public class SlidingTimeRateTest
             time.sleep(100, TimeUnit.MILLISECONDS);
         }
         Assert.assertEquals(10, rate.get(TimeUnit.SECONDS), 0.0);
-        
+
         time.sleep(1, TimeUnit.SECONDS);
-        
+
         Assert.assertEquals(5, rate.get(TimeUnit.SECONDS), 0.0);
-        
+
         time.sleep(2, TimeUnit.SECONDS);
-        
+
         Assert.assertEquals(2.5, rate.get(TimeUnit.SECONDS), 0.0);
     }
-    
+
     @Test
     public void testPruning() throws InterruptedException
     {
         TestTimeSource time = new TestTimeSource();
         SlidingTimeRate rate = new SlidingTimeRate(time, 5, 1, TimeUnit.SECONDS);
-        
+
         rate.update(1);
         Assert.assertEquals(1, rate.size());
 
@@ -132,21 +132,9 @@ public class SlidingTimeRateTest
         int updates = 100000;
         for (int i = 0; i < updates; i++)
         {
-            executor.submit(new Runnable()
-            {
-
-                @Override
-                public void run()
-                {
-                    try
-                    {
-                        time.sleep(1, TimeUnit.MILLISECONDS);
-                        rate.update(1);
-                    }
-                    catch (Throwable ex)
-                    {
-                    }
-                }
+            executor.submit(() -> {
+                time.sleep(1, TimeUnit.MILLISECONDS);
+                rate.update(1);
             });
         }
 

@@ -18,9 +18,9 @@
 package org.apache.cassandra.net;
 
 /**
- * Back-pressure algorithm interface. 
+ * Back-pressure algorithm interface.
  * <br/>
- * For experts usage only. Implementors must provide a constructor accepting a single String[] argument, representing 
+ * For experts usage only. Implementors must provide a constructor accepting a single String[] argument, representing
  * any parameters eventually required by the specific implementation.
  */
 public interface BackPressureStrategy
