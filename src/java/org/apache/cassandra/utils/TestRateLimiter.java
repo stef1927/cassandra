@@ -28,7 +28,8 @@ import org.jboss.byteman.rule.Rule;
 import org.jboss.byteman.rule.helper.Helper;
 
 /**
- *
+ * Helper class to apply rate limiting during fault injection testing; 
+ * for an example script, see test/resources/byteman/mutation_limiter.btm.
  */
 @VisibleForTesting
 public class TestRateLimiter extends Helper
@@ -40,6 +41,10 @@ public class TestRateLimiter extends Helper
         super(rule);
     }
 
+    /**
+     * Acquires a single unit at the given rate. If the rate changes between calls, a new rate limiter is created
+     * and the old one is discarded.
+     */
     public void acquire(double rate)
     {
         RateLimiter limiter = ref.get();
