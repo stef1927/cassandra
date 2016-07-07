@@ -345,9 +345,7 @@ public final class MessagingService implements MessagingServiceMBean
 
     // message sinks are a testing hook
     private final Set<IMessageSink> messageSinks = new CopyOnWriteArraySet<>();
-
-    // back-pressure window size is equal to the back-pressure write timeout
-    private final long backPressureWindowSize = DatabaseDescriptor.getBackPressureTimeoutOverride();
+    
     // back-pressure implementation
     private final BackPressureStrategy backPressure = DatabaseDescriptor.getBackPressureStrategy();
 
@@ -395,9 +393,13 @@ public final class MessagingService implements MessagingServiceMBean
             public Object apply(Pair<Integer, ExpiringMap.CacheableObject<CallbackInfo>> pair)
             {
                 final CallbackInfo expiredCallbackInfo = pair.right.value;
+                
                 maybeAddLatency(expiredCallbackInfo.callback, expiredCallbackInfo.target, pair.right.timeout);
+                updateBackPressureState(expiredCallbackInfo.target, expiredCallbackInfo.callback, true);
+                
                 ConnectionMetrics.totalTimeouts.mark();
                 getConnectionPool(expiredCallbackInfo.target).incrementTimeout();
+                
                 if (expiredCallbackInfo.isFailureCallback())
                 {
                     StageManager.getStage(Stage.INTERNAL_RESPONSE).submit(new Runnable() {
@@ -413,7 +415,7 @@ public final class MessagingService implements MessagingServiceMBean
                     Mutation mutation = ((WriteCallbackInfo) expiredCallbackInfo).mutation();
                     return StorageProxy.submitHint(mutation, expiredCallbackInfo.target, null);
                 }
-
+                
                 return null;
             }
         };
@@ -446,20 +448,27 @@ public final class MessagingService implements MessagingServiceMBean
 
     /**
      * Updates the back-pressure state for the given host if enabled and the given message callback supports it.
+     * 
+     * Both outgoing and incoming rates are updated together to ensure the count of outgoing requests match with the
+     * one of incoming responses.
      *
      * @param host The replica host the back-pressure state refers to.
      * @param callback The message callback.
+     * @param timeout True if updated following a timeout, false otherwise.
      */
-    public void updateBackPressureState(InetAddress host, IAsyncCallback callback)
+    public void updateBackPressureState(InetAddress host, IAsyncCallback callback, boolean timeout)
     {
         if (DatabaseDescriptor.backPressureEnabled() && callback.supportsBackPressure())
         {
-            getConnectionPool(host).getBackPressureState().incomingRate.update(1);
+            BackPressureState backPressureState = getConnectionPool(host).getBackPressureState();
+            backPressureState.outgoingRate.update(1);
+            if (!timeout)
+                backPressureState.incomingRate.update(1);
         }
     }
 
     /**
-     * Applies back-pressure for teh given host, according to the configured strategy.
+     * Applies back-pressure for the given host, according to the configured strategy.
      *
      * @param host The destination host to apply back-pressure to.
      * @return True if overloaded, false otherwise.
@@ -470,13 +479,8 @@ public final class MessagingService implements MessagingServiceMBean
         {
             BackPressureState state = getConnectionPool(host).getBackPressureState();
             backPressure.apply(state);
-            boolean overloaded =  state.overload.get();
-            if (!overloaded)
-                state.outgoingRate.update(1);
-
-            return overloaded;
+            return state.overload.get();
         }
-
         return false;
     }
 
@@ -634,7 +638,7 @@ public final class MessagingService implements MessagingServiceMBean
         OutboundTcpConnectionPool cp = connectionManagers.get(to);
         if (cp == null)
         {
-            cp = new OutboundTcpConnectionPool(to, backPressureWindowSize);
+            cp = new OutboundTcpConnectionPool(to, backPressure.newState());
             OutboundTcpConnectionPool existingPool = connectionManagers.putIfAbsent(to, cp);
             if (existingPool != null)
                 cp = existingPool;

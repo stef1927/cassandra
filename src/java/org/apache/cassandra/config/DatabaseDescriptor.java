@@ -1125,7 +1125,6 @@ public class DatabaseDescriptor
             case TRUNCATE:
                 return getTruncateRpcTimeout();
             case MUTATION:
-                return backPressureEnabled() ? getBackPressureTimeoutOverride() : getWriteRpcTimeout();
             case READ_REPAIR:
             case PAXOS_COMMIT:
             case PAXOS_PREPARE:
@@ -1995,11 +1994,6 @@ public class DatabaseDescriptor
     public static boolean backPressureEnabled()
     {
         return conf.back_pressure_enabled;
-    }
-
-    public static long getBackPressureTimeoutOverride()
-    {
-        return conf.back_pressure_timeout_override;
     }
 
     @VisibleForTesting

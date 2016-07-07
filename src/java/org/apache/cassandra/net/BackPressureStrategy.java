@@ -20,8 +20,8 @@ package org.apache.cassandra.net;
 /**
  * Back-pressure algorithm interface.
  * <br/>
- * For experts usage only. Implementors must provide a constructor accepting a single String[] argument, representing
- * any parameters eventually required by the specific implementation.
+ * For experts usage only. Implementors must provide a constructor accepting a single {@code Map<String, Object>} argument, 
+ * representing any parameters eventually required by the specific implementation.
  */
 public interface BackPressureStrategy
 {
@@ -29,4 +29,9 @@ public interface BackPressureStrategy
      * Applies the back-pressure algorithm, based and acting on the given {@link BackPressureState}.
      */
     void apply(BackPressureState state);
+    
+    /** 
+     * Creates a new {@link BackPressureState} initialized as needed by the specific implementation.
+     */
+    BackPressureState newState();
 }

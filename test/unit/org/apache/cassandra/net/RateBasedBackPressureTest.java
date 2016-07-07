@@ -80,10 +80,10 @@ public class RateBasedBackPressureTest
     @Test
     public void testBackPressureIsNotUpdatedBeyondInfinity() throws Exception
     {
-        long windowSize = 5000;
+        long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
-        BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
+        BackPressureState state = strategy.newState();
         
         // Get initial rate:
         double initialRate = state.outgoingLimiter.getRate();
@@ -93,6 +93,9 @@ public class RateBasedBackPressureTest
         state.incomingRate.update(1);
         state.outgoingRate.update(1);
         
+        // Move time ahead:
+        timeSource.sleep(windowSize, TimeUnit.MILLISECONDS);
+        
         // Apply and verify the rate doesn't change because already at infinity:
         strategy.apply(state);
         assertEquals(initialRate, state.outgoingLimiter.getRate(), 0.0);
@@ -101,10 +104,10 @@ public class RateBasedBackPressureTest
     @Test
     public void testBackPressureIsUpdatedOncePerWindowSize() throws Exception
     {
-        long windowSize = 5000;
+        long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
-        BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
+        BackPressureState state = strategy.newState();
         
         // Get initial time:
         long current = state.getLastAcquire();
@@ -114,40 +117,22 @@ public class RateBasedBackPressureTest
         state.incomingRate.update(1);
         state.outgoingRate.update(1);
         
+        // Move time ahead by window size:
+        timeSource.sleep(windowSize, TimeUnit.MILLISECONDS);
+        
         // Apply and verify the timestamp changed:
         strategy.apply(state);
         current = state.getLastAcquire();
         assertEquals(timeSource.currentTimeMillis(), current);
         
-        // Move time ahead:
+        // Move time ahead by less than interval:
         long previous = current;
-        timeSource.sleep(1, TimeUnit.SECONDS);
+        timeSource.sleep(windowSize / 2, TimeUnit.MILLISECONDS);
         
-        // Apply and verify the last check didn't change because below the window size:
+        // Apply and verify the last timestamp didn't change because below the window size:
         strategy.apply(state);
         current = state.getLastAcquire();
         assertEquals(previous, current);
-    }
-    
-    @Test
-    public void testBackPressureIsNotBiasedByRecentUpdates() throws Exception
-    {
-        long windowSize = 6000;
-        TestTimeSource timeSource = new TestTimeSource();
-        BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
-        
-        // Get initial rate:
-        double initialRate = state.outgoingLimiter.getRate();
-        assertEquals(Double.POSITIVE_INFINITY, initialRate, 0.0);
-        
-        // Update incoming and outgoing rate so that the ratio is 0.5:
-        state.incomingRate.update(50);
-        state.outgoingRate.update(100);
-        
-        // Apply and verify the rate didn't change because the updates were too recent (newer than half the window sise):
-        strategy.apply(state);
-        assertEquals(initialRate, state.outgoingLimiter.getRate(), 0.0);
     }
     
     @Test
@@ -155,19 +140,19 @@ public class RateBasedBackPressureTest
     {
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
-        BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
+        BackPressureState state = strategy.newState();
         
         // Update incoming and outgoing rate so that the ratio is 0.5:
         state.incomingRate.update(50);
         state.outgoingRate.update(100);
         
-        // Move time ahead of window size:
+        // Move time ahead:
         timeSource.sleep(windowSize, TimeUnit.MILLISECONDS);
         
-        // Apply and verify the rate is decreased by factor:
+        // Apply and verify the rate is decreased by incoming/outgoing:
         strategy.apply(state);
-        assertEquals(15.0, state.outgoingLimiter.getRate(), 0.1);
+        assertEquals(4.1, state.outgoingLimiter.getRate(), 0.1);
     }
     
     @Test
@@ -175,14 +160,14 @@ public class RateBasedBackPressureTest
     {
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
-        BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
+        BackPressureState state = strategy.newState();
          
         // Update incoming and outgoing rate so that the ratio is 0.01:
         state.incomingRate.update(1);
         state.outgoingRate.update(100);
         
-        // Move time ahead of window size:
+        // Move time ahead:
         timeSource.sleep(windowSize, TimeUnit.MILLISECONDS);
         
         // Apply and verify the strategy sets overload=true:
@@ -191,12 +176,12 @@ public class RateBasedBackPressureTest
     }
     
     @Test
-    public void testBackPressureOverloadIsResetAfterWindowSize() throws Exception
+    public void testBackPressureOverloadIsReset() throws Exception
     {
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
-        BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
+        BackPressureState state = strategy.newState();
              
         // Update incoming and outgoing rate so that the ratio is 0.01:
         state.incomingRate.update(1);
@@ -209,10 +194,11 @@ public class RateBasedBackPressureTest
         strategy.apply(state);
         assertTrue(state.overload.get());
         
-        // Move time ahead of window size:
+        // Update incoming rate and move time ahead:
+        state.incomingRate.update(60);
         timeSource.sleep(windowSize, TimeUnit.MILLISECONDS);
         
-        // Verify the overload state is reset and the rate limiter changed to the min value:
+        // Verify the overload state is reset and the rate limiter changed to the incoming rate value:
         strategy.apply(state);
         assertFalse(state.overload.get());
         assertEquals(10.0, state.outgoingLimiter.getRate(), 0.0);
@@ -223,30 +209,42 @@ public class RateBasedBackPressureTest
     {
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
-        BackPressureState state = new BackPressureState(timeSource, windowSize);
-        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"));
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
+        BackPressureState state = strategy.newState();
                 
         // Update incoming and outgoing rate so that the ratio is 0.5:
         state.incomingRate.update(50);
         state.outgoingRate.update(100);
         
-        // Move time ahead of window size:
+        // Move time ahead:
         timeSource.sleep(windowSize, TimeUnit.MILLISECONDS);
         
-        // Apply and verify the rate changed:
+        // Apply and verify the rate decreased:
         strategy.apply(state);
-        assertEquals(15.0, state.outgoingLimiter.getRate(), 0.1);
+        assertEquals(4.1, state.outgoingLimiter.getRate(), 0.1);
         
         // Update incoming and outgoing rate back above high rate:
         state.incomingRate.update(50);
         state.outgoingRate.update(50);
         
-        // Move time ahead of window size:
+        // Move time ahead:
         timeSource.sleep(windowSize, TimeUnit.MILLISECONDS);
         
         // Verify rate limiter is increased by factor:
         strategy.apply(state);
         assertFalse(state.overload.get());
-        assertEquals(16.5, state.outgoingLimiter.getRate(), 0.1);
+        assertEquals(4.5, state.outgoingLimiter.getRate(), 0.1);
+        
+        // Update incoming and outgoing rate to keep it below the limiter rate:
+        state.incomingRate.update(1);
+        state.outgoingRate.update(1);
+        
+        // Move time ahead:
+        timeSource.sleep(windowSize, TimeUnit.MILLISECONDS);
+        
+        // Verify rate limiter is not increased as already higher than the actual rate:
+        strategy.apply(state);
+        assertFalse(state.overload.get());
+        assertEquals(4.5, state.outgoingLimiter.getRate(), 0.1);
     }
 }

@@ -323,7 +323,6 @@ public class Config
     public UserFunctionTimeoutPolicy user_function_timeout_policy = UserFunctionTimeoutPolicy.die;
 
     public volatile boolean back_pressure_enabled = false;
-    public volatile long back_pressure_timeout_override = 5000;
     public volatile ParameterizedClass back_pressure_strategy = RateBasedBackPressure.withDefaultParams();
 
     public static boolean getOutboundBindAny()

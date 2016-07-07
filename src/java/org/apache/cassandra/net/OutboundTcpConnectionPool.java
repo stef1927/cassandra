@@ -53,7 +53,7 @@ public class OutboundTcpConnectionPool
     // back-pressure state linked to this connection:
     private final BackPressureState backPressureState;
 
-    OutboundTcpConnectionPool(InetAddress remoteEp, long backPressureWindowSize)
+    OutboundTcpConnectionPool(InetAddress remoteEp, BackPressureState backPressureState)
     {
         id = remoteEp;
         resetEndpoint = SystemKeyspace.getPreferredIP(remoteEp);
@@ -63,7 +63,7 @@ public class OutboundTcpConnectionPool
         largeMessages = new OutboundTcpConnection(this);
         gossipMessages = new OutboundTcpConnection(this);
 
-        backPressureState = new BackPressureState(backPressureWindowSize);
+        this.backPressureState = backPressureState;
     }
 
     /**

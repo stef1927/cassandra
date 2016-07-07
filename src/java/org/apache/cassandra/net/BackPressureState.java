@@ -26,7 +26,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.RateLimiter;
 
 import org.apache.cassandra.utils.SlidingTimeRate;
-import org.apache.cassandra.utils.SystemTimeSource;
 import org.apache.cassandra.utils.TimeSource;
 
 /**
@@ -35,7 +34,7 @@ import org.apache.cassandra.utils.TimeSource;
  *
  * The back-pressure state is made up of the following attributes:
  * <ul>
- * <li>windowSize: the length of the back-pressure window in milliseconds (as set by {@link MessagingService}).</li>
+ * <li>windowSize: the length of the back-pressure window in milliseconds (as defined by {@link BackPressureStrategy}).</li>
  * <li>incomingRate: the rate of back-pressure supporting incoming messages (as updated by {@link MessagingService}).</li>
  * <li>outgoingRate: the rate of back-pressure supporting outgoing messages (as updated by {@link MessagingService}).</li>
  * <li>overload: a boolean flag to notify {@link MessagingService} the destination replica host is overloaded (as updated
@@ -43,9 +42,8 @@ import org.apache.cassandra.utils.TimeSource;
  * <li>outgoingLimiter: the rate limiter to eventually apply to outgoing messages (as updated by {@link BackPressureStrategy}).</li>
  * </ul>
  *
- * It also provides methods to exclusively acquire/release back-pressure windows: a back-pressure window can be acquired
- * only each "window size" intervals, and only by a single thread; this allows {@link BackPressureStrategy} implementations
- * to apply back-pressure only when its window has passed, and avoids concurrent modifications.
+ * It also provides methods to exclusively acquire/release back-pressure windows at given intervals; 
+ * this allows {@link BackPressureStrategy} implementations to apply back-pressure even under concurrent modifications.
  */
 class BackPressureState
 {
@@ -58,12 +56,6 @@ class BackPressureState
     final RateLimiter outgoingLimiter;
     final AtomicBoolean overload;
 
-    BackPressureState(long windowSize)
-    {
-        this(new SystemTimeSource(), windowSize);
-    }
-
-    @VisibleForTesting
     BackPressureState(TimeSource timeSource, long windowSize)
     {
         this.timeSource = timeSource;
@@ -76,10 +68,10 @@ class BackPressureState
         this.overload = new AtomicBoolean();
     }
 
-    boolean tryAcquireNewWindow()
+    boolean tryAcquireNewWindow(long interval)
     {
         long now = timeSource.currentTimeMillis();
-        boolean acquired = (now - lastAcquire.get() >= windowSize) && acquireLock.tryLock();
+        boolean acquired = (now - lastAcquire.get() >= interval) && acquireLock.tryLock();
         if (acquired)
             lastAcquire.set(now);
 
