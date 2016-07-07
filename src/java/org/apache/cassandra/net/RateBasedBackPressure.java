@@ -36,7 +36,7 @@ import org.apache.cassandra.utils.TimeSource;
  * Back-pressure algorithm based on rate limiting according to the ratio between incoming and outgoing rates, computed
  * over a sliding time window with size equal to write RPC timeout.
  */
-public class RateBasedBackPressure implements BackPressureStrategy
+public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBackPressureState>
 {
     public static final String HIGH_RATIO = "high_ratio";
     public static final String LOW_RATIO = "low_ratio";
@@ -109,7 +109,7 @@ public class RateBasedBackPressure implements BackPressureStrategy
     }
 
     @Override
-    public void apply(BackPressureState backPressure)
+    public void apply(RateBasedBackPressureState backPressure)
     {
         RateLimiter limiter = backPressure.outgoingLimiter;
 
@@ -187,8 +187,8 @@ public class RateBasedBackPressure implements BackPressureStrategy
     }
 
     @Override
-    public BackPressureState newState()
+    public RateBasedBackPressureState newState()
     {
-        return new BackPressureState(timeSource, windowSize);
+        return new RateBasedBackPressureState(timeSource, windowSize);
     }
 }

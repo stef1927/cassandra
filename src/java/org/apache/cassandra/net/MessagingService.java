@@ -461,9 +461,9 @@ public final class MessagingService implements MessagingServiceMBean
         if (DatabaseDescriptor.backPressureEnabled() && callback.supportsBackPressure())
         {
             BackPressureState backPressureState = getConnectionPool(host).getBackPressureState();
-            backPressureState.outgoingRate.update(1);
+            backPressureState.onMessageSent();
             if (!timeout)
-                backPressureState.incomingRate.update(1);
+                backPressureState.onResponseReceived();
         }
     }
 
@@ -479,7 +479,7 @@ public final class MessagingService implements MessagingServiceMBean
         {
             BackPressureState state = getConnectionPool(host).getBackPressureState();
             backPressure.apply(state);
-            return state.overload.get();
+            return state.isOverloaded();
         }
         return false;
     }
@@ -1265,7 +1265,7 @@ public final class MessagingService implements MessagingServiceMBean
     {
         Map<String, Double> map = new HashMap<>(connectionManagers.size());
         for (Map.Entry<InetAddress, OutboundTcpConnectionPool> entry : connectionManagers.entrySet())
-            map.put(entry.getKey().getHostAddress(), entry.getValue().getBackPressureState().outgoingLimiter.getRate());
+            map.put(entry.getKey().getHostAddress(), entry.getValue().getBackPressureState().getBackPressureRateLimit());
 
         return map;
     }

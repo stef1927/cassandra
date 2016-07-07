@@ -23,15 +23,15 @@ package org.apache.cassandra.net;
  * For experts usage only. Implementors must provide a constructor accepting a single {@code Map<String, Object>} argument, 
  * representing any parameters eventually required by the specific implementation.
  */
-public interface BackPressureStrategy
+public interface BackPressureStrategy<S extends BackPressureState>
 {
     /**
-     * Applies the back-pressure algorithm, based and acting on the given {@link BackPressureState}.
+     * Applies the back-pressure algorithm, based and acting on the given {@link RateBasedBackPressureState}.
      */
-    void apply(BackPressureState state);
+    void apply(S state);
     
     /** 
-     * Creates a new {@link BackPressureState} initialized as needed by the specific implementation.
+     * Creates a new {@link RateBasedBackPressureState} initialized as needed by the specific implementation.
      */
-    BackPressureState newState();
+    S newState();
 }

@@ -24,7 +24,6 @@ import java.net.InetAddress;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -32,7 +31,6 @@ import org.junit.Test;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.ParameterizedClass;
-import org.apache.cassandra.utils.TestTimeSource;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -52,8 +50,6 @@ public class MessagingServiceTest
     @Before
     public void before()
     {
-        MockBackPressureStrategy.applied = false;
-        MockBackPressureStrategy.shouldOverload = false;
         messagingService.destroyConnectionPool(InetAddress.getLoopbackAddress());
     }
 
@@ -84,38 +80,38 @@ public class MessagingServiceTest
     @Test
     public void testUpdatesBackPressureStateWhenEnabledAndWithSupportedCallback()
     {
-        BackPressureState backPressureState = messagingService.getConnectionPool(InetAddress.getLoopbackAddress()).getBackPressureState();
+        MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getConnectionPool(InetAddress.getLoopbackAddress()).getBackPressureState();
         IAsyncCallback bpCallback = new BackPressureCallback();
         IAsyncCallback noCallback = new NoBackPressureCallback();
         boolean timeout = false;
 
         DatabaseDescriptor.setBackPressureEnabled(true);
         messagingService.updateBackPressureState(InetAddress.getLoopbackAddress(), noCallback, timeout);
-        assertEquals(0.0, backPressureState.outgoingRate.get(TimeUnit.SECONDS), 0.0);
-        assertEquals(0.0, backPressureState.incomingRate.get(TimeUnit.SECONDS), 0.0);
+        assertFalse(backPressureState.onRequest);
+        assertFalse(backPressureState.onResponse);
 
         DatabaseDescriptor.setBackPressureEnabled(false);
         messagingService.updateBackPressureState(InetAddress.getLoopbackAddress(), bpCallback, timeout);
-        assertEquals(0.0, backPressureState.outgoingRate.get(TimeUnit.SECONDS), 0.0);
-        assertEquals(0.0, backPressureState.incomingRate.get(TimeUnit.SECONDS), 0.0);
+        assertFalse(backPressureState.onRequest);
+        assertFalse(backPressureState.onResponse);
 
         DatabaseDescriptor.setBackPressureEnabled(true);
         messagingService.updateBackPressureState(InetAddress.getLoopbackAddress(), bpCallback, timeout);
-        assertEquals(1.0, backPressureState.outgoingRate.get(TimeUnit.SECONDS), 0.0);
-        assertEquals(1.0, backPressureState.incomingRate.get(TimeUnit.SECONDS), 0.0);
+        assertTrue(backPressureState.onRequest);
+        assertTrue(backPressureState.onResponse);
     }
     
     @Test
     public void testUpdatesBackPressureIncomingRateWhenNoTimeout()
     {
-        BackPressureState backPressureState = messagingService.getConnectionPool(InetAddress.getLoopbackAddress()).getBackPressureState();
+        MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getConnectionPool(InetAddress.getLoopbackAddress()).getBackPressureState();
         IAsyncCallback bpCallback = new BackPressureCallback();
 
         DatabaseDescriptor.setBackPressureEnabled(true);
         messagingService.updateBackPressureState(InetAddress.getLoopbackAddress(), bpCallback, true);
-        assertEquals(0.0, backPressureState.incomingRate.get(TimeUnit.SECONDS), 0.0);
+        assertFalse(backPressureState.onResponse);
         messagingService.updateBackPressureState(InetAddress.getLoopbackAddress(), bpCallback, false);
-        assertEquals(1.0, backPressureState.incomingRate.get(TimeUnit.SECONDS), 0.0);
+        assertTrue(backPressureState.onResponse);
     }
 
     @Test
@@ -133,41 +129,65 @@ public class MessagingServiceTest
     @Test
     public void testAppliesBackPressureAndReturnsOverloaded()
     {
-        BackPressureState backPressureState = messagingService.getConnectionPool(InetAddress.getLoopbackAddress()).getBackPressureState();
-
+        MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getConnectionPool(InetAddress.getLoopbackAddress()).getBackPressureState();
         DatabaseDescriptor.setBackPressureEnabled(true);
         
-        MockBackPressureStrategy.shouldOverload = false;
-        messagingService.applyBackPressure(InetAddress.getLoopbackAddress());
-        assertTrue(MockBackPressureStrategy.applied);
-        assertFalse(backPressureState.overload.get());
+        backPressureState.shouldOverload = false;
+        assertFalse(messagingService.applyBackPressure(InetAddress.getLoopbackAddress()));
         
-        MockBackPressureStrategy.shouldOverload = true;
-        messagingService.applyBackPressure(InetAddress.getLoopbackAddress());
-        assertTrue(MockBackPressureStrategy.applied);
-        assertTrue(backPressureState.overload.get());
+        backPressureState.shouldOverload = true;
+        assertTrue(messagingService.applyBackPressure(InetAddress.getLoopbackAddress()));
     }
 
-    public static class MockBackPressureStrategy implements BackPressureStrategy
+    public static class MockBackPressureStrategy implements BackPressureStrategy<MockBackPressureStrategy.MockBackPressureState>
     {
         public static volatile boolean applied = false;
-        public static volatile boolean shouldOverload = false;
 
         public MockBackPressureStrategy(Map<String, Object> args)
         {
         }
 
         @Override
-        public void apply(BackPressureState state)
+        public void apply(MockBackPressureState state)
         {
             applied = true;
-            state.overload.set(shouldOverload);
         }
 
         @Override
-        public BackPressureState newState()
+        public MockBackPressureState newState()
         {
-            return new BackPressureState(new TestTimeSource(), 5000);
+            return new MockBackPressureState();
+        }
+
+        public static class MockBackPressureState implements BackPressureState
+        {
+            public volatile boolean onRequest = false;
+            public volatile boolean onResponse = false;
+            public volatile boolean shouldOverload = false;
+
+            @Override
+            public boolean isOverloaded()
+            {
+                return shouldOverload;
+            }
+
+            @Override
+            public void onMessageSent()
+            {
+                onRequest = true;
+            }
+
+            @Override
+            public void onResponseReceived()
+            {
+                onResponse = true;
+            }
+
+            @Override
+            public double getBackPressureRateLimit()
+            {
+                throw new UnsupportedOperationException("Not supported yet.");
+            }
         }
     }
 

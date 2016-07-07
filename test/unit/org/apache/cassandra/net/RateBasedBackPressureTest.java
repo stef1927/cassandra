@@ -32,6 +32,9 @@ import static org.apache.cassandra.net.RateBasedBackPressure.LOW_RATIO;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class RateBasedBackPressureTest
 {
@@ -83,7 +86,7 @@ public class RateBasedBackPressureTest
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
         RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
-        BackPressureState state = strategy.newState();
+        RateBasedBackPressureState state = strategy.newState();
         
         // Get initial rate:
         double initialRate = state.outgoingLimiter.getRate();
@@ -107,7 +110,7 @@ public class RateBasedBackPressureTest
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
         RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
-        BackPressureState state = strategy.newState();
+        RateBasedBackPressureState state = strategy.newState();
         
         // Get initial time:
         long current = state.getLastAcquire();
@@ -141,7 +144,7 @@ public class RateBasedBackPressureTest
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
         RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
-        BackPressureState state = strategy.newState();
+        RateBasedBackPressureState state = strategy.newState();
         
         // Update incoming and outgoing rate so that the ratio is 0.5:
         state.incomingRate.update(50);
@@ -161,7 +164,7 @@ public class RateBasedBackPressureTest
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
         RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
-        BackPressureState state = strategy.newState();
+        RateBasedBackPressureState state = strategy.newState();
          
         // Update incoming and outgoing rate so that the ratio is 0.01:
         state.incomingRate.update(1);
@@ -181,7 +184,7 @@ public class RateBasedBackPressureTest
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
         RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
-        BackPressureState state = strategy.newState();
+        RateBasedBackPressureState state = strategy.newState();
              
         // Update incoming and outgoing rate so that the ratio is 0.01:
         state.incomingRate.update(1);
@@ -210,7 +213,7 @@ public class RateBasedBackPressureTest
         long windowSize = 6000;
         TestTimeSource timeSource = new TestTimeSource();
         RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", LOW_RATIO, "0.1", FACTOR, "10"), timeSource, windowSize);
-        BackPressureState state = strategy.newState();
+        RateBasedBackPressureState state = strategy.newState();
                 
         // Update incoming and outgoing rate so that the ratio is 0.5:
         state.incomingRate.update(50);

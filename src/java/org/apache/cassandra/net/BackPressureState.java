@@ -17,75 +17,28 @@
  */
 package org.apache.cassandra.net;
 
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.ReentrantLock;
-
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.util.concurrent.RateLimiter;
-
-import org.apache.cassandra.utils.SlidingTimeRate;
-import org.apache.cassandra.utils.TimeSource;
-
 /**
- * The back-pressure state, tracked per replica host.
- * <br/><br/>
- *
- * The back-pressure state is made up of the following attributes:
- * <ul>
- * <li>windowSize: the length of the back-pressure window in milliseconds (as defined by {@link BackPressureStrategy}).</li>
- * <li>incomingRate: the rate of back-pressure supporting incoming messages (as updated by {@link MessagingService}).</li>
- * <li>outgoingRate: the rate of back-pressure supporting outgoing messages (as updated by {@link MessagingService}).</li>
- * <li>overload: a boolean flag to notify {@link MessagingService} the destination replica host is overloaded (as updated
- * by {@link BackPressureStrategy}).</li>
- * <li>outgoingLimiter: the rate limiter to eventually apply to outgoing messages (as updated by {@link BackPressureStrategy}).</li>
- * </ul>
- *
- * It also provides methods to exclusively acquire/release back-pressure windows at given intervals; 
- * this allows {@link BackPressureStrategy} implementations to apply back-pressure even under concurrent modifications.
+ * Interface meant to track the back-pressure state per replica host.
  */
-class BackPressureState
+public interface BackPressureState
 {
-    private final AtomicLong lastAcquire;
-    private final ReentrantLock acquireLock;
-    private final TimeSource timeSource;
-    final long windowSize;
-    final SlidingTimeRate incomingRate;
-    final SlidingTimeRate outgoingRate;
-    final RateLimiter outgoingLimiter;
-    final AtomicBoolean overload;
+    /**
+     * Called when a message is sent to a replica.
+     */
+    void onMessageSent();
 
-    BackPressureState(TimeSource timeSource, long windowSize)
-    {
-        this.timeSource = timeSource;
-        this.windowSize = windowSize;
-        this.lastAcquire = new AtomicLong();
-        this.acquireLock = new ReentrantLock();
-        this.incomingRate = new SlidingTimeRate(timeSource, this.windowSize, 100, TimeUnit.MILLISECONDS);
-        this.outgoingRate = new SlidingTimeRate(timeSource, this.windowSize, 100, TimeUnit.MILLISECONDS);
-        this.outgoingLimiter = RateLimiter.create(Double.POSITIVE_INFINITY);
-        this.overload = new AtomicBoolean();
-    }
+    /**
+     * Called when a response is received from a replica.
+     */
+    void onResponseReceived();
 
-    boolean tryAcquireNewWindow(long interval)
-    {
-        long now = timeSource.currentTimeMillis();
-        boolean acquired = (now - lastAcquire.get() >= interval) && acquireLock.tryLock();
-        if (acquired)
-            lastAcquire.set(now);
+    /**
+     * Gets the current back-pressure rate limit.
+     */
+    double getBackPressureRateLimit();
 
-        return acquired;
-    }
-
-    void releaseWindow()
-    {
-        acquireLock.unlock();
-    }
-
-    @VisibleForTesting
-    public long getLastAcquire()
-    {
-        return lastAcquire.get();
-    }
+    /**
+     * Returns true if the back-pressure state is considered overloaded, false otherwise.
+     */
+    boolean isOverloaded();
 }
