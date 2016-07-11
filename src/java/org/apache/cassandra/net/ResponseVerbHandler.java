@@ -50,8 +50,8 @@ public class ResponseVerbHandler implements IVerbHandler
         {
             //TODO: Should we add latency only in success cases?
             MessagingService.instance().maybeAddLatency(cb, message.from, latency);
-            MessagingService.instance().updateBackPressureState(message.from, cb, false);
             cb.response(message);
         }
+        MessagingService.instance().updateBackPressureState(message.from, cb, false);
     }
 }
