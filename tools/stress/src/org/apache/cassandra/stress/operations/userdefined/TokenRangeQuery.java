@@ -30,8 +30,6 @@ import javax.naming.OperationNotSupportedException;
 import com.datastax.driver.core.AsyncPagingOptions;
 import com.datastax.driver.core.ColumnDefinitions;
 import com.datastax.driver.core.ColumnMetadata;
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.ResultSetIterator;
 import com.datastax.driver.core.Row;
 import com.datastax.driver.core.Statement;
 import com.datastax.driver.core.TableMetadata;
@@ -108,7 +106,7 @@ public class TokenRangeQuery extends Operation
         public final TokenRange tokenRange;
         public final String query;
         public Set<Token> partitions = new HashSet<>();
-        public ResultSetIterator resultSetIterator;
+        public com.datastax.driver.core.RowIterator rowIterator;
 
         public State(TokenRange tokenRange, String query)
         {
@@ -145,9 +143,9 @@ public class TokenRangeQuery extends Operation
             State state = currentState.get();
             if (state == null)
             { // start processing a new token range
-                TokenRange range = tokenRangeIterator.next();
-                if (range == null)
-                    return null; // no more token ranges to process
+            TokenRange range = tokenRangeIterator.next();
+            if (range == null)
+                return null; // no more token ranges to process
 
                 state = new State(range, buildQuery(range));
                 currentState.set(state);
@@ -155,13 +153,15 @@ public class TokenRangeQuery extends Operation
             return state;
         }
 
-        void processResults(State state, ResultSet results)
+        void processPage(State state, com.datastax.driver.core.RowIterator rowIterator)
         {
-            int remaining = results.getAvailableWithoutFetching();
-            rowCount += remaining;
+            int remaining = pageSize; // process at most one page
 
-            for (Row row : results)
+            while (rowIterator.hasNext())
             {
+                Row row = rowIterator.next();
+                rowCount++;
+
                 // this call will only succeed if we've added token(partition keys) to the query
                 Token partition = row.getPartitionKeyToken();
                 if (!state.partitions.contains(partition))
@@ -236,38 +236,37 @@ public class TokenRangeQuery extends Operation
             if (state == null)
                 return true;
 
-            ResultSet results;
-            if (state.resultSetIterator != null)
+            com.datastax.driver.core.RowIterator results;
+            if (state.rowIterator != null)
             {
-                if (state.resultSetIterator.hasNext() && !isWarmup)
+                if (state.rowIterator.hasNext() && !isWarmup)
                 {
-                    results = state.resultSetIterator.next();
+                    results = state.rowIterator;
                 }
                 else
                 {  // move on to the next token
-                    state.resultSetIterator.close();
+                    state.rowIterator.close();
                     currentState.set(null);
                     state = getState();
                     if (state == null)
                         return true;
 
-                    results = fetchPages(state);
+                    results = fetchRows(state);
                 }
             }
             else
             {
-                results = fetchPages(state);
+                results = fetchRows(state);
             }
 
-            processResults(state, results);
+            processPage(state, results);
             return true;
         }
 
-        private ResultSet fetchPages(State state) throws Exception
+        private com.datastax.driver.core.RowIterator fetchRows(State state) throws Exception
         {
             Statement statement = client.makeTokenRangeStatement(state.query, state.tokenRange);
-            state.resultSetIterator = client.getSession().executeAsync(statement, AsyncPagingOptions.create(pageSize, AsyncPagingOptions.PageUnit.ROWS));
-            return state.resultSetIterator.next();
+            return client.getSession().execute(statement, AsyncPagingOptions.create(pageSize, AsyncPagingOptions.PageUnit.ROWS));
         }
     }
 

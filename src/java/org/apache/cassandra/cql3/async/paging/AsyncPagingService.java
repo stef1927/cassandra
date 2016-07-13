@@ -19,7 +19,6 @@
 package org.apache.cassandra.cql3.async.paging;
 
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -31,7 +30,6 @@ import org.slf4j.LoggerFactory;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelPromise;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.cql3.QueryOptions;
@@ -49,9 +47,7 @@ import org.apache.cassandra.transport.Connection;
 import org.apache.cassandra.transport.Frame;
 import org.apache.cassandra.transport.Message;
 import org.apache.cassandra.transport.messages.ResultMessage;
-import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.JVMStabilityInspector;
-import org.apache.mina.core.future.WriteFuture;
 
 import static org.apache.cassandra.cql3.statements.RequestValidations.checkFalse;
 
@@ -74,7 +70,8 @@ public class AsyncPagingService
         checkFalse(cancellableSessions.containsKey(pagingOptions.uuid),
                    String.format("Invalid request, already executing a session with uuid %s", pagingOptions.uuid));
 
-        logger.trace("Starting async paging session with id {} and paging state {}", pagingOptions.uuid, options.getPagingState());
+        if (logger.isTraceEnabled())
+            logger.trace("Starting async paging session with id {} and paging state {}", pagingOptions.uuid, options.getPagingState());
 
         return new SelectStatement.Executor.PagingFactory()
         {
@@ -84,7 +81,9 @@ public class AsyncPagingService
                                                   state,
                                                   options,
                                                   pager,
-                                                  new AsyncPagingImpl(state.getConnection(), options.getAsyncPagingOptions()));
+                                                  new AsyncPagingImpl(state.getConnection(),
+                                                                      options.getAsyncPagingOptions(),
+                                                                      statement.getReadTimeout()));
 
                 // add this session to the cancellable sessions, it will be removed by PageBuilder.complete()
                 cancellableSessions.putIfAbsent(pagingOptions.uuid, ret);
@@ -246,8 +245,9 @@ public class AsyncPagingService
                 buf.writerIndex(prevWriteIndex);
                 int rowSize = ResultSet.codec.encodedRowSize(row, metadata);
                 int bufferSize = Math.max(buf.readableBytes() + rowSize, Math.min(buf.capacity() * 2, maxPageSize()));
-                logger.trace("Reallocating page buffer from {}/{} to {} for row size {} - {}",
-                             buf.readableBytes(), buf.capacity(), bufferSize, rowSize, pagingOptions.uuid);
+                if (logger.isTraceEnabled())
+                    logger.trace("Reallocating page buffer from {}/{} to {} for row size {} - {}",
+                                buf.readableBytes(), buf.capacity(), bufferSize, rowSize, pagingOptions.uuid);
 
                 ByteBuf old = buf;
                 try
@@ -385,12 +385,16 @@ public class AsyncPagingService
             if (currentPage == null)
             {
                 int bufferSize = Math.min(maxPageSize(), options.getAsyncPagingOptions().bufferSize(avgRowSize) + safePageMargin());
-                logger.trace("Allocating page with buffer size {}, avg row size {} for {}", bufferSize, avgRowSize, pagingOptions.uuid);
+                if (logger.isTraceEnabled())
+                    logger.trace("Allocating page with buffer size {}, avg row size {} for {}",
+                                 bufferSize, avgRowSize, pagingOptions.uuid);
                 currentPage = new Page(bufferSize, resultMetaData, state, options, seqNo);
             }
             else
             {
-                logger.trace("Reusing page with buffer size {}, avg row size {} for {}", currentPage.buf.capacity(), avgRowSize, pagingOptions.uuid);
+                if (logger.isTraceEnabled())
+                    logger.trace("Reusing page with buffer size {}, avg row size {} for {}",
+                                 currentPage.buf.capacity(), avgRowSize, pagingOptions.uuid);
                 currentPage.reuse(seqNo);
             }
         }
@@ -529,20 +533,15 @@ public class AsyncPagingService
      */
     private final static class AsyncPagingImpl implements PageBuilder.Callback
     {
-        /** When offering a page to the client, wait for at most this time */
-        private final static int SEND_TIMEOUT_MSECS = 100;
-        /** Number of attempts when offering a page to the client before we give up */
-        private final static int FAILED_SEND_NUM_ATTEMPTS = 100;
-
         private final Connection connection;
         private final QueryOptions.AsyncPagingOptions options;
         private final AsyncPageWriter pageWriter;
 
-        AsyncPagingImpl(Connection connection, QueryOptions.AsyncPagingOptions options)
+        AsyncPagingImpl(Connection connection, QueryOptions.AsyncPagingOptions options, long timeoutMillis)
         {
             this.connection = connection;
             this.options = options;
-            this.pageWriter =  new AsyncPageWriter(connection, options.maxPagesPerSecond);
+            this.pageWriter =  new AsyncPageWriter(connection, options.maxPagesPerSecond, timeoutMillis);
         }
 
         /**
@@ -553,21 +552,9 @@ public class AsyncPagingService
          */
         public void onPage(PageBuilder.Page page)
         {
-            logger.trace("Processing {}", page);
-
-            int i = 0;
-            boolean sent = false;
-            Frame frame = page.makeFrame();
-            while (!sent && i++ < FAILED_SEND_NUM_ATTEMPTS)
-                sent = pageWriter.sendPage(frame, !page.last(), SEND_TIMEOUT_MSECS);
-
-            if (!sent)
-            {
-                frame.release();
-                throw new RuntimeException(String.format("Timed-out sending page no. %d of session %s, given up",
-                                                         page.seqNo,
-                                                         options.uuid));
-            }
+            if (logger.isTraceEnabled())
+                logger.trace("Processing {}", page);
+            pageWriter.sendPage(page.makeFrame(), !page.last());
 
             if (page.seqNo == 1)
                 writeToChannel(pageWriter);

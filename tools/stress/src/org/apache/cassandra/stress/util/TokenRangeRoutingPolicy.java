@@ -39,7 +39,7 @@ import com.datastax.driver.core.policies.LoadBalancingPolicy;
 
 /**
  * A load balancing policy similar to the driver's TokenAwarePolicy except that it uses
- * the token range directly, rather than the parition key values, which are not necessarily
+ * the token range directly, rather than the partition key values, which are not necessarily
  * aware. It only works with statements created via the makeStatement() method.
  */
 public class TokenRangeRoutingPolicy implements ChainableLoadBalancingPolicy

@@ -39,10 +39,12 @@ import org.slf4j.LoggerFactory;
 
 import com.datastax.driver.core.AsyncPagingOptions;
 import com.datastax.driver.core.BoundStatement;
+import com.datastax.driver.core.ColumnDefinitions;
 import com.datastax.driver.core.NettyOptions;
 import com.datastax.driver.core.PreparedStatement;
 import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.ResultSetIterator;
+import com.datastax.driver.core.Row;
+import com.datastax.driver.core.RowIterator;
 import com.datastax.driver.core.Session;
 import com.datastax.driver.core.SimpleStatement;
 import com.datastax.driver.core.Statement;
@@ -184,6 +186,35 @@ public class AsyncPagingTest extends CQLTester
     }
 
     /**
+     * Test relatively small pages
+     */
+    @Test
+    public void testSmallPages() throws Throwable
+    {
+        int old = DatabaseDescriptor.setNativeTransportMaxFrameSizeInMb(4); // the max page size is half this value
+
+        try(TestHelper helper = new TestBuilder(this).numPartitions(100)
+                                                     .numClusterings(100)
+                                                     .partitionSize(1000)
+                                                     .schemaSupplier(b -> new VariableSizeSchema(b.numPartitions, b.numClusterings, b.partitionSize))
+                                                     .checkRows(true)
+                                                     .build())
+        {
+            helper.testAsyncPaging(1, 1000, AsyncPagingOptions.PageUnit.ROWS); // 10% of the ROWS
+            helper.testAsyncPaging(1, 100, AsyncPagingOptions.PageUnit.ROWS); // 1% of the ROWS
+            helper.testAsyncPaging(1, 10, AsyncPagingOptions.PageUnit.ROWS); // 0.1% of the ROWS
+
+            helper.testAsyncPaging(1, 1000, AsyncPagingOptions.PageUnit.BYTES);
+            helper.testAsyncPaging(1, 100, AsyncPagingOptions.PageUnit.BYTES);
+            helper.testAsyncPaging(1, 10, AsyncPagingOptions.PageUnit.BYTES);
+        }
+        finally
+        {
+            DatabaseDescriptor.setNativeTransportMaxFrameSizeInMb(old);
+        }
+    }
+
+    /**
      * Test page sizes that are close to the maximum page size allowed, with rows that are bigger than the max page size.
      */
     @Test
@@ -271,7 +302,7 @@ public class AsyncPagingTest extends CQLTester
      * Test interrupting async paging after N pages, and then resuming again.
      */
     @Test
-    public void testResumeWithAsyncPaging() throws Throwable
+    public void testResume() throws Throwable
     {
         try(TestHelper helper = new TestBuilder(this).numPartitions(100)
                                                      .numClusterings(100)
@@ -280,30 +311,15 @@ public class AsyncPagingTest extends CQLTester
                                                      .checkRows(true)
                                                      .build())
         {
-            helper.testResumeWithAsyncPaging(50, AsyncPagingOptions.PageUnit.ROWS, 50);
-            helper.testResumeWithAsyncPaging(100, AsyncPagingOptions.PageUnit.ROWS, 10);
-            helper.testResumeWithAsyncPaging(1000, AsyncPagingOptions.PageUnit.ROWS, 5);
+            // interrupt at page boundaries
+            helper.testResumeWithAsyncPaging(500, AsyncPagingOptions.PageUnit.ROWS, new int [] {2500});
+            helper.testResumeWithAsyncPaging(100, AsyncPagingOptions.PageUnit.ROWS, new int [] {1000, 2500, 5000});
 
-            helper.testResumeWithAsyncPaging(5000, AsyncPagingOptions.PageUnit.BYTES, 15);
-        }
-    }
+            // interrupt within a page
+            helper.testResumeWithAsyncPaging(1000, AsyncPagingOptions.PageUnit.ROWS, new int [] {100, 500, 2500, 3500, 3750});
 
-    /**
-     * Test async paging for the first N pages and then completing with page-by-page.
-     */
-    @Test
-    public void testResumeWithLegacy() throws Throwable
-    {
-        try(TestHelper helper = new TestBuilder(this).numPartitions(100)
-                                                     .numClusterings(100)
-                                                     .partitionSize(1000)
-                                                     .schemaSupplier(b -> new FixedSizeSchema(b.numPartitions, b.numClusterings, b.partitionSize))
-                                                     .checkRows(true)
-                                                     .build())
-        {
-            helper.testResumeWithLegacy(50, 50);
-            helper.testResumeWithLegacy(100, 10);
-            helper.testResumeWithLegacy(1000, 5);
+            // use a page with bytes page unit
+            helper.testResumeWithAsyncPaging(5000, AsyncPagingOptions.PageUnit.BYTES, new int[] {100, 500, 5000});
         }
     }
 
@@ -440,45 +456,45 @@ public class AsyncPagingTest extends CQLTester
         }
     }
 
-   // @Ignore("Long test intended to be run manually for profiling and benchmarking")
     @Test
     public void selectEntireTable10KB() throws Throwable
     {
         try(TestHelper helper = new TestBuilder(this).numPartitions(1000)
                                                      .numClusterings(1)
                                                      .partitionSize(10*1024)
+                                                     .schemaSupplier(b -> new FixedSizeSchema(b.numPartitions, b.numClusterings, b.partitionSize, false))
                                                      .build())
         {
             //warmup
-            helper.testLegacyPaging(50, 100);
-            helper.testAsyncPaging(50, 102400, AsyncPagingOptions.PageUnit.BYTES); // 1KB * 100 rows
+            //helper.testLegacyPaging(50, 100);
+            //helper.testAsyncPaging(50, 102400, AsyncPagingOptions.PageUnit.BYTES); // 1KB * 100 rows
 
             logger.info("Total time reading 10KB table with async paging: {} milliseconds",
                         helper.testAsyncPaging(1000, 102400, AsyncPagingOptions.PageUnit.BYTES)); // 1KB * 100 rows
 
-            logger.info("Total time reading 10KB table page by page: {} milliseconds",
-                        helper.testLegacyPaging(500, 100));
+            //logger.info("Total time reading 10KB table page by page: {} milliseconds",
+            //            helper.testLegacyPaging(500, 100));
         }
     }
 
 
-    @Ignore("Long test intended to be run manually for profiling and benchmarking")
+    @Test
     public void selectEntireTable64KB() throws Throwable
     {
-        try(TestHelper helper = new TestBuilder(this).numPartitions(1000)
-                                                     .numClusterings(1)
+        try(TestHelper helper = new TestBuilder(this).numPartitions(500)
+                                                     .numClusterings(10)
                                                      .partitionSize(64*1024)
                                                      .build())
         {
             //warmup
-            helper.testLegacyPaging(50, 100);
-            helper.testAsyncPaging(50, 102400, AsyncPagingOptions.PageUnit.BYTES);  // 1KB * 100 rows
+            helper.testLegacyPaging(10, 1000);
+            helper.testAsyncPaging(10, 1000, AsyncPagingOptions.PageUnit.ROWS);
 
-            logger.info("Total time reading 10KB table with async paging: {} milliseconds",
-                        helper.testAsyncPaging(500, 102400, AsyncPagingOptions.PageUnit.BYTES)); // 1KB * 100 rows
+            logger.info("Total time reading 65KB table with async paging: {} milliseconds",
+                        helper.testAsyncPaging(50, 1000, AsyncPagingOptions.PageUnit.ROWS));
 
-            logger.info("Total time reading 10KB table page by page: {} milliseconds",
-                        helper.testLegacyPaging(500, 100));
+            logger.info("Total time reading 65KB table page by page: {} milliseconds",
+                        helper.testLegacyPaging(50, 1000));
         }
     }
 
@@ -947,20 +963,50 @@ public class AsyncPagingTest extends CQLTester
 
                 final CheckResultSet checker = new CheckResultSet(pageSize, pageUnit);
 
-                try (ResultSetIterator it = session.executeAsync(statement, AsyncPagingOptions.create(pageSize, pageUnit, maxPages, maxPagesPerSecond)))
+                AsyncPagingOptions pagingOptions = AsyncPagingOptions.create(pageSize, pageUnit, maxPages, maxPagesPerSecond);
+                RowIterator it = session.execute(statement, pagingOptions);
+                try
                 {
-                    int num = 0;
+                    int currentPage = it.pageNo();
+                    assertEquals(0, currentPage);
+
+                    List<Row> rows = new ArrayList<>(pageUnit == AsyncPagingOptions.PageUnit.ROWS ? pageSize : 1000);
                     while (it.hasNext())
                     {
-                        ResultSet resultSet = it.next();
-                        maybePauseClient();
-                        checker.checkPage(resultSet);
+                        if (currentPage != it.pageNo())
+                        {
+                            assertEquals(currentPage + 1, it.pageNo());
 
-                        num++;
-                        if (cancelAfter > 0 && num >= cancelAfter)
-                            break;
+                            if (rows.size() > 0)
+                            {
+                                checker.checkPage(rows, it.getColumnDefinitions());
+
+                                if (cancelAfter > 0 && currentPage >= cancelAfter)
+                                    break;
+
+                                maybePauseClient();
+                            }
+                            else
+                            {
+                                // zero means no page, this is the only case where we are OK with no rows
+                                assertEquals(0, currentPage);
+                            }
+
+
+                            currentPage = it.pageNo();
+                        }
+
+                        rows.add(it.next());
                     }
+
+                    if (rows.size() > 0)
+                        checker.checkPage(rows, it.getColumnDefinitions());
                 }
+                finally
+                {
+                    it.close();
+                }
+
                 checker.checkAll();
             }
 
@@ -972,10 +1018,10 @@ public class AsyncPagingTest extends CQLTester
          *
          * @param pageSize - the page size in the page unit specified
          * @param pageUnit  - the page unit, bytes or rows
-         * @param interruptAfter - the number of pages after which we interrupt paging
+         * @param interruptions - the row index where we should interrupt
          * @return the time it took in milliseconds
          */
-        private long testResumeWithAsyncPaging(int pageSize, AsyncPagingOptions.PageUnit pageUnit, int interruptAfter) throws Throwable
+        private long testResumeWithAsyncPaging(int pageSize, AsyncPagingOptions.PageUnit pageUnit, int[] interruptions) throws Throwable
         {
             long start = System.nanoTime();
 
@@ -988,83 +1034,91 @@ public class AsyncPagingTest extends CQLTester
             statement.setFetchSize(pageSize);
 
             final CheckResultSet checker = new CheckResultSet(pageSize, pageUnit);
-            ResultSet resultSet = null;
 
-            try (ResultSetIterator it = session.executeAsync(statement, AsyncPagingOptions.create(pageSize, pageUnit, maxPages, maxPagesPerSecond)))
+            AsyncPagingOptions pagingOptions = AsyncPagingOptions.create(pageSize, pageUnit, maxPages, maxPagesPerSecond);
+
+            RowIterator.State state = null;
+            int num = 0;
+            List<Row> rows = new ArrayList<>(pageUnit == AsyncPagingOptions.PageUnit.ROWS ? pageSize : 1000);
+
+            for (int interruptAt : interruptions)
             {
-                int num = 0;
-                while (it.hasNext() && num < interruptAfter)
+                RowIterator it = state == null ? session.execute(statement, pagingOptions) : state.resume();
+                try
                 {
-                    resultSet = it.next();
-                    checker.checkPage(resultSet);
-                    num++;
+                    int currentPage = it.pageNo();
+                    logger.debug("Current page {}, rows {}, interrupting at {}", currentPage, rows.size(), interruptAt);
+
+                    if (state == null)
+                        assertEquals(0, currentPage);
+                    else
+                        assertTrue(String.format("Current page: %d, rows %d", currentPage, rows.size()),
+                                   currentPage == 0 || currentPage == 1);
+
+                    while (it.hasNext() && num < interruptAt)
+                    {
+                        if (currentPage != it.pageNo())
+                        {
+                            assertEquals(currentPage + 1, it.pageNo());
+                            if (rows.size() > 0)
+                            {
+                                checker.checkPage(rows, it.getColumnDefinitions());
+                            }
+                            else
+                            {
+                                assertEquals(0, currentPage);
+                            }
+                            currentPage = it.pageNo();
+                        }
+
+                        rows.add(it.next());
+                        num++;
+                    }
+
+                    if ((rows.size() > 0 && pageUnit == AsyncPagingOptions.PageUnit.BYTES) || rows.size() == pageSize)
+                        checker.checkPage(rows, it.getColumnDefinitions());
+
+                    state = it.state();
+                }
+                finally
+                {
+                    it.close();
                 }
             }
 
-            if (resultSet != null && !resultSet.isFullyFetched())
+            if (state != null)
             {
-                try (ResultSetIterator it = resultSet.fetchRemainingResults())
+                RowIterator it = state.resume();
+                try
                 {
+                    int currentPage = it.pageNo();
+                    logger.debug("Current page {}, rows {}, final iteration", currentPage, rows.size());
+
+                    assertTrue(String.format("Current page: %d, rows %d", currentPage, rows.size()),
+                               currentPage == 0 || currentPage == 1);
+
                     while (it.hasNext())
                     {
-                        resultSet = it.next();
-                        checker.checkPage(resultSet);
+                        if (currentPage != it.pageNo())
+                        {
+                            assertEquals(currentPage + 1, it.pageNo());
+                            if (rows.size() > 0)
+                                checker.checkPage(rows, it.getColumnDefinitions());
+                            else
+                                assertEquals(0, currentPage);
+
+                            currentPage = it.pageNo();
+                        }
+
+                        rows.add(it.next());
                     }
+
+                    if (rows.size() > 0)
+                        checker.checkPage(rows, it.getColumnDefinitions());
                 }
-            }
-
-            checker.checkAll();
-
-            return (System.nanoTime() - start) / 1000000;
-        }
-
-        /**
-         * Read the entire table starting with async paging and switching to legacy paging after interruptAfter.
-         *
-         * @param pageSize - the page size in rows
-         * @param interruptAfter - the number of pages after which we interrupt async paging
-         * @return the time it took in milliseconds
-         */
-        private long testResumeWithLegacy(int pageSize, int interruptAfter) throws Throwable
-        {
-            long start = System.nanoTime();
-
-            String query = schema.selectStatement();
-            if (maxRows > 0)
-                query += String.format(" LIMIT %d", maxRows);
-
-
-            Session session = tester.sessionNet(protocolVersion);
-            Statement statement = new SimpleStatement(tester.formatQuery(query));
-            statement.setFetchSize(pageSize);
-
-            AsyncPagingOptions.PageUnit pageUnit = AsyncPagingOptions.PageUnit.ROWS;
-            final CheckResultSet checker = new CheckResultSet(pageSize, pageUnit);
-            ResultSet resultSet = null;
-
-            try (ResultSetIterator it = session.executeAsync(statement, AsyncPagingOptions.create(pageSize, pageUnit, maxPages, maxPagesPerSecond)))
-            {
-                int num = 0;
-                while (it.hasNext() && num < interruptAfter)
+                finally
                 {
-                    resultSet = it.next();
-                    checker.checkPage(resultSet);
-                    num++;
-                }
-            }
-
-            if (resultSet != null && !resultSet.isFullyFetched())
-            {
-                ListenableFuture<ResultSet> resultFuture = resultSet.fetchMoreResults();
-                while (resultFuture != null)
-                {
-                    resultSet = resultFuture.get();
-                    if (!resultSet.isFullyFetched()) // the best we can do here is start fetching before processing
-                        resultFuture = resultSet.fetchMoreResults(); // this batch of results
-                    else
-                        resultFuture = null;
-
-                    checker.checkPage(resultSet);
+                    it.close();
                 }
             }
 
@@ -1088,7 +1142,6 @@ public class AsyncPagingTest extends CQLTester
             private final List<Object[]> rowsReceived;
             private int numRowsReceived ;
             private int numPagesReceived;
-            private ResultSet lastPage;
 
             CheckResultSet(int pageSize, AsyncPagingOptions.PageUnit pageUnit)
             {
@@ -1121,7 +1174,25 @@ public class AsyncPagingTest extends CQLTester
             private synchronized void checkPage(ResultSet resultSet)
             {
                 int numRows = resultSet.getAvailableWithoutFetching();
-                logger.trace("Received {} rows", numRows);
+                List<Row> pageRows = new ArrayList<>(numRows);
+                for (Row row : resultSet)
+                {
+                    pageRows.add(row);
+
+                    if (--numRows == 0)
+                        break;
+                }
+                assertEquals(0, numRows);
+
+                checkPage(pageRows, resultSet.getColumnDefinitions());
+            }
+
+            private void checkPage(List<Row> pageRows, ColumnDefinitions meta)
+            {
+                int numRows = pageRows.size();
+                logger.debug("Received page with {} rows", numRows);
+
+                assertNotNull(meta);
 
                 if (checkNumberOfRowsInPage && pageUnit == AsyncPagingOptions.PageUnit.ROWS && numRows > 0)
                 {
@@ -1131,22 +1202,11 @@ public class AsyncPagingTest extends CQLTester
                 }
 
                 if (checkRows)
-                {
-                    rowsReceived.addAll(Arrays.asList(tester.getRowsNet(protocolVersion, resultSet)));
-                }
-                else
-                {
-                    for (int i = 0; i < numRows; i++)
-                    {
-                        assertTrue(resultSet.iterator().hasNext());
-                        assertNotNull(resultSet.iterator().next());
-                    }
-                }
+                    rowsReceived.addAll(Arrays.asList(tester.getRowsNet(protocolVersion, meta, pageRows)));
 
                 numRowsReceived += numRows;
                 numPagesReceived += 1;
-                lastPage = resultSet;
-
+                pageRows.clear();
             }
 
             private void checkAll()
@@ -1155,8 +1215,6 @@ public class AsyncPagingTest extends CQLTester
                 { // check that we've received exactly the number of pages requested
                     assertFalse("Cannot check rows if receiving fewer pages", checkRows);
                     assertEquals(maxPages, numPagesReceived);
-                    if (numRowsReceived != rows.length)
-                        assertFalse(lastPage.isFullyFetched());
                     return;
                 }
 
@@ -1164,7 +1222,6 @@ public class AsyncPagingTest extends CQLTester
                 {   // check that we've received exactly the number of rows requested
                     assertFalse("Cannot check rows if receiving fewer pages", checkRows);
                     assertEquals(maxRows, numRowsReceived);
-                    assertTrue(lastPage.isFullyFetched());
                     return;
                 }
 
@@ -1174,7 +1231,6 @@ public class AsyncPagingTest extends CQLTester
                     assertFalse("Cannot check rows if receiving fewer pages", checkRows);
                     logger.info("Received {} pages when cancelling after {} pages", numPagesReceived, cancelAfter);
                     assertTrue(String.format("%d < %d", numPagesReceived, cancelAfter), numPagesReceived >= cancelAfter);
-                    assertFalse(lastPage.isFullyFetched());
                     return;
                 }
 

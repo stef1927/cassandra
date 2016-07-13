@@ -62,6 +62,7 @@ import org.apache.cassandra.service.ClientState;
 import org.apache.cassandra.service.QueryState;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.transport.Event;
+import org.apache.cassandra.transport.RequestThreadPoolExecutor;
 import org.apache.cassandra.transport.Server;
 import org.apache.cassandra.transport.messages.ResultMessage;
 import org.apache.cassandra.utils.ByteBufferUtil;
@@ -347,7 +348,11 @@ public abstract class CQLTester
         StorageService.instance.initServer();
         SchemaLoader.startGossiper();
 
-        server = new Server.Builder().withHost(nativeAddr).withPort(nativePort).build();
+        server = new Server.Builder()
+                 .withHost(nativeAddr)
+                 .withPort(nativePort)
+                 .withEventExecutor(new RequestThreadPoolExecutor()).build();
+
         server.start();
 
         if (initClientClusters)
@@ -882,25 +887,21 @@ public abstract class CQLTester
         }
     }
 
-    protected Object[][] getRowsNet(int protocolVersion, ResultSet result)
+    protected Object[][] getRowsNet(int protocolVersion, ColumnDefinitions meta, List<Row> rows)
     {
         assertTrue("Client cluster does not exist for specified protocol version", clusters.containsKey(protocolVersion));
 
-        if (result == null)
+        if (rows == null || rows.isEmpty())
             return new Object[0][0];
 
-        ColumnDefinitions meta = result.getColumnDefinitions();
         com.datastax.driver.core.TypeCodec<?>[] codecs = new com.datastax.driver.core.TypeCodec<?>[meta.size()];
         for (int j = 0; j < meta.size(); j++)
             codecs[j] = clusters.get(protocolVersion).getConfiguration().getCodecRegistry().codecFor(meta.getType(j));
 
-        int numRows = result.getAvailableWithoutFetching();
-        Object[][] ret = new Object[numRows][];
-        Iterator<Row> iter = result.iterator();
-        for (int i = 0; i < numRows; i++)
+        Object[][] ret = new Object[rows.size()][];
+        for (int i = 0; i < ret.length; i++)
         {
-            Assert.assertTrue(iter.hasNext());
-            Row row = iter.next();
+            Row row = rows.get(i);
             Assert.assertNotNull(row);
 
             ret[i] = new Object[meta.size()];
