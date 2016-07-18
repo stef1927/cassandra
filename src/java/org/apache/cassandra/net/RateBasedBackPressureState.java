@@ -17,8 +17,8 @@
  */
 package org.apache.cassandra.net;
 
+import java.net.InetAddress;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -46,6 +46,7 @@ import org.apache.cassandra.utils.TimeSource;
  */
 public class RateBasedBackPressureState implements BackPressureState
 {
+    private final InetAddress host;
     private final AtomicLong lastAcquire;
     private final ReentrantLock acquireLock;
     private final TimeSource timeSource;
@@ -53,10 +54,10 @@ public class RateBasedBackPressureState implements BackPressureState
     final SlidingTimeRate incomingRate;
     final SlidingTimeRate outgoingRate;
     final RateLimiter outgoingLimiter;
-    final AtomicBoolean overload;
 
-    RateBasedBackPressureState(TimeSource timeSource, long windowSize)
+    RateBasedBackPressureState(InetAddress host, TimeSource timeSource, long windowSize)
     {
+        this.host = host;
         this.timeSource = timeSource;
         this.windowSize = windowSize;
         this.lastAcquire = new AtomicLong();
@@ -64,7 +65,6 @@ public class RateBasedBackPressureState implements BackPressureState
         this.incomingRate = new SlidingTimeRate(timeSource, this.windowSize, 100, TimeUnit.MILLISECONDS);
         this.outgoingRate = new SlidingTimeRate(timeSource, this.windowSize, 100, TimeUnit.MILLISECONDS);
         this.outgoingLimiter = RateLimiter.create(Double.POSITIVE_INFINITY);
-        this.overload = new AtomicBoolean();
     }
     
     @VisibleForTesting
@@ -92,9 +92,32 @@ public class RateBasedBackPressureState implements BackPressureState
     }
 
     @Override
-    public boolean isOverloaded()
+    public InetAddress getHost()
     {
-        return overload.get();
+        return host;
+    }
+
+    @Override
+    public boolean equals(Object obj)
+    {
+        if (obj instanceof RateBasedBackPressureState)
+        {
+            RateBasedBackPressureState other = (RateBasedBackPressureState) obj;
+            return this.host.equals(other.host);
+        }
+        return false;
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return this.host.hashCode();
+    }
+    
+    @VisibleForTesting
+    public void doRateLimit() 
+    {
+        outgoingLimiter.acquire(1);
     }
 
     boolean tryAcquireNewWindow(long interval)

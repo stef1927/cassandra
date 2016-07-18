@@ -17,6 +17,8 @@
  */
 package org.apache.cassandra.net;
 
+import java.net.InetAddress;
+
 /**
  * Back-pressure algorithm interface.
  * <br/>
@@ -26,12 +28,12 @@ package org.apache.cassandra.net;
 public interface BackPressureStrategy<S extends BackPressureState>
 {
     /**
-     * Applies the back-pressure algorithm, based and acting on the given {@link RateBasedBackPressureState}.
+     * Applies the back-pressure algorithm, based and acting on the given {@link BackPressureState}s.
      */
-    void apply(S state);
+    void apply(Iterable<S> states);
     
     /** 
-     * Creates a new {@link RateBasedBackPressureState} initialized as needed by the specific implementation.
+     * Creates a new {@link BackPressureState} initialized as needed by the specific implementation.
      */
-    S newState();
+    S newState(InetAddress host);
 }

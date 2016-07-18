@@ -17,7 +17,11 @@
  */
 package org.apache.cassandra.net;
 
+import java.net.InetAddress;
+import java.util.Comparator;
 import java.util.Map;
+import java.util.SortedSet;
+import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -39,25 +43,48 @@ import org.apache.cassandra.utils.TimeSource;
 public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBackPressureState>
 {
     public static final String HIGH_RATIO = "high_ratio";
-    public static final String LOW_RATIO = "low_ratio";
     public static final String FACTOR = "factor";
+    public static final String FLOW = "flow";
     private static final String BACK_PRESSURE_HIGH_RATIO = "0.90";
-    private static final String BACK_PRESSURE_LOW_RATIO = "0.10";
     private static final String BACK_PRESSURE_FACTOR = "5";
+    public static final String BACK_PRESSURE_FLOW = "FAST";
 
     private static final Logger logger = LoggerFactory.getLogger(RateBasedBackPressure.class);
-    private final TimeSource timeSource;
-    private final double highRatio;
-    private final double lowRatio;
-    private final int factor;
-    private final long windowSize;
+    
+    protected final TimeSource timeSource;
+    protected final double highRatio;
+    protected final int factor;
+    protected final Flow flow;
+    protected final long windowSize;
+    
+    public static enum Flow
+    {
+        FAST
+        {
+            @Override
+            public RateBasedBackPressureState get(SortedSet<RateBasedBackPressureState> states)
+            {
+                return states.first();
+            }
+        },
+        SLOW
+        {
+            @Override
+            public RateBasedBackPressureState get(SortedSet<RateBasedBackPressureState> states)
+            {
+                return states.last();
+            }
+        };
+
+        public abstract RateBasedBackPressureState get(SortedSet<RateBasedBackPressureState> states);
+    }
 
     public static ParameterizedClass withDefaultParams()
     {
         return new ParameterizedClass(RateBasedBackPressure.class.getName(),
                                       ImmutableMap.of(HIGH_RATIO, BACK_PRESSURE_HIGH_RATIO,
-                                                      LOW_RATIO, BACK_PRESSURE_LOW_RATIO,
-                                                      FACTOR, BACK_PRESSURE_FACTOR));
+                                                      FACTOR, BACK_PRESSURE_FACTOR,
+                                                      FLOW, BACK_PRESSURE_FLOW));
     }
 
     public RateBasedBackPressure(Map<String, Object> args)
@@ -71,14 +98,14 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
         if (args.size() != 3)
         {
             throw new IllegalArgumentException(RateBasedBackPressure.class.getCanonicalName()
-                    + " requires 3 arguments: high ratio, low ratio, back-pressure factor.");
+                    + " requires 3 arguments: high ratio, back-pressure factor and flow type.");
         }
 
         try
         {
             highRatio = Double.parseDouble(args.getOrDefault(HIGH_RATIO, "").toString().trim());
-            lowRatio = Double.parseDouble(args.getOrDefault(LOW_RATIO, "").toString().trim());
             factor = Integer.parseInt(args.getOrDefault(FACTOR, "").toString().trim());
+            flow = Flow.valueOf(args.getOrDefault(FLOW, "").toString().trim().toUpperCase());
         }
         catch (Exception ex)
         {
@@ -89,14 +116,6 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
         {
             throw new IllegalArgumentException("Back-pressure high ratio must be > 0 and <= 1");
         }
-        if (lowRatio <= 0 || lowRatio > 1)
-        {
-            throw new IllegalArgumentException("Back-pressure low ratio must be > 0 and <= 1");
-        }
-        if (highRatio <= lowRatio)
-        {
-            throw new IllegalArgumentException("Back-pressure low ratio must be smaller than high ratio");
-        }
         if (factor < 1)
         {
             throw new IllegalArgumentException("Back-pressure factor must be >= 1");
@@ -105,90 +124,84 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
         this.timeSource = timeSource;
         this.windowSize = windowSize;
 
-        logger.info("Initialized back-pressure with high ratio: {}, low ratio: {}, factor: {}.", highRatio, lowRatio, factor);
+        logger.info("Initialized back-pressure with high ratio: {}, factor: {}.", highRatio, factor);
     }
 
     @Override
-    public void apply(RateBasedBackPressureState backPressure)
+    public void apply(Iterable<RateBasedBackPressureState> states)
     {
-        RateLimiter limiter = backPressure.outgoingLimiter;
-
-        if (backPressure.tryAcquireNewWindow(backPressure.windowSize))
+        SortedSet<RateBasedBackPressureState> sortedStates = new TreeSet<>((Comparator<RateBasedBackPressureState>) (s1, s2) -> 
         {
-            try
+            if (s1.equals(s2))
+                return 0;
+            if (s1.getBackPressureRateLimit() < s2.getBackPressureRateLimit())
+                return 1;
+            if (s2.getBackPressureRateLimit() < s1.getBackPressureRateLimit())
+                return -1;
+
+            return s1.hashCode() - s2.hashCode();
+        });
+        
+        for (RateBasedBackPressureState backPressure : states) 
+        {
+            if (backPressure.tryAcquireNewWindow(windowSize))
             {
-                // Get the incoming/outgoing rates:
-                double incomingRate = backPressure.incomingRate.get(TimeUnit.SECONDS);
-                double outgoingRate = backPressure.outgoingRate.get(TimeUnit.SECONDS);
-                // Compute the incoming/outgoing ratio:
-                double actualRatio = outgoingRate > 0 ? incomingRate / outgoingRate : 1;
-
-                // First thing check if previously overloaded: clear the overload flag (we don't want to flood the
-                // client with errors) and try limiting at a very reduced rate:
-                if (backPressure.overload.get())
+                try
                 {
-                    limiter.setRate(Math.max(1, incomingRate));
+                    RateLimiter limiter = backPressure.outgoingLimiter;
 
-                    backPressure.overload.set(false);
-                }
-                // Else...
-                // If the ratio is above the high mark, try growing by the back-pressure factor:
-                else if (actualRatio >= highRatio)
-                {
-                    // Only if the outgoing rate is able to keep up with the rate increase:
-                    if (limiter.getRate() <= outgoingRate)
+                    // Get the incoming/outgoing rates:
+                    double incomingRate = backPressure.incomingRate.get(TimeUnit.SECONDS);
+                    double outgoingRate = backPressure.outgoingRate.get(TimeUnit.SECONDS);
+                    // Compute the incoming/outgoing ratio:
+                    double actualRatio = outgoingRate > 0 ? incomingRate / outgoingRate : 1;
+
+                    // If the ratio is above the high mark, try growing by the back-pressure factor:
+                    if (actualRatio >= highRatio)
                     {
-                        double newRate = limiter.getRate() + ((limiter.getRate() * factor) / 100);
-                        if (newRate > 0 && newRate != Double.POSITIVE_INFINITY)
+                        // Only if the outgoing rate is able to keep up with the rate increase:
+                        if (limiter.getRate() <= outgoingRate)
+                        {
+                            double newRate = limiter.getRate() + ((limiter.getRate() * factor) / 100);
+                            if (newRate > 0 && newRate != Double.POSITIVE_INFINITY)
+                            {
+                                limiter.setRate(newRate);
+                            }
+                        }
+                    }
+                    // If below, set the rate limiter at the incoming rate, decreased by factor:
+                    else
+                    {
+                        // Only if the new rate is actually less than the actual rate:
+                        double newRate = incomingRate - ((incomingRate * factor) / 100);
+                        if (newRate < limiter.getRate())
                         {
                             limiter.setRate(newRate);
                         }
                     }
 
-                    backPressure.overload.set(false);
+                    // Housekeeping: pruning windows and resetting the last check timestamp!
+                    backPressure.incomingRate.prune();
+                    backPressure.outgoingRate.prune();
+                    
+                    logger.debug("Back-pressure state for {}: incoming rate {}, outgoing rate {}, ratio {}, rate limiting {}",
+                                 backPressure.getHost(), incomingRate, outgoingRate, actualRatio, limiter.getRate());
                 }
-                // If in between low and high marks, set the rate limiter at the incoming rate, reduced by the actual
-                // ratio to give time to recover:
-                else if (actualRatio >= lowRatio && actualRatio < highRatio)
+                finally
                 {
-                    // Only if the new rate is actually less than the actual rate:
-                    double newRate = incomingRate * actualRatio;
-                    if (newRate < limiter.getRate())
-                    {
-                        limiter.setRate(newRate);
-                    }
-
-                    backPressure.overload.set(false);
+                    backPressure.releaseWindow();
                 }
-                // Finally if just below the low ratio, set the overload flag:
-                else
-                {
-                    backPressure.overload.set(true);
-                }
-
-                // Housekeeping: pruning windows and resetting the last check timestamp!
-                backPressure.incomingRate.prune();
-                backPressure.outgoingRate.prune();
-
-                logger.debug("Back-pressure enabled with: incoming rate {}, outgoing rate {}, ratio {}, rate limiting {}",
-                             incomingRate, outgoingRate, actualRatio, limiter.getRate());
             }
-            finally
-            {
-                backPressure.releaseWindow();
-            }
+            sortedStates.add(backPressure);
         }
-
-        // At this point we're either overloaded or rate limited:
-        if (!backPressure.overload.get())
-        {
-            limiter.acquire(1);
-        }
+        
+        if (!sortedStates.isEmpty())
+            flow.get(sortedStates).doRateLimit();
     }
-
+        
     @Override
-    public RateBasedBackPressureState newState()
+    public RateBasedBackPressureState newState(InetAddress host)
     {
-        return new RateBasedBackPressureState(timeSource, windowSize);
+        return new RateBasedBackPressureState(host, timeSource, windowSize);
     }
 }

@@ -17,6 +17,8 @@
  */
 package org.apache.cassandra.net;
 
+import java.net.InetAddress;
+
 /**
  * Interface meant to track the back-pressure state per replica host.
  */
@@ -36,9 +38,9 @@ public interface BackPressureState
      * Gets the current back-pressure rate limit.
      */
     double getBackPressureRateLimit();
-
+    
     /**
-     * Returns true if the back-pressure state is considered overloaded, false otherwise.
+     * Returns the host this state refers to.
      */
-    boolean isOverloaded();
+    InetAddress getHost();
 }

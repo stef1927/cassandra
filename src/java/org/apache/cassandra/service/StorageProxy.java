@@ -1187,14 +1187,16 @@ public class StorageProxy implements StorageProxyMBean
         Map<String, Collection<InetAddress>> dcGroups = null;
         // only need to create a Message for non-local writes
         MessageOut<Mutation> message = null;
-
+                
         boolean insertLocal = false;
         ArrayList<InetAddress> endpointsToHint = null;
+        
+        int targetsSize = Iterables.size(targets);
+        List<InetAddress> backPressureHosts = new ArrayList<>(targetsSize);
 
         for (InetAddress destination : targets)
         {
             checkHintOverload(destination);
-            applyBackPressure(destination);
 
             if (FailureDetector.instance.isAlive(destination))
             {
@@ -1226,6 +1228,7 @@ public class StorageProxy implements StorageProxyMBean
                         }
                         messages.add(destination);
                     }
+                    backPressureHosts.add(destination);
                 }
             }
             else
@@ -1233,7 +1236,7 @@ public class StorageProxy implements StorageProxyMBean
                 if (shouldHint(destination))
                 {
                     if (endpointsToHint == null)
-                        endpointsToHint = new ArrayList<>(Iterables.size(targets));
+                        endpointsToHint = new ArrayList<>(targetsSize);
                     endpointsToHint.add(destination);
                 }
             }
@@ -1254,6 +1257,8 @@ public class StorageProxy implements StorageProxyMBean
             for (Collection<InetAddress> dcTargets : dcGroups.values())
                 sendMessagesToNonlocalDC(message, dcTargets, responseHandler);
         }
+        
+        MessagingService.instance().applyBackPressure(backPressureHosts);
     }
 
     private static void checkHintOverload(InetAddress destination)
@@ -1269,16 +1274,6 @@ public class StorageProxy implements StorageProxyMBean
             throw new OverloadedException("Too many in flight hints: " + StorageMetrics.totalHintsInProgress.getCount() +
                                           " destination: " + destination +
                                           " destination hints: " + getHintsInProgressFor(destination).get());
-        }
-    }
-
-    private static void applyBackPressure(InetAddress destination)
-    {
-        if (!destination.equals(FBUtilities.getBroadcastAddress()))
-        {
-            boolean overloaded = MessagingService.instance().applyBackPressure(destination);
-            if (overloaded)
-                throw new OverloadedException("Back-pressure overloading for destination: " + destination);
         }
     }
 

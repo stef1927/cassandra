@@ -28,6 +28,8 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
@@ -395,10 +397,14 @@ public final class MessagingService implements MessagingServiceMBean
                 final CallbackInfo expiredCallbackInfo = pair.right.value;
                 
                 maybeAddLatency(expiredCallbackInfo.callback, expiredCallbackInfo.target, pair.right.timeout);
-                updateBackPressureState(expiredCallbackInfo.target, expiredCallbackInfo.callback, true);
                 
                 ConnectionMetrics.totalTimeouts.mark();
                 getConnectionPool(expiredCallbackInfo.target).incrementTimeout();
+                
+                if (expiredCallbackInfo.callback.supportsBackPressure())
+                {
+                    updateBackPressureState(expiredCallbackInfo.target, expiredCallbackInfo.callback, true);
+                }
                 
                 if (expiredCallbackInfo.isFailureCallback())
                 {
@@ -466,22 +472,24 @@ public final class MessagingService implements MessagingServiceMBean
                 backPressureState.onResponseReceived();
         }
     }
-
+    
     /**
-     * Applies back-pressure for the given host, according to the configured strategy.
+     * Applies back-pressure for the given hosts, according to the configured strategy.
+     * 
+     * If the local host is present, it is removed from the pool, as back-pressure is only applied
+     * to remote hosts.
      *
-     * @param host The destination host to apply back-pressure to.
-     * @return True if overloaded, false otherwise.
+     * @param hosts The hosts to apply back-pressure to.
      */
-    public boolean applyBackPressure(InetAddress host)
+    public void applyBackPressure(Iterable<InetAddress> hosts)
     {
         if (DatabaseDescriptor.backPressureEnabled())
         {
-            BackPressureState state = getConnectionPool(host).getBackPressureState();
-            backPressure.apply(state);
-            return state.isOverloaded();
+            backPressure.apply(StreamSupport.stream(hosts.spliterator(), false)
+                    .filter(h -> !h.equals(FBUtilities.getBroadcastAddress()))
+                    .map(h -> getConnectionPool(h).getBackPressureState())
+                    .collect(Collectors.toList()));
         }
-        return false;
     }
 
     /**
@@ -638,7 +646,7 @@ public final class MessagingService implements MessagingServiceMBean
         OutboundTcpConnectionPool cp = connectionManagers.get(to);
         if (cp == null)
         {
-            cp = new OutboundTcpConnectionPool(to, backPressure.newState());
+            cp = new OutboundTcpConnectionPool(to, backPressure.newState(to));
             OutboundTcpConnectionPool existingPool = connectionManagers.putIfAbsent(to, cp);
             if (existingPool != null)
                 cp = existingPool;
