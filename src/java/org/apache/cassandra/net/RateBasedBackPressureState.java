@@ -20,7 +20,6 @@ package org.apache.cassandra.net;
 import java.net.InetAddress;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -46,13 +45,13 @@ import org.apache.cassandra.utils.TimeSource;
  * this allows to apply back-pressure even under concurrent modifications. Please also note a write lock is acquired
  * during window acquisition so that no concurrent rate updates can screw rate computations.
  */
-public class RateBasedBackPressureState implements BackPressureState
+class RateBasedBackPressureState implements BackPressureState
 {
     private final InetAddress host;
     private final AtomicLong lastAcquire;
     private final ReentrantReadWriteLock acquireLock;
     private final TimeSource timeSource;
-    final long windowSize;
+    private final long windowSize;
     final SlidingTimeRate incomingRate;
     final SlidingTimeRate outgoingRate;
     final RateLimiter outgoingLimiter;
@@ -67,12 +66,6 @@ public class RateBasedBackPressureState implements BackPressureState
         this.incomingRate = new SlidingTimeRate(timeSource, this.windowSize, this.windowSize / 10, TimeUnit.MILLISECONDS);
         this.outgoingRate = new SlidingTimeRate(timeSource, this.windowSize, this.windowSize / 10, TimeUnit.MILLISECONDS);
         this.outgoingLimiter = RateLimiter.create(Double.POSITIVE_INFINITY);
-    }
-    
-    @VisibleForTesting
-    public long getLastAcquire()
-    {
-        return lastAcquire.get();
     }
 
     @Override
@@ -133,9 +126,15 @@ public class RateBasedBackPressureState implements BackPressureState
     }
     
     @VisibleForTesting
-    public void doRateLimit() 
+    void doRateLimit() 
     {
         outgoingLimiter.acquire(1);
+    }
+    
+    @VisibleForTesting
+    long getLastAcquire()
+    {
+        return lastAcquire.get();
     }
 
     boolean tryAcquireNewWindow(long interval)

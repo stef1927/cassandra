@@ -162,7 +162,6 @@ public class MessagingServiceTest
         public static class MockBackPressureState implements BackPressureState
         {
             private final InetAddress host;
-            public volatile int sortOrder;
             public volatile boolean onRequest = false;
             public volatile boolean onResponse = false;
 

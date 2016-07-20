@@ -18,7 +18,6 @@
 package org.apache.cassandra.net;
 
 import java.net.InetAddress;
-import java.util.Comparator;
 import java.util.Map;
 import java.util.SortedSet;
 import java.util.TreeSet;
@@ -33,6 +32,7 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.ParameterizedClass;
+import org.apache.cassandra.utils.NoSpamLogger;
 import org.apache.cassandra.utils.SystemTimeSource;
 import org.apache.cassandra.utils.TimeSource;
 
@@ -42,14 +42,15 @@ import org.apache.cassandra.utils.TimeSource;
  */
 public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBackPressureState>
 {
-    public static final String HIGH_RATIO = "high_ratio";
-    public static final String FACTOR = "factor";
-    public static final String FLOW = "flow";
+    static final String HIGH_RATIO = "high_ratio";
+    static final String FACTOR = "factor";
+    static final String FLOW = "flow";
     private static final String BACK_PRESSURE_HIGH_RATIO = "0.90";
     private static final String BACK_PRESSURE_FACTOR = "5";
-    public static final String BACK_PRESSURE_FLOW = "FAST";
+    private static final String BACK_PRESSURE_FLOW = "FAST";
 
     private static final Logger logger = LoggerFactory.getLogger(RateBasedBackPressure.class);
+    private static final NoSpamLogger noSpamLogger = NoSpamLogger.getLogger(logger, 1, TimeUnit.MINUTES);
     
     protected final TimeSource timeSource;
     protected final double highRatio;
@@ -57,7 +58,7 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
     protected final Flow flow;
     protected final long windowSize;
     
-    public static enum Flow
+    public enum Flow
     {
         FAST
         {
@@ -128,13 +129,14 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
         this.timeSource = timeSource;
         this.windowSize = windowSize;
 
-        logger.info("Initialized back-pressure with high ratio: {}, factor: {}.", highRatio, factor);
+        logger.info("Initialized back-pressure with high ratio: {}, factor: {}, flow: {}, window size: {}.",
+                    highRatio, factor, flow, windowSize);
     }
 
     @Override
     public void apply(Iterable<RateBasedBackPressureState> states)
     {
-        SortedSet<RateBasedBackPressureState> sortedStates = new TreeSet<>((Comparator<RateBasedBackPressureState>) (s1, s2) -> 
+        SortedSet<RateBasedBackPressureState> sortedStates = new TreeSet<>((s1, s2) -> 
         {
             if (s1.equals(s2))
                 return 0;
@@ -190,7 +192,7 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
                             }
                         }
 
-                        logger.debug("Back-pressure state for {}: incoming rate {}, outgoing rate {}, ratio {}, rate limiting {}",
+                        logger.trace("Back-pressure state for {}: incoming rate {}, outgoing rate {}, ratio {}, rate limiting {}",
                                      backPressure.getHost(), incomingRate, outgoingRate, actualRatio, limiter.getRate());
                     }
                     // Otherwise reset the rate limiter:
@@ -210,11 +212,15 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
             }
             sortedStates.add(backPressure);
         }
-        
+
         if (!sortedStates.isEmpty())
-            flow.get(sortedStates).doRateLimit();
+        {
+            RateBasedBackPressureState state = flow.get(sortedStates);
+            noSpamLogger.info("Rate limiting at {} based on back-pressure state of {} replica {}", state.outgoingLimiter.getRate(), flow, state.getHost());
+            state.doRateLimit();
+        }
     }
-        
+   
     @Override
     public RateBasedBackPressureState newState(InetAddress host)
     {
