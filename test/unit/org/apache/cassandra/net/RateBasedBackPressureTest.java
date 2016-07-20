@@ -65,6 +65,12 @@ public class RateBasedBackPressureTest
         new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", FACTOR, "0", FLOW, "FAST"));
     }
     
+    @Test(expected = IllegalArgumentException.class)
+    public void testWindowSizeMustBeBiggerEqualThanTen() throws Exception
+    {
+        new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", FACTOR, "5", FLOW, "FAST"), new TestTimeSource(), 1);
+    }
+    
     @Test
     public void testFlowMustBeEitherFASTorSLOW() throws Exception
     {
@@ -256,6 +262,33 @@ public class RateBasedBackPressureTest
         assertFalse(state1.checkApplied());
         assertFalse(state2.checkApplied());
         assertTrue(state3.checkApplied());
+    }
+    
+    @Test
+    public void testBackPressureIsResetPastWindowSize() throws Exception
+    {
+        long windowSize = 6000;
+        TestTimeSource timeSource = new TestTimeSource();
+        RateBasedBackPressure strategy = new RateBasedBackPressure(ImmutableMap.of(HIGH_RATIO, "0.9", FACTOR, "10", FLOW, "FAST"), timeSource, windowSize);
+        RateBasedBackPressureState state = strategy.newState(InetAddress.getLoopbackAddress());
+        
+        // Update incoming and outgoing rate so that the ratio is 0.5:
+        state.incomingRate.update(50);
+        state.outgoingRate.update(100);
+        
+        // Move time ahead:
+        timeSource.sleep(windowSize, TimeUnit.MILLISECONDS);
+        
+        // Verify the rate is decreased by incoming/outgoing:
+        strategy.apply(Arrays.asList(state));
+        assertEquals(7.4, state.outgoingLimiter.getRate(), 0.1);
+        
+        // Move time ahead more than window size:
+        timeSource.sleep(windowSize + 1, TimeUnit.MILLISECONDS);
+        
+        // Verify the rate is reset:
+        strategy.apply(Arrays.asList(state));
+        assertEquals(Double.POSITIVE_INFINITY, state.outgoingLimiter.getRate(), 0.0);
     }
     
     public static class TestableBackPressure extends RateBasedBackPressure

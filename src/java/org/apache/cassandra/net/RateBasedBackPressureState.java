@@ -21,6 +21,7 @@ import java.net.InetAddress;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.RateLimiter;
@@ -42,13 +43,14 @@ import org.apache.cassandra.utils.TimeSource;
  * </ul>
  *
  * It also provides methods to exclusively acquire/release back-pressure windows at given intervals; 
- * this allows to apply back-pressure even under concurrent modifications.
+ * this allows to apply back-pressure even under concurrent modifications. Please also note a write lock is acquired
+ * during window acquisition so that no concurrent rate updates can screw rate computations.
  */
 public class RateBasedBackPressureState implements BackPressureState
 {
     private final InetAddress host;
     private final AtomicLong lastAcquire;
-    private final ReentrantLock acquireLock;
+    private final ReentrantReadWriteLock acquireLock;
     private final TimeSource timeSource;
     final long windowSize;
     final SlidingTimeRate incomingRate;
@@ -61,9 +63,9 @@ public class RateBasedBackPressureState implements BackPressureState
         this.timeSource = timeSource;
         this.windowSize = windowSize;
         this.lastAcquire = new AtomicLong();
-        this.acquireLock = new ReentrantLock();
-        this.incomingRate = new SlidingTimeRate(timeSource, this.windowSize, 100, TimeUnit.MILLISECONDS);
-        this.outgoingRate = new SlidingTimeRate(timeSource, this.windowSize, 100, TimeUnit.MILLISECONDS);
+        this.acquireLock = new ReentrantReadWriteLock();
+        this.incomingRate = new SlidingTimeRate(timeSource, this.windowSize, this.windowSize / 10, TimeUnit.MILLISECONDS);
+        this.outgoingRate = new SlidingTimeRate(timeSource, this.windowSize, this.windowSize / 10, TimeUnit.MILLISECONDS);
         this.outgoingLimiter = RateLimiter.create(Double.POSITIVE_INFINITY);
     }
     
@@ -76,13 +78,29 @@ public class RateBasedBackPressureState implements BackPressureState
     @Override
     public void onMessageSent()
     {
-        outgoingRate.update(1);
+        acquireLock.readLock().lock();
+        try
+        {
+            outgoingRate.update(1);
+        }
+        finally
+        {
+            acquireLock.readLock().unlock();
+        }
     }
 
     @Override
     public void onResponseReceived()
     {
-        incomingRate.update(1);
+        acquireLock.readLock().lock();
+        try
+        {
+            incomingRate.update(1);
+        }
+        finally
+        {
+            acquireLock.readLock().unlock();
+        }
     }
 
     @Override
@@ -123,7 +141,7 @@ public class RateBasedBackPressureState implements BackPressureState
     boolean tryAcquireNewWindow(long interval)
     {
         long now = timeSource.currentTimeMillis();
-        boolean acquired = (now - lastAcquire.get() >= interval) && acquireLock.tryLock();
+        boolean acquired = (now - lastAcquire.get() >= interval) && acquireLock.writeLock().tryLock();
         if (acquired)
             lastAcquire.set(now);
 
@@ -132,6 +150,6 @@ public class RateBasedBackPressureState implements BackPressureState
 
     void releaseWindow()
     {
-        acquireLock.unlock();
+        acquireLock.writeLock().unlock();
     }
 }

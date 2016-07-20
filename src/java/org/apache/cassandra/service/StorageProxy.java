@@ -1187,10 +1187,10 @@ public class StorageProxy implements StorageProxyMBean
         Map<String, Collection<InetAddress>> dcGroups = null;
         // only need to create a Message for non-local writes
         MessageOut<Mutation> message = null;
-                
+
         boolean insertLocal = false;
         ArrayList<InetAddress> endpointsToHint = null;
-        
+
         int targetsSize = Iterables.size(targets);
         List<InetAddress> backPressureHosts = new ArrayList<>(targetsSize);
 
@@ -1242,6 +1242,8 @@ public class StorageProxy implements StorageProxyMBean
             }
         }
 
+        MessagingService.instance().applyBackPressure(backPressureHosts);
+
         if (endpointsToHint != null)
             submitHint(mutation, endpointsToHint, responseHandler);
 
@@ -1256,9 +1258,7 @@ public class StorageProxy implements StorageProxyMBean
 
             for (Collection<InetAddress> dcTargets : dcGroups.values())
                 sendMessagesToNonlocalDC(message, dcTargets, responseHandler);
-        }
-        
-        MessagingService.instance().applyBackPressure(backPressureHosts);
+        }      
     }
 
     private static void checkHintOverload(InetAddress destination)

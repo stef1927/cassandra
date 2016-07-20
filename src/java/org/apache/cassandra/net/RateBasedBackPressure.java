@@ -120,6 +120,10 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
         {
             throw new IllegalArgumentException("Back-pressure factor must be >= 1");
         }
+        if (windowSize < 10)
+        {
+            throw new IllegalArgumentException("Back-pressure window size must be >= 10");
+        }
 
         this.timeSource = timeSource;
         this.windowSize = windowSize;
@@ -153,39 +157,51 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
                     // Get the incoming/outgoing rates:
                     double incomingRate = backPressure.incomingRate.get(TimeUnit.SECONDS);
                     double outgoingRate = backPressure.outgoingRate.get(TimeUnit.SECONDS);
-                    // Compute the incoming/outgoing ratio:
-                    double actualRatio = outgoingRate > 0 ? incomingRate / outgoingRate : 1;
-
-                    // If the ratio is above the high mark, try growing by the back-pressure factor:
-                    if (actualRatio >= highRatio)
+                    
+                    // If we have sent any outgoing requests during this time window, go ahead with rate limiting
+                    // (this is safe against concurrent back-pressure state updates thanks to the rw-locking in
+                    // RateBasedBackPressureState):
+                    if (outgoingRate > 0)
                     {
-                        // Only if the outgoing rate is able to keep up with the rate increase:
-                        if (limiter.getRate() <= outgoingRate)
+                        // Compute the incoming/outgoing ratio:
+                        double actualRatio = incomingRate / outgoingRate;
+
+                        // If the ratio is above the high mark, try growing by the back-pressure factor:
+                        if (actualRatio >= highRatio)
                         {
-                            double newRate = limiter.getRate() + ((limiter.getRate() * factor) / 100);
-                            if (newRate > 0 && newRate != Double.POSITIVE_INFINITY)
+                            // Only if the outgoing rate is able to keep up with the rate increase:
+                            if (limiter.getRate() <= outgoingRate)
+                            {
+                                double newRate = limiter.getRate() + ((limiter.getRate() * factor) / 100);
+                                if (newRate > 0 && newRate != Double.POSITIVE_INFINITY)
+                                {
+                                    limiter.setRate(newRate);
+                                }
+                            }
+                        }
+                        // If below, set the rate limiter at the incoming rate, decreased by factor:
+                        else
+                        {
+                            // Only if the new rate is actually less than the actual rate:
+                            double newRate = incomingRate - ((incomingRate * factor) / 100);
+                            if (newRate > 0 && newRate < limiter.getRate())
                             {
                                 limiter.setRate(newRate);
                             }
                         }
+
+                        logger.debug("Back-pressure state for {}: incoming rate {}, outgoing rate {}, ratio {}, rate limiting {}",
+                                     backPressure.getHost(), incomingRate, outgoingRate, actualRatio, limiter.getRate());
                     }
-                    // If below, set the rate limiter at the incoming rate, decreased by factor:
+                    // Otherwise reset the rate limiter:
                     else
                     {
-                        // Only if the new rate is actually less than the actual rate:
-                        double newRate = incomingRate - ((incomingRate * factor) / 100);
-                        if (newRate < limiter.getRate())
-                        {
-                            limiter.setRate(newRate);
-                        }
+                        limiter.setRate(Double.POSITIVE_INFINITY);
                     }
-
+                    
                     // Housekeeping: pruning windows and resetting the last check timestamp!
                     backPressure.incomingRate.prune();
                     backPressure.outgoingRate.prune();
-                    
-                    logger.debug("Back-pressure state for {}: incoming rate {}, outgoing rate {}, ratio {}, rate limiting {}",
-                                 backPressure.getHost(), incomingRate, outgoingRate, actualRatio, limiter.getRate());
                 }
                 finally
                 {

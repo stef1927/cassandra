@@ -46,7 +46,7 @@ public class SlidingTimeRate
      * The precision defines how accurate the rate computation is, as it will be computed over window size +/-
      * precision.
      */
-    public SlidingTimeRate(TimeSource timeSource, long size, int precision, TimeUnit unit)
+    public SlidingTimeRate(TimeSource timeSource, long size, long precision, TimeUnit unit)
     {
         Preconditions.checkArgument(size > precision, "Size should be greater than precision.");
         Preconditions.checkArgument(TimeUnit.MILLISECONDS.convert(precision, unit) >= 1, "Precision must be greater than or equal to 1 millisecond.");
