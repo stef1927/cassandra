@@ -39,7 +39,10 @@ import org.apache.cassandra.utils.TimeSource;
  * <li>outgoingRate: the rate of back-pressure supporting outgoing messages.</li>
  * <li>outgoingLimiter: the rate limiter to eventually apply to outgoing messages.</li>
  * </ul>
- *
+ * <br/>
+ * The incomingRate and outgoingRate are updated together when a response is received to guarantee consistency between 
+ * the two.
+ * <br/>
  * It also provides methods to exclusively acquire/release back-pressure windows at given intervals; 
  * this allows to apply back-pressure even under concurrent modifications. Please also note a write lock is acquired
  * during window acquisition so that no concurrent rate updates can screw rate computations.
@@ -68,11 +71,15 @@ class RateBasedBackPressureState implements BackPressureState
     }
 
     @Override
-    public void onMessageSent()
+    public void onMessageSent(MessageOut<?> message) {}
+
+    @Override
+    public void onResponseReceived()
     {
         acquireLock.readLock().lock();
         try
         {
+            incomingRate.update(1);
             outgoingRate.update(1);
         }
         finally
@@ -82,12 +89,12 @@ class RateBasedBackPressureState implements BackPressureState
     }
 
     @Override
-    public void onResponseReceived()
+    public void onResponseTimeout()
     {
         acquireLock.readLock().lock();
         try
         {
-            incomingRate.update(1);
+            outgoingRate.update(1);
         }
         finally
         {
@@ -123,13 +130,20 @@ class RateBasedBackPressureState implements BackPressureState
     {
         return this.host.hashCode();
     }
-    
+
+    @Override
+    public String toString()
+    {
+        return String.format("[host: %s, incoming rate: %.3f, outgoing rate: %.3f, rate limit: %.3f]",
+                             host, incomingRate.get(TimeUnit.SECONDS), outgoingRate.get(TimeUnit.SECONDS), outgoingLimiter.getRate());
+    }
+
     @VisibleForTesting
     void doRateLimit() 
     {
         outgoingLimiter.acquire(1);
     }
-    
+
     @VisibleForTesting
     long getLastAcquire()
     {

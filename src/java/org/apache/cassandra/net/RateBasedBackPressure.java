@@ -216,7 +216,8 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
         if (!sortedStates.isEmpty())
         {
             RateBasedBackPressureState state = flow.get(sortedStates);
-            noSpamLogger.info("Rate limiting at {} based on back-pressure state of {} replica {}", state.outgoingLimiter.getRate(), flow, state.getHost());
+            noSpamLogger.info("Rate limiting at {} based on back-pressure state of {} replica {} out of {}", 
+                              state.outgoingLimiter.getRate(), flow, state.getHost(), sortedStates);
             state.doRateLimit();
         }
     }

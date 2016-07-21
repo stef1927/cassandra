@@ -39,6 +39,51 @@ import org.apache.cassandra.config.ParameterizedClass;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class MessagingServiceTest
 {
@@ -83,39 +128,74 @@ public class MessagingServiceTest
         assertEquals("READ messages were dropped in last 5000 ms: 1250 for internal timeout and 1250 for cross node timeout", logs.get(0));
         assertEquals(7500, (int)messagingService.getDroppedMessages().get(verb.toString()));
     }
-
+    
     @Test
-    public void testUpdatesBackPressureOnRequestWhenEnabledAndWithSupportedCallback() throws UnknownHostException
+    public void testUpdatesBackPressureOnSendWhenEnabledAndWithSupportedCallback() throws UnknownHostException
     {
         MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getConnectionPool(InetAddress.getByName("127.0.0.2")).getBackPressureState();
         IAsyncCallback bpCallback = new BackPressureCallback();
         IAsyncCallback noCallback = new NoBackPressureCallback();
-        boolean ignored = false;
+        MessageOut<?> ignored = null;
 
         DatabaseDescriptor.setBackPressureEnabled(true);
-        messagingService.updateBackPressureState(InetAddress.getByName("127.0.0.2"), noCallback, ignored);
-        assertFalse(backPressureState.onRequest);
+        messagingService.updateBackPressureOnSend(InetAddress.getByName("127.0.0.2"), noCallback, ignored);
+        assertFalse(backPressureState.onSend);
 
         DatabaseDescriptor.setBackPressureEnabled(false);
-        messagingService.updateBackPressureState(InetAddress.getByName("127.0.0.2"), bpCallback, ignored);
-        assertFalse(backPressureState.onRequest);
+        messagingService.updateBackPressureOnSend(InetAddress.getByName("127.0.0.2"), bpCallback, ignored);
+        assertFalse(backPressureState.onSend);
 
         DatabaseDescriptor.setBackPressureEnabled(true);
-        messagingService.updateBackPressureState(InetAddress.getByName("127.0.0.2"), bpCallback, ignored);
-        assertTrue(backPressureState.onRequest);
+        messagingService.updateBackPressureOnSend(InetAddress.getByName("127.0.0.2"), bpCallback, ignored);
+        assertTrue(backPressureState.onSend);
     }
 
     @Test
-    public void testUpdatesBackPressureOnResponseWhenNoTimeout() throws UnknownHostException
+    public void testUpdatesBackPressureOnReceiveWhenEnabledAndWithSupportedCallback() throws UnknownHostException
     {
         MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getConnectionPool(InetAddress.getByName("127.0.0.2")).getBackPressureState();
         IAsyncCallback bpCallback = new BackPressureCallback();
+        IAsyncCallback noCallback = new NoBackPressureCallback();
+        boolean timeout = false;
 
         DatabaseDescriptor.setBackPressureEnabled(true);
-        messagingService.updateBackPressureState(InetAddress.getByName("127.0.0.2"), bpCallback, true);
-        assertFalse(backPressureState.onResponse);
-        messagingService.updateBackPressureState(InetAddress.getByName("127.0.0.2"), bpCallback, false);
-        assertTrue(backPressureState.onResponse);
+        messagingService.updateBackPressureOnReceive(InetAddress.getByName("127.0.0.2"), noCallback, timeout);
+        assertFalse(backPressureState.onReceive);
+        assertFalse(backPressureState.onTimeout);
+
+        DatabaseDescriptor.setBackPressureEnabled(false);
+        messagingService.updateBackPressureOnReceive(InetAddress.getByName("127.0.0.2"), bpCallback, timeout);
+        assertFalse(backPressureState.onReceive);
+        assertFalse(backPressureState.onTimeout);
+
+        DatabaseDescriptor.setBackPressureEnabled(true);
+        messagingService.updateBackPressureOnReceive(InetAddress.getByName("127.0.0.2"), bpCallback, timeout);
+        assertTrue(backPressureState.onReceive);
+        assertFalse(backPressureState.onTimeout);
+    }
+    
+    @Test
+    public void testUpdatesBackPressureOnTimeoutWhenEnabledAndWithSupportedCallback() throws UnknownHostException
+    {
+        MockBackPressureStrategy.MockBackPressureState backPressureState = (MockBackPressureStrategy.MockBackPressureState) messagingService.getConnectionPool(InetAddress.getByName("127.0.0.2")).getBackPressureState();
+        IAsyncCallback bpCallback = new BackPressureCallback();
+        IAsyncCallback noCallback = new NoBackPressureCallback();
+        boolean timeout = true;
+
+        DatabaseDescriptor.setBackPressureEnabled(true);
+        messagingService.updateBackPressureOnReceive(InetAddress.getByName("127.0.0.2"), noCallback, timeout);
+        assertFalse(backPressureState.onReceive);
+        assertFalse(backPressureState.onTimeout);
+
+        DatabaseDescriptor.setBackPressureEnabled(false);
+        messagingService.updateBackPressureOnReceive(InetAddress.getByName("127.0.0.2"), bpCallback, timeout);
+        assertFalse(backPressureState.onReceive);
+        assertFalse(backPressureState.onTimeout);
+
+        DatabaseDescriptor.setBackPressureEnabled(true);
+        messagingService.updateBackPressureOnReceive(InetAddress.getByName("127.0.0.2"), bpCallback, timeout);
+        assertFalse(backPressureState.onReceive);
+        assertTrue(backPressureState.onTimeout);
     }
 
     @Test
@@ -162,8 +242,9 @@ public class MessagingServiceTest
         public static class MockBackPressureState implements BackPressureState
         {
             private final InetAddress host;
-            public volatile boolean onRequest = false;
-            public volatile boolean onResponse = false;
+            public volatile boolean onSend = false;
+            public volatile boolean onReceive = false;
+            public volatile boolean onTimeout = false;
 
             private MockBackPressureState(InetAddress host)
             {
@@ -171,15 +252,21 @@ public class MessagingServiceTest
             }
 
             @Override
-            public void onMessageSent()
+            public void onMessageSent(MessageOut<?> message)
             {
-                onRequest = true;
+                onSend = true;
             }
 
             @Override
             public void onResponseReceived()
             {
-                onResponse = true;
+                onReceive = true;
+            }
+
+            @Override
+            public void onResponseTimeout()
+            {
+                onTimeout = true;
             }
 
             @Override

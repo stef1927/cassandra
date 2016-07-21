@@ -55,7 +55,7 @@ public class ResponseVerbHandler implements IVerbHandler
         
         if (callbackInfo.callback.supportsBackPressure())
         {
-            MessagingService.instance().updateBackPressureState(message.from, cb, false);
+            MessagingService.instance().updateBackPressureOnReceive(message.from, cb, false);
         }
     }
 }

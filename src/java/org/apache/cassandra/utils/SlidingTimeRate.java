@@ -159,6 +159,9 @@ public class SlidingTimeRate
     @VisibleForTesting
     public int size()
     {
-        return counters.size();
+        return counters.values().stream().reduce(new AtomicInteger(), (v1, v2) -> {
+            v1.addAndGet(v2.get());
+            return v1;
+        }).get();
     }
 }

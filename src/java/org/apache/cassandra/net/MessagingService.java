@@ -403,7 +403,7 @@ public final class MessagingService implements MessagingServiceMBean
                 
                 if (expiredCallbackInfo.callback.supportsBackPressure())
                 {
-                    updateBackPressureState(expiredCallbackInfo.target, expiredCallbackInfo.callback, true);
+                    updateBackPressureOnReceive(expiredCallbackInfo.target, expiredCallbackInfo.callback, true);
                 }
                 
                 if (expiredCallbackInfo.isFailureCallback())
@@ -451,25 +451,39 @@ public final class MessagingService implements MessagingServiceMBean
     {
         messageSinks.clear();
     }
+    
+    /**
+     * Updates the back-pressure state on sending to the given host if enabled and the given message callback supports it.
+     *
+     * @param host The replica host the back-pressure state refers to.
+     * @param callback The message callback.
+     * @param message The actual message.
+     */
+    public void updateBackPressureOnSend(InetAddress host, IAsyncCallback callback, MessageOut<?> message)
+    {
+        if (DatabaseDescriptor.backPressureEnabled() && callback.supportsBackPressure())
+        {
+            BackPressureState backPressureState = getConnectionPool(host).getBackPressureState();
+            backPressureState.onMessageSent(message);
+        }
+    }
 
     /**
-     * Updates the back-pressure state for the given host if enabled and the given message callback supports it.
-     * 
-     * Both outgoing and incoming rates are updated together to ensure the count of outgoing requests match with the
-     * one of incoming responses.
+     * Updates the back-pressure state on reception from the given host if enabled and the given message callback supports it.
      *
      * @param host The replica host the back-pressure state refers to.
      * @param callback The message callback.
      * @param timeout True if updated following a timeout, false otherwise.
      */
-    public void updateBackPressureState(InetAddress host, IAsyncCallback callback, boolean timeout)
+    public void updateBackPressureOnReceive(InetAddress host, IAsyncCallback callback, boolean timeout)
     {
         if (DatabaseDescriptor.backPressureEnabled() && callback.supportsBackPressure())
         {
             BackPressureState backPressureState = getConnectionPool(host).getBackPressureState();
-            backPressureState.onMessageSent();
             if (!timeout)
                 backPressureState.onResponseReceived();
+            else
+                backPressureState.onResponseTimeout();
         }
     }
     
@@ -774,6 +788,7 @@ public final class MessagingService implements MessagingServiceMBean
                       boolean allowHints)
     {
         int id = addCallback(handler, message, to, message.getTimeout(), handler.consistencyLevel, allowHints);
+        updateBackPressureOnSend(to, handler, message);
         sendOneWay(message.withParameter(FAILURE_CALLBACK_PARAM, ONE_BYTE), id, to);
         return id;
     }

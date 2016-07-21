@@ -27,12 +27,17 @@ public interface BackPressureState
     /**
      * Called when a message is sent to a replica.
      */
-    void onMessageSent();
+    void onMessageSent(MessageOut<?> message);
 
     /**
      * Called when a response is received from a replica.
      */
     void onResponseReceived();
+    
+    /**
+     * Called when no response is received from replica.
+     */
+    void onResponseTimeout();
 
     /**
      * Gets the current back-pressure rate limit.
