@@ -1183,6 +1183,10 @@ public class StorageProxy implements StorageProxyMBean
                                              Stage stage)
     throws OverloadedException
     {
+        int targetsSize = Iterables.size(targets);
+
+        // this dc replicas:
+        Collection<InetAddress> localDc = null;
         // extra-datacenter replicas, grouped by dc
         Map<String, Collection<InetAddress>> dcGroups = null;
         // only need to create a Message for non-local writes
@@ -1191,8 +1195,7 @@ public class StorageProxy implements StorageProxyMBean
         boolean insertLocal = false;
         ArrayList<InetAddress> endpointsToHint = null;
 
-        int targetsSize = Iterables.size(targets);
-        List<InetAddress> backPressureHosts = new ArrayList<>(targetsSize);
+        List<InetAddress> backPressureHosts = null;
 
         for (InetAddress destination : targets)
         {
@@ -1209,12 +1212,17 @@ public class StorageProxy implements StorageProxyMBean
                     // belongs on a different server
                     if (message == null)
                         message = mutation.createMessage();
+
                     String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(destination);
+
                     // direct writes to local DC or old Cassandra versions
                     // (1.1 knows how to forward old-style String message IDs; updated to int in 2.0)
                     if (localDataCenter.equals(dc))
                     {
-                        MessagingService.instance().sendRR(message, destination, responseHandler, true);
+                        if (localDc == null)
+                            localDc = new ArrayList<>(targetsSize);
+                        
+                        localDc.add(destination);
                     }
                     else
                     {
@@ -1226,8 +1234,13 @@ public class StorageProxy implements StorageProxyMBean
                                 dcGroups = new HashMap<>();
                             dcGroups.put(dc, messages);
                         }
+
                         messages.add(destination);
                     }
+
+                    if (backPressureHosts == null)
+                        backPressureHosts = new ArrayList<>(targetsSize);
+                        
                     backPressureHosts.add(destination);
                 }
             }
@@ -1237,12 +1250,14 @@ public class StorageProxy implements StorageProxyMBean
                 {
                     if (endpointsToHint == null)
                         endpointsToHint = new ArrayList<>(targetsSize);
+
                     endpointsToHint.add(destination);
                 }
             }
         }
 
-        MessagingService.instance().applyBackPressure(backPressureHosts);
+        if (backPressureHosts != null)
+            MessagingService.instance().applyBackPressure(backPressureHosts);
 
         if (endpointsToHint != null)
             submitHint(mutation, endpointsToHint, responseHandler);
@@ -1250,12 +1265,14 @@ public class StorageProxy implements StorageProxyMBean
         if (insertLocal)
             performLocally(stage, mutation::apply, responseHandler);
 
+        if (localDc != null) 
+        {
+            for (InetAddress destination : localDc)
+                MessagingService.instance().sendRR(message, destination, responseHandler, true);
+        }
         if (dcGroups != null)
         {
             // for each datacenter, send the message to one node to relay the write to other replicas
-            if (message == null)
-                message = mutation.createMessage();
-
             for (Collection<InetAddress> dcTargets : dcGroups.values())
                 sendMessagesToNonlocalDC(message, dcTargets, responseHandler);
         }      
