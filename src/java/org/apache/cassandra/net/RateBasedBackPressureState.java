@@ -37,7 +37,6 @@ import org.apache.cassandra.utils.TimeSource;
  * <li>windowSize: the length of the back-pressure window in milliseconds.</li>
  * <li>incomingRate: the rate of back-pressure supporting incoming messages.</li>
  * <li>outgoingRate: the rate of back-pressure supporting outgoing messages.</li>
- * <li>overload: a boolean flag to notify the destination replica host is overloaded.</li>
  * <li>outgoingLimiter: the rate limiter to eventually apply to outgoing messages.</li>
  * </ul>
  *
