@@ -974,7 +974,7 @@ class Shell(cmd.Cmd):
                 except EOFError:
                     self.handle_eof()
                 except CQL_ERRORS, cqlerr:
-                    self.printerr(str(cqlerr))
+                    self.printerr(cqlerr.message.encode(self.encoding))
                 except KeyboardInterrupt:
                     self.reset_statement()
                     print
@@ -1109,10 +1109,10 @@ class Shell(cmd.Cmd):
                 break
             except cassandra.OperationTimedOut, err:
                 self.refresh_schema_metadata_best_effort()
-                self.printerr(str(err.__class__.__name__) + ": " + str(err))
+                self.printerr('%s: %s' % (err.__class__.__name__, err.message.encode(self.encoding)))
                 return False
             except CQL_ERRORS, err:
-                self.printerr(str(err.__class__.__name__) + ": " + str(err))
+                self.printerr('%s: %s' % (err.__class__.__name__, err.message.encode(self.encoding)))
                 return False
             except Exception, err:
                 import traceback
@@ -2201,7 +2201,7 @@ def main(options, hostname, port):
     except KeyboardInterrupt:
         sys.exit('Connection aborted.')
     except CQL_ERRORS, e:
-        sys.exit('Connection error: %s' % (e,))
+        sys.exit('Connection error: %s' % (e.message.encode(shell.encoding)))
     except VersionNotSupported, e:
         sys.exit('Unsupported CQL version: %s' % (e,))
     if options.debug:
