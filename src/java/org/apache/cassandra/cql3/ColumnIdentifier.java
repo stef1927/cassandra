@@ -42,6 +42,7 @@ public class ColumnIdentifier implements IMeasurableMemory, Comparable<ColumnIde
     private static final String ESCAPED_DOUBLE_QUOTE = Matcher.quoteReplacement("\"\"");
     
     public final ByteBuffer bytes;
+    private final int bytesHash;
     private final String text;
     /**
      * since these objects are compared frequently, we stash an efficiently compared prefix of the bytes, in the expectation
@@ -78,6 +79,7 @@ public class ColumnIdentifier implements IMeasurableMemory, Comparable<ColumnIde
     {
         this.text = keepCase ? rawText : rawText.toLowerCase(Locale.US);
         this.bytes = ByteBufferUtil.bytes(this.text);
+        this.bytesHash = this.bytes.hashCode();
         this.prefixComparison = prefixComparison(bytes);
         this.interned = false;
     }
@@ -90,6 +92,7 @@ public class ColumnIdentifier implements IMeasurableMemory, Comparable<ColumnIde
     private ColumnIdentifier(ByteBuffer bytes, String text, boolean interned)
     {
         this.bytes = bytes;
+        this.bytesHash = this.bytes.hashCode();
         this.text = text;
         this.interned = interned;
         this.prefixComparison = prefixComparison(bytes);
@@ -126,7 +129,7 @@ public class ColumnIdentifier implements IMeasurableMemory, Comparable<ColumnIde
     @Override
     public final int hashCode()
     {
-        return bytes.hashCode();
+        return bytesHash;
     }
 
     @Override
@@ -178,6 +181,7 @@ public class ColumnIdentifier implements IMeasurableMemory, Comparable<ColumnIde
     public int compareTo(ColumnIdentifier that)
     {
         int c = Long.compare(this.prefixComparison, that.prefixComparison);
+
         if (c != 0)
             return c;
         if (this == that)

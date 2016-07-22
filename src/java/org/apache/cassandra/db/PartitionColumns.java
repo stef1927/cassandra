@@ -18,10 +18,12 @@
 package org.apache.cassandra.db;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 import com.google.common.collect.Iterators;
 
 import org.apache.cassandra.config.ColumnDefinition;
+import org.apache.cassandra.cql3.ColumnIdentifier;
 import org.apache.cassandra.utils.btree.BTreeSet;
 
 import static java.util.Comparator.naturalOrder;
@@ -36,12 +38,17 @@ public class PartitionColumns implements Iterable<ColumnDefinition>
 
     public final Columns statics;
     public final Columns regulars;
+    public final Set<ColumnIdentifier> allIdentifiers;
 
     public PartitionColumns(Columns statics, Columns regulars)
     {
         assert statics != null && regulars != null;
         this.statics = statics;
         this.regulars = regulars;
+
+        this.allIdentifiers = new HashSet<>();
+        this.allIdentifiers.addAll(statics.stream().map(c -> c.name).collect(Collectors.toSet()));
+        this.allIdentifiers.addAll(regulars.stream().map(c -> c.name).collect(Collectors.toSet()));
     }
 
     public static PartitionColumns of(ColumnDefinition column)
@@ -86,7 +93,8 @@ public class PartitionColumns implements Iterable<ColumnDefinition>
 
     public boolean contains(ColumnDefinition column)
     {
-        return column.isStatic() ? statics.contains(column) : regulars.contains(column);
+        return allIdentifiers.contains(column.name);
+        //return column.isStatic() ? statics.contains(column) : regulars.contains(column);
     }
 
     public boolean includes(PartitionColumns columns)
