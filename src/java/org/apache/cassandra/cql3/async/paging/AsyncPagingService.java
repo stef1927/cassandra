@@ -29,8 +29,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelPromise;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.cql3.QueryOptions;
 import org.apache.cassandra.cql3.ResultSet;
@@ -47,7 +45,6 @@ import org.apache.cassandra.transport.Connection;
 import org.apache.cassandra.transport.Frame;
 import org.apache.cassandra.transport.Message;
 import org.apache.cassandra.transport.messages.ResultMessage;
-import org.apache.cassandra.utils.JVMStabilityInspector;
 
 import static org.apache.cassandra.cql3.statements.RequestValidations.checkFalse;
 
@@ -533,14 +530,10 @@ public class AsyncPagingService
      */
     private final static class AsyncPagingImpl implements PageBuilder.Callback
     {
-        private final Connection connection;
-        private final QueryOptions.AsyncPagingOptions options;
         private final AsyncPageWriter pageWriter;
 
         AsyncPagingImpl(Connection connection, QueryOptions.AsyncPagingOptions options, long timeoutMillis)
         {
-            this.connection = connection;
-            this.options = options;
             this.pageWriter =  new AsyncPageWriter(connection, options.maxPagesPerSecond, timeoutMillis);
         }
 
@@ -554,31 +547,8 @@ public class AsyncPagingService
         {
             if (logger.isTraceEnabled())
                 logger.trace("Processing {}", page);
+
             pageWriter.sendPage(page.makeFrame(), !page.last());
-
-            if (page.seqNo == 1)
-                writeToChannel(pageWriter);
-        }
-
-        /**
-         * Write the page writer (a chunked input implementation) to the channel so that Netty's chunked write
-         * handler (already added to the channel pipe) will try to send pages to the client when it can accept
-         * them, see {@link io.netty.handler.stream.ChunkedInput} and {@link io.netty.handler.stream.ChunkedWriteHandler}.
-         */
-        private void writeToChannel(Object obj)
-        {
-            Channel channel = connection.channel();
-            ChannelPromise promise = channel.newPromise();
-            promise.addListener(fut -> {
-                if (!fut.isSuccess())
-                {
-                    Throwable t = fut.cause();
-                    JVMStabilityInspector.inspectThrowable(t);
-                    logger.error("Failed writing {} for {}", obj, options.uuid, t);
-                }
-            });
-
-            channel.writeAndFlush(obj, promise);
         }
 
     }

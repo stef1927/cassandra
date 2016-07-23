@@ -19,10 +19,6 @@ package org.apache.cassandra.db.filter;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.Optional;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.rows.*;
@@ -43,8 +39,6 @@ import org.apache.cassandra.utils.ByteBufferUtil;
  */
 public abstract class DataLimits
 {
-    private static final Logger logger = LoggerFactory.getLogger(DataLimits.class);
-
     public static final Serializer serializer = new Serializer();
 
     public static final int NO_LIMIT = Integer.MAX_VALUE;

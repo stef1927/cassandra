@@ -19,53 +19,54 @@
 package org.apache.cassandra.cql3.async.paging;
 
 import java.util.Arrays;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.google.common.util.concurrent.RateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.stream.ChunkedInput;
-import io.netty.handler.stream.ChunkedWriteHandler;
 import org.apache.cassandra.db.monitoring.ApproximateTime;
 import org.apache.cassandra.transport.Connection;
 import org.apache.cassandra.transport.Frame;
-import org.apache.cassandra.transport.Server;
+import org.apache.cassandra.utils.JVMStabilityInspector;
 
 /**
- * A netty chunked input composed of a queue of pages. {@link AsyncPagingService} puts pages into this queue
- * whilst a Netty ChunkWriteHandler called {@link Server#CHUNKED_WRITER} reads pages from this queue and writes
- * them to the client, when it is ready to receive them, that is when the channel is writable.
+ *
  */
-class AsyncPageWriter implements ChunkedInput<Frame>
+class AsyncPageWriter
 {
     private static final Logger logger = LoggerFactory.getLogger(AsyncPageWriter.class);
 
-    private final Channel channel;
-    private final ChunkedWriteHandler handler;
     private final RateLimiter limiter;
     private final PageQueue pages;
-    private volatile boolean completed;
-    private volatile boolean closed;
-    private int[] queueSizeDist = new int[PageQueue.LENGTH + 1];
+    private final Writer writer;
 
     AsyncPageWriter(Connection connection, int maxPagesPerSecond, long timeoutMillis)
     {
-        this.channel = connection.channel();
-        this.handler = (ChunkedWriteHandler)channel.pipeline().get(Server.CHUNKED_WRITER);
         this.limiter = RateLimiter.create(maxPagesPerSecond > 0 ? maxPagesPerSecond : Double.MAX_VALUE);
-        this.pages = new PageQueue(handler, timeoutMillis);
+        this.pages = new PageQueue(timeoutMillis);
+        this.writer = new Writer(connection.channel(), pages);
     }
 
     /**
-     * Adds a page to the queue so that it can be sent later on when the channel is available.
-     * This method will block for up to timeoutMillis if the queue if full.
+     * Add a page to the queue, potentially blocking if there is no space.
+     *
+     * @param frame, the page
+     * @param hasMorePages, whether there are more pages to follow
      */
     void sendPage(Frame frame, boolean hasMorePages)
     {
-        if (closed)
-            throw new RuntimeException("Chunked input was closed");
+        if (writer.completed())
+            throw new RuntimeException("Received unexpected page");
+
+        if (!writer.running)
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("Starting writer");
+            writer.schedule();
+        }
 
         try
         {
@@ -77,13 +78,12 @@ class AsyncPageWriter implements ChunkedInput<Frame>
             throw t;
         }
 
-        if (channel.isWritable() && pages.size() > 0)
-            handler.resumeTransfer();
-
         if (!hasMorePages)
         {
-            assert !completed : "Unexpected completed status";
-            completed = true;
+            assert !writer.completed() : "Unexpected completed status";
+            if (logger.isTraceEnabled())
+                logger.trace("Completing writer");
+            writer.complete();
         }
         else
         {
@@ -91,36 +91,102 @@ class AsyncPageWriter implements ChunkedInput<Frame>
         }
     }
 
-    public boolean isEndOfInput() throws Exception
-    {
-        return completed && pages.isEmpty();
-    }
-
-    public void close() throws Exception
-    {
-        if (!closed)
-        {
-            closed = true;
-            if (logger.isTraceEnabled())
-                logger.trace("Closing chunked input, pending pages: {}, queue size dist {}",
-                              pages.size(), Arrays.toString(queueSizeDist));
-        }
-    }
+//    private void writeToChannel(Object obj)
+//    {
+//        Channel channel = connection.channel();
+//        ChannelPromise promise = channel.newPromise();
+//        promise.addListener(fut -> {
+//            if (!fut.isSuccess())
+//            {
+//                Throwable t = fut.cause();
+//                JVMStabilityInspector.inspectThrowable(t);
+//                logger.error("Failed writing {} for {}", obj, options.uuid, t);
+//            }
+//        });
+//
+//        channel.writeAndFlush(obj, promise);
+//    }
 
     /**
-     * Removes a page from the queue and returns it to the caller, the chunked writer, which will write
-     * it to the client. We can return null to indicate there is nothing to read at the moment, but if
-     * we do this then we must call {@link this#handler#resumeTransfer()} later on when we do have something to read.
-     * If we cannot acquire a permit from the reader, we try again after a small and random amount of time.
-     *
-     * @return a page to write to the client, null if no page is available.
+     * A runnable that can be submitted to the Netty event loop
+     * in order to write and flush synchronously. If it cannot
+     * keep up then the producer will be blocked by the pages queue.
      */
-    public Frame readChunk(ChannelHandlerContext channelHandlerContext) throws Exception
+    private final static class Writer implements Runnable
     {
-        if (logger.isTraceEnabled())
-            queueSizeDist[pages.size()]++;
+        private final Channel channel;
+        private final PageQueue queue;
+        private final AtomicBoolean completed;
+        private final int[] queueSizeDist = new int[PageQueue.LENGTH + 1];
+        private boolean running;
+        private long startTime;
 
-        return pages.poll();
+        public Writer(Channel channel, PageQueue queue)
+        {
+            this.channel = channel;
+            this.queue = queue;
+            this.completed = new AtomicBoolean(false);
+            this.running = false;
+        }
+
+        public boolean complete()
+        {
+            return completed.compareAndSet(false, true);
+        }
+
+        public boolean completed()
+        {
+            return completed.get() && queue.isEmpty();
+        }
+
+        public void schedule()
+        {
+            channel.eventLoop().schedule(this, 10000, TimeUnit.NANOSECONDS);
+            if (!running)
+            {
+                startTime = System.nanoTime();
+                running = true;
+            }
+        }
+
+        public void run()
+        {
+            try
+            {
+                if (logger.isTraceEnabled())
+                    queueSizeDist[queue.size()]++;
+
+                Frame page = queue.poll();
+                while (page != null)
+                {
+                    channel.write(page, channel.voidPromise());
+                    page = queue.poll();
+                }
+
+                channel.flush();
+
+                if (!completed())
+                {
+                    schedule();
+                }
+                else
+                {
+                    if (logger.isTraceEnabled())
+                    {
+                        int totInvocations = Arrays.stream(queueSizeDist).reduce(Integer::sum).getAsInt();
+                        long duration = (System.nanoTime() - startTime) / 1000;
+                        logger.trace("Writer stopped with queue size dist: {}, {} invocations in {} micros, avg. invocation rate: {} micros",
+                                     Arrays.toString(queueSizeDist), totInvocations, duration, duration / totInvocations);
+                    }
+                    running = false;
+                }
+            }
+            catch (Throwable t)
+            {
+                JVMStabilityInspector.inspectThrowable(t);
+                logger.error("Failed to write page to queue with error {}", t);
+            }
+        }
     }
 
     /**
@@ -135,16 +201,13 @@ class AsyncPageWriter implements ChunkedInput<Frame>
         final long timeoutMillis;
         Frame[] pages = new Frame[LENGTH];
 
-        final ChunkedWriteHandler handler;
-
         volatile int producerIndex = -1; // the index where the producer is writing to
         volatile int publishedIndex = -1; // the index where the producer has written to
         volatile int consumerIndex = 0; // the index where the consumer is reading from
 
-        PageQueue(ChunkedWriteHandler handler, long timeoutMillis)
+        PageQueue(long timeoutMillis)
         {
             this.timeoutMillis = timeoutMillis;
-            this.handler = handler;
             assert (pages.length & (pages.length - 1)) == 0 : "Results length must be a power of 2";
         }
 
@@ -180,20 +243,13 @@ class AsyncPageWriter implements ChunkedInput<Frame>
         public void offer(Frame frame)
         {
             long start = ApproximateTime.currentTimeMillis();
-            long lastFlushed = start;
 
             producerIndex++;
             while(producerIndex - consumerIndex >= pages.length)
             { // wait for consumer to read
                 Thread.yield();
 
-                long now = ApproximateTime.currentTimeMillis();
-                if (now - lastFlushed > ApproximateTime.precision()) {
-                    handler.resumeTransfer();
-                    lastFlushed = now;
-                }
-
-                if (now - start > timeoutMillis)
+                if (ApproximateTime.currentTimeMillis() - start > timeoutMillis)
                     throw new RuntimeException("Timed out waiting consumer to catch up");
             }
 
