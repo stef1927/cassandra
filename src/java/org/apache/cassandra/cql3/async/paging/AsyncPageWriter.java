@@ -18,8 +18,6 @@
 
 package org.apache.cassandra.cql3.async.paging;
 
-import java.util.Arrays;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.google.common.util.concurrent.RateLimiter;
@@ -61,13 +59,6 @@ class AsyncPageWriter
         if (writer.completed())
             throw new RuntimeException("Received unexpected page");
 
-        if (!writer.running)
-        {
-            if (logger.isTraceEnabled())
-                logger.trace("Starting writer");
-            writer.schedule();
-        }
-
         try
         {
             pages.offer(frame);
@@ -77,6 +68,8 @@ class AsyncPageWriter
             frame.release();
             throw t;
         }
+
+        writer.execute();
 
         if (!hasMorePages)
         {
@@ -117,16 +110,12 @@ class AsyncPageWriter
         private final Channel channel;
         private final PageQueue queue;
         private final AtomicBoolean completed;
-        private final int[] queueSizeDist = new int[PageQueue.LENGTH + 1];
-        private boolean running;
-        private long startTime;
 
         public Writer(Channel channel, PageQueue queue)
         {
             this.channel = channel;
             this.queue = queue;
             this.completed = new AtomicBoolean(false);
-            this.running = false;
         }
 
         public boolean complete()
@@ -139,47 +128,26 @@ class AsyncPageWriter
             return completed.get() && queue.isEmpty();
         }
 
-        public void schedule()
+        public void execute()
         {
-            channel.eventLoop().schedule(this, 10000, TimeUnit.NANOSECONDS);
-            if (!running)
-            {
-                startTime = System.nanoTime();
-                running = true;
-            }
+            channel.eventLoop().execute(this);
         }
 
         public void run()
         {
             try
             {
-                if (logger.isTraceEnabled())
-                    queueSizeDist[queue.size()]++;
-
+                boolean written = false;
                 Frame page = queue.poll();
                 while (page != null)
                 {
+                    written = true;
                     channel.write(page, channel.voidPromise());
                     page = queue.poll();
                 }
 
-                channel.flush();
-
-                if (!completed())
-                {
-                    schedule();
-                }
-                else
-                {
-                    if (logger.isTraceEnabled())
-                    {
-                        int totInvocations = Arrays.stream(queueSizeDist).reduce(Integer::sum).getAsInt();
-                        long duration = (System.nanoTime() - startTime) / 1000;
-                        logger.trace("Writer stopped with queue size dist: {}, {} invocations in {} micros, avg. invocation rate: {} micros",
-                                     Arrays.toString(queueSizeDist), totInvocations, duration, duration / totInvocations);
-                    }
-                    running = false;
-                }
+                if (written)
+                    channel.flush();
             }
             catch (Throwable t)
             {
