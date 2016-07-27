@@ -27,10 +27,12 @@ import java.util.stream.Collectors;
 
 import javax.naming.OperationNotSupportedException;
 
-import com.datastax.driver.core.AsyncPagingOptions;
 import com.datastax.driver.core.ColumnDefinitions;
 import com.datastax.driver.core.ColumnMetadata;
+import com.datastax.driver.core.PagingState;
+import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.Row;
+import com.datastax.driver.core.SimpleStatement;
 import com.datastax.driver.core.Statement;
 import com.datastax.driver.core.TableMetadata;
 import com.datastax.driver.core.Token;
@@ -44,6 +46,7 @@ import org.apache.cassandra.stress.settings.StressSettings;
 import org.apache.cassandra.stress.util.JavaDriverClient;
 import org.apache.cassandra.stress.util.ThriftClient;
 import org.apache.cassandra.stress.util.Timer;
+import org.apache.cassandra.thrift.ThriftConversion;
 
 public class TokenRangeQuery extends Operation
 {
@@ -67,7 +70,7 @@ public class TokenRangeQuery extends Operation
         this.tableMetadata = tableMetadata;
         this.tokenRangeIterator = tokenRangeIterator;
         this.columns = sanitizeColumns(def.columns, tableMetadata);
-        this.pageSize = def.page_size;
+        this.pageSize = isWarmup ? Math.min(100, def.page_size) : def.page_size;
         this.isWarmup = isWarmup;
         this.resultsWriter = maybeCreateResultsWriter(settings.tokenRange);
     }
@@ -105,8 +108,8 @@ public class TokenRangeQuery extends Operation
     {
         public final TokenRange tokenRange;
         public final String query;
+        public PagingState pagingState;
         public Set<Token> partitions = new HashSet<>();
-        public com.datastax.driver.core.RowIterator rowIterator;
 
         public State(TokenRange tokenRange, String query)
         {
@@ -121,7 +124,7 @@ public class TokenRangeQuery extends Operation
         }
     }
 
-    abstract class Runner implements RunOp
+    abstract static class Runner implements RunOp
     {
         int partitionCount;
         int rowCount;
@@ -137,31 +140,47 @@ public class TokenRangeQuery extends Operation
         {
             return rowCount;
         }
+    }
 
-        State getState()
+    private class JavaDriverRun extends Runner
+    {
+        final JavaDriverClient client;
+
+        private JavaDriverRun(JavaDriverClient client)
+        {
+            this.client = client;
+        }
+
+        public boolean run() throws Exception
         {
             State state = currentState.get();
             if (state == null)
             { // start processing a new token range
-            TokenRange range = tokenRangeIterator.next();
-            if (range == null)
-                return null; // no more token ranges to process
+                TokenRange range = tokenRangeIterator.next();
+                if (range == null)
+                    return true; // no more token ranges to process
 
                 state = new State(range, buildQuery(range));
                 currentState.set(state);
             }
-            return state;
-        }
 
-        void processPage(State state, com.datastax.driver.core.RowIterator rowIterator)
-        {
-            int remaining = pageSize; // process at most one page
+            ResultSet results;
+            Statement statement = new SimpleStatement(state.query);
+            statement.setRoutingTokenRange(state.tokenRange);
+            statement.setFetchSize(pageSize);
+            statement.setConsistencyLevel(JavaDriverClient.from(ThriftConversion.fromThrift(settings.command.consistencyLevel)));
 
-            while (rowIterator.hasNext())
+            if (state.pagingState != null)
+                statement.setPagingState(state.pagingState);
+
+            results = client.getSession().execute(statement);
+            state.pagingState = results.getExecutionInfo().getPagingState();
+
+            int remaining = results.getAvailableWithoutFetching();
+            rowCount += remaining;
+
+            for (Row row : results)
             {
-                Row row = rowIterator.next();
-                rowCount++;
-
                 // this call will only succeed if we've added token(partition keys) to the query
                 Token partition = row.getPartitionKeyToken();
                 if (!state.partitions.contains(partition))
@@ -180,6 +199,12 @@ public class TokenRangeQuery extends Operation
             if (shouldSaveResults())
                 flushResults();
 
+            if (results.isExhausted() || isWarmup)
+            { // no more pages to fetch or just warming up, ready to move on to another token range
+                currentState.set(null);
+            }
+
+            return true;
         }
 
         private boolean shouldSaveResults()
@@ -216,60 +241,6 @@ public class TokenRangeQuery extends Operation
         }
     }
 
-    private Runner newJavaDriverRunner(JavaDriverClient client)
-    {
-        return new BulkLoadPages(client);
-    }
-
-    private class BulkLoadPages extends Runner
-    {
-        final JavaDriverClient client;
-
-        private BulkLoadPages(JavaDriverClient client)
-        {
-            this.client = client;
-        }
-
-        public boolean run() throws Exception
-        {
-            State state = getState();
-            if (state == null)
-                return true;
-
-            com.datastax.driver.core.RowIterator results;
-            if (state.rowIterator != null)
-            {
-                if (state.rowIterator.hasNext() && !isWarmup)
-                {
-                    results = state.rowIterator;
-                }
-                else
-                {  // move on to the next token
-                    state.rowIterator.close();
-                    currentState.set(null);
-                    state = getState();
-                    if (state == null)
-                        return true;
-
-                    results = fetchRows(state);
-                }
-            }
-            else
-            {
-                results = fetchRows(state);
-            }
-
-            processPage(state, results);
-            return true;
-        }
-
-        private com.datastax.driver.core.RowIterator fetchRows(State state) throws Exception
-        {
-            Statement statement = client.makeTokenRangeStatement(state.query, state.tokenRange);
-            return client.getSession().execute(statement, AsyncPagingOptions.create(pageSize, AsyncPagingOptions.PageUnit.ROWS));
-        }
-    }
-
 
     private String buildQuery(TokenRange tokenRange)
     {
@@ -284,6 +255,8 @@ public class TokenRangeQuery extends Operation
         ret.append(", ");
         ret.append(columns);
         ret.append(" FROM ");
+        ret.append(tableMetadata.getKeyspace().getName());
+        ret.append(".");
         ret.append(tableMetadata.getName());
         if (start != null || end != null)
             ret.append(" WHERE ");
@@ -307,7 +280,7 @@ public class TokenRangeQuery extends Operation
         return ret.toString();
     }
 
-    private class ThriftRun extends Runner
+    private static class ThriftRun extends Runner
     {
         final ThriftClient client;
 
@@ -326,7 +299,7 @@ public class TokenRangeQuery extends Operation
     @Override
     public void run(JavaDriverClient client) throws IOException
     {
-        timeWithRetry(newJavaDriverRunner(client));
+        timeWithRetry(new JavaDriverRun(client));
     }
 
     @Override

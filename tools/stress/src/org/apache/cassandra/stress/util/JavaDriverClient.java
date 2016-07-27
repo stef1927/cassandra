@@ -25,6 +25,7 @@ import javax.net.ssl.SSLContext;
 import com.datastax.driver.core.*;
 import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
 import com.datastax.driver.core.policies.LoadBalancingPolicy;
+import com.datastax.driver.core.policies.TokenAwarePolicy;
 import com.datastax.driver.core.policies.WhiteListPolicy;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import io.netty.util.internal.logging.Slf4JLoggerFactory;
@@ -99,10 +100,7 @@ public class JavaDriverClient
         if (settings.node.isWhiteList)
             ret = new WhiteListPolicy(ret == null ? policyBuilder.build() : ret, settings.node.resolveAll(settings.port.nativePort));
 
-        if (settings.tokenRange.localRouting)
-            ret = new TokenRangeRoutingPolicy(ret == null ? policyBuilder.build() : ret);
-
-        return ret;
+        return new TokenAwarePolicy(ret == null ? policyBuilder.build() : ret);
     }
 
     public PreparedStatement prepare(String query)
