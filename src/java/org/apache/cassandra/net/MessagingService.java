@@ -502,7 +502,7 @@ public final class MessagingService implements MessagingServiceMBean
             backPressure.apply(StreamSupport.stream(hosts.spliterator(), false)
                     .filter(h -> !h.equals(FBUtilities.getBroadcastAddress()))
                     .map(h -> getConnectionPool(h).getBackPressureState())
-                    .collect(Collectors.toList()));
+                    .collect(Collectors.toSet()));
         }
     }
 

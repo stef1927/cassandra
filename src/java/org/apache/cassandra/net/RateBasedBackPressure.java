@@ -19,11 +19,13 @@ package org.apache.cassandra.net;
 
 import java.net.InetAddress;
 import java.util.Map;
-import java.util.SortedSet;
-import java.util.TreeSet;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.RateLimiter;
 
@@ -35,6 +37,7 @@ import org.apache.cassandra.config.ParameterizedClass;
 import org.apache.cassandra.utils.NoSpamLogger;
 import org.apache.cassandra.utils.SystemTimeSource;
 import org.apache.cassandra.utils.TimeSource;
+import org.apache.cassandra.utils.concurrent.IntervalLock;
 
 /**
  * Back-pressure algorithm based on rate limiting according to the ratio between incoming and outgoing rates, computed
@@ -50,7 +53,7 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
     private static final String BACK_PRESSURE_FLOW = "FAST";
 
     private static final Logger logger = LoggerFactory.getLogger(RateBasedBackPressure.class);
-    private static final NoSpamLogger noSpamLogger = NoSpamLogger.getLogger(logger, 1, TimeUnit.MINUTES);
+    private static final NoSpamLogger noSpamLogger = NoSpamLogger.getLogger(logger, 30, TimeUnit.SECONDS);
     
     protected final TimeSource timeSource;
     protected final double highRatio;
@@ -58,26 +61,13 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
     protected final Flow flow;
     protected final long windowSize;
     
+    private final Cache<Set<RateBasedBackPressureState>, IntervalRateLimiter> rateLimiters = 
+            CacheBuilder.newBuilder().expireAfterAccess(1, TimeUnit.HOURS).build();
+    
     public enum Flow
     {
-        FAST
-        {
-            @Override
-            public RateBasedBackPressureState get(SortedSet<RateBasedBackPressureState> states)
-            {
-                return states.first();
-            }
-        },
-        SLOW
-        {
-            @Override
-            public RateBasedBackPressureState get(SortedSet<RateBasedBackPressureState> states)
-            {
-                return states.last();
-            }
-        };
-
-        public abstract RateBasedBackPressureState get(SortedSet<RateBasedBackPressureState> states);
+        FAST,
+        SLOW;
     }
 
     public static ParameterizedClass withDefaultParams()
@@ -134,27 +124,24 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
     }
 
     @Override
-    public void apply(Iterable<RateBasedBackPressureState> states)
-    {
-        SortedSet<RateBasedBackPressureState> sortedStates = new TreeSet<>((s1, s2) -> 
-        {
-            if (s1.equals(s2))
-                return 0;
-            if (s1.getBackPressureRateLimit() < s2.getBackPressureRateLimit())
-                return 1;
-            if (s2.getBackPressureRateLimit() < s1.getBackPressureRateLimit())
-                return -1;
-
-            return s1.hashCode() - s2.hashCode();
-        });
-        
+    public void apply(Set<RateBasedBackPressureState> states)
+    {        
+        // Go through the back-pressure states, try updating each of them and collect min/max rates:
+        boolean isUpdated = false;
+        double minRate = Double.POSITIVE_INFINITY;
+        double maxRate = Double.NEGATIVE_INFINITY;
+        RateLimiter currentMin = null;
+        RateLimiter currentMax = null;
         for (RateBasedBackPressureState backPressure : states) 
         {
-            if (backPressure.tryAcquireNewWindow(windowSize))
+            // Try acquiring the interval lock:
+            if (backPressure.tryIntervalLock(windowSize))
             {
+                // If acquired, proceed updating thi back-pressure state rate limit:
+                isUpdated = true;
                 try
                 {
-                    RateLimiter limiter = backPressure.outgoingLimiter;
+                    RateLimiter limiter = backPressure.rateLimiter;
 
                     // Get the incoming/outgoing rates:
                     double incomingRate = backPressure.incomingRate.get(TimeUnit.SECONDS);
@@ -207,24 +194,88 @@ public class RateBasedBackPressure implements BackPressureStrategy<RateBasedBack
                 }
                 finally
                 {
-                    backPressure.releaseWindow();
+                    backPressure.releaseIntervalLock();
                 }
             }
-            sortedStates.add(backPressure);
+            if (backPressure.rateLimiter.getRate() <= minRate)
+            {
+                minRate = backPressure.rateLimiter.getRate();
+                currentMin = backPressure.rateLimiter;
+            }
+            if (backPressure.rateLimiter.getRate() >= maxRate)
+            {
+                maxRate = backPressure.rateLimiter.getRate();
+                currentMax = backPressure.rateLimiter;
+            }
         }
 
-        if (!sortedStates.isEmpty())
+        // Now find the rate limiter corresponding to the replica group represented by these back-pressure states:
+        if (!states.isEmpty())
         {
-            RateBasedBackPressureState state = flow.get(sortedStates);
-            noSpamLogger.info("Rate limiting at {} based on back-pressure state of {} replica {} out of {}", 
-                              state.outgoingLimiter.getRate(), flow, state.getHost(), sortedStates);
-            state.doRateLimit();
+            try
+            {
+                // Get the rate limiter:
+                IntervalRateLimiter rateLimiter = rateLimiters.get(states, () -> {
+                    return new IntervalRateLimiter(timeSource);
+                });
+
+                // If the back-pressure was updated and we acquire the interval lock for the rate limiter of this group:
+                if (isUpdated && rateLimiter.tryIntervalLock(windowSize))
+                {
+                    try
+                    {
+                        // Update the rate limiter value based on the configured flow:
+                        if (flow.equals(Flow.FAST))
+                            rateLimiter.limiter = currentMax;
+                        else
+                            rateLimiter.limiter = currentMin;
+                        
+                        noSpamLogger.info("{} currently applied for remote replicas: {}", rateLimiter.limiter, states);
+                    }
+                    finally
+                    {
+                        rateLimiter.releaseIntervalLock();
+                    }
+                }
+                // Assigning a single rate limiter per replica group once per window size allows the back-pressure rate 
+                // limiting to be stable within the group itself.
+
+                // Finally apply the rate limit:
+                doRateLimit(rateLimiter.limiter);
+            }
+            catch (ExecutionException ex)
+            {
+                throw new IllegalStateException(ex);
+            }
         }
     }
-   
+
     @Override
     public RateBasedBackPressureState newState(InetAddress host)
     {
         return new RateBasedBackPressureState(host, timeSource, windowSize);
+    }
+    
+    @VisibleForTesting
+    RateLimiter getRateLimiterForReplicaGroup(Set<RateBasedBackPressureState> states)
+    {
+        IntervalRateLimiter rateLimiter = rateLimiters.getIfPresent(states);
+        return rateLimiter != null ? rateLimiter.limiter : RateLimiter.create(Double.POSITIVE_INFINITY);
+    }
+
+    @VisibleForTesting
+    void doRateLimit(RateLimiter rateLimiter)
+    {
+        rateLimiter.acquire(1);
+    }
+
+    private static class IntervalRateLimiter extends IntervalLock
+    {
+        public volatile RateLimiter limiter = RateLimiter.create(Double.POSITIVE_INFINITY);
+
+        public IntervalRateLimiter(TimeSource timeSource)
+        {
+            super(timeSource);
+        }
     }
 }
