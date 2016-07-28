@@ -113,6 +113,12 @@ final class LogFile
     {
         try
         {
+            // we sync the parent folders before content deletion to ensure
+            // any previously deleted files (see SSTableTider) are not
+            // incorrectly picked up by record.getExistingFiles() in
+            // deleteRecordFiles(), see CASSANDRA-12261
+            Throwables.maybeFail(syncFolder(accumulate));
+
             deleteFilesForRecordsOfType(committed() ? Type.REMOVE : Type.ADD);
 
             // we sync the parent folders between contents and log deletion
