@@ -32,6 +32,7 @@ import org.apache.cassandra.concurrent.StageManager;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ReadCommand;
 import org.apache.cassandra.db.Keyspace;
+import org.apache.cassandra.db.ReadResponse;
 import org.apache.cassandra.exceptions.ReadTimeoutException;
 import org.apache.cassandra.exceptions.UnavailableException;
 import org.apache.cassandra.metrics.ReadRepairMetrics;
@@ -197,7 +198,13 @@ public class ReadCallback<TMessage, TResolved> implements IAsyncCallback<TMessag
                 if (traceState != null)
                     traceState.trace("Digest mismatch: {}", e.toString());
                 if (logger.isDebugEnabled())
+                {
                     logger.debug("Digest mismatch:", e);
+
+                    for(MessageIn<TMessage> response : resolver.getMessages())
+                        logger.debug("{}: {}", response.from, ((ReadResponse)(response.payload)).row().toString());
+                }
+
                 
                 ReadRepairMetrics.repairedBackground.mark();
                 

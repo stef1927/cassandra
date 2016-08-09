@@ -369,6 +369,9 @@ public class Keyspace
      */
     public void apply(Mutation mutation, boolean writeCommitLog, boolean updateIndexes)
     {
+        if (mutation.getKeyspaceName().equals("mytestks"))
+            logger.debug("Applying mutation {}", mutation);
+
         try (OpOrder.Group opGroup = writeOrder.start())
         {
             // write the mutation to the commitlog and memtables

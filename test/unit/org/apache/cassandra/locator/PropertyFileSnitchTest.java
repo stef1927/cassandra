@@ -25,6 +25,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -45,6 +47,9 @@ import org.apache.cassandra.utils.FBUtilities;
 
 import org.junit.Before;
 import org.junit.Test;
+
+import static junit.framework.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Unit tests for {@link PropertyFileSnitch}.
@@ -317,5 +322,28 @@ public class PropertyFileSnitchTest
             restoreOrigConfigFile();
             setNodeShutdown(host);
         }
+    }
+
+    @Test
+    public void testSortByProximyty() throws Exception
+    {
+        final InetAddress host1 = InetAddress.getByName("127.0.0.1");
+        final InetAddress host2 = InetAddress.getByName("127.0.0.2");
+        final InetAddress host3 = InetAddress.getByName("127.0.0.3");
+
+        final PropertyFileSnitch snitch = new PropertyFileSnitch(/*refreshPeriodInSeconds*/1);
+
+        assertEquals(host1, sortByProximity(snitch, host1, Arrays.asList(host1, host2, host3)).get(0));
+        assertEquals(host1, sortByProximity(snitch, host1, Arrays.asList(host1, host3, host2)).get(0));
+        assertEquals(host1, sortByProximity(snitch, host1, Arrays.asList(host2, host1, host3)).get(0));
+        assertEquals(host1, sortByProximity(snitch, host1, Arrays.asList(host2, host3, host1)).get(0));
+        assertEquals(host1, sortByProximity(snitch, host1, Arrays.asList(host3, host1, host2)).get(0));
+        assertEquals(host1, sortByProximity(snitch, host1, Arrays.asList(host3, host2, host1)).get(0));
+    }
+
+    private List<InetAddress> sortByProximity(PropertyFileSnitch snitch, InetAddress localHost, List<InetAddress> hosts)
+    {
+        snitch.sortByProximity(localHost, hosts);
+        return hosts;
     }
 }

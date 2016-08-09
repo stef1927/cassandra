@@ -18,11 +18,18 @@
 
 package org.apache.cassandra.cql3.validation.entities;
 
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.apache.commons.lang3.tuple.Pair;
 import org.junit.Test;
 
 import org.apache.cassandra.cql3.CQLTester;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.exceptions.InvalidRequestException;
+
+import static org.junit.Assert.assertEquals;
 
 public class CountersTest extends CQLTester
 {
@@ -81,5 +88,64 @@ public class CountersTest extends CQLTester
         tableName = KEYSPACE + "." + createTableName();
         assertInvalidThrow(InvalidRequestException.class,
                            String.format("CREATE TABLE %s (k int PRIMARY KEY, m map<text, counter>)", tableName));
+    }
+
+    @Test
+    public void testMultipleThreads() throws Throwable
+    {
+        createTable("CREATE TABLE %s (id int PRIMARY KEY, c counter)");
+
+
+        final BlockingQueue<Pair<Integer, Long>> expectedValues = new LinkedBlockingDeque<>();
+        final AtomicInteger numErrors = new AtomicInteger(0);
+        Thread readThread = new Thread(new Runnable()
+        {
+            public void run()
+            {
+                try
+                {
+                    while(true)
+                    {
+                        Pair<Integer, Long> expected = expectedValues.take();
+                        if (expected.getLeft() == -1)
+                            break;
+
+                        try
+                        {
+                            assertRows(execute("SELECT * from %s WHERE id = ?", expected.getLeft()),
+                                       row(expected.getLeft(), expected.getRight()));
+                        }
+                        catch (Throwable t)
+                        {
+                            numErrors.incrementAndGet();
+                            logger.error("Failed to read counter for {}", expected, t);
+                        }
+                    }
+                }
+                catch (InterruptedException e)
+                {
+                    numErrors.incrementAndGet();
+                    e.printStackTrace();
+                }
+            }
+        });
+        readThread.start();
+
+        for (int val = 1; val < 50; val++)
+        {
+            while (!expectedValues.isEmpty())
+                Thread.sleep(1);
+
+            for (int id = 0; id < 500; id++)
+            {
+                execute("UPDATE %s SET c = c + 1 WHERE id = ?", id);
+                expectedValues.put(Pair.of(id, (long)val));
+            }
+        }
+
+        expectedValues.put(Pair.of(-1, 0L));
+        readThread.join();
+
+        assertEquals(0, numErrors.get());
     }
 }

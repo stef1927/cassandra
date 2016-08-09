@@ -1205,6 +1205,9 @@ public class StorageProxy implements StorageProxyMBean
                 if (processed == null)
                     return;
 
+                if (mutation.getKeyspaceName().equals("mytestks"))
+                    logger.info("Applying counter mutation {} to {}", mutation, targets);
+
                 assert processed instanceof CounterMutation;
                 CounterMutation cm = (CounterMutation) processed;
 

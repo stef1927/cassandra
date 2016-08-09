@@ -81,12 +81,18 @@ public abstract class AbstractReadExecutor
 
     protected void makeDataRequests(Iterable<InetAddress> endpoints)
     {
+        if (command.getKeyspace().equals("mytestks"))
+            logger.info("{} - Reading counter value {} from {}, full replicas: {}", this, command, endpoints, targetReplicas);
+
         makeRequests(command, endpoints);
 
     }
 
     protected void makeDigestRequests(Iterable<InetAddress> endpoints)
     {
+        if (command.getKeyspace().equals("mytestks"))
+            logger.info("{} - Reading counter digest {} from {}, full replicas: {}", this, command, endpoints, targetReplicas);
+
         makeRequests(command.copy().setIsDigestQuery(true), endpoints);
     }
 
@@ -114,7 +120,7 @@ public abstract class AbstractReadExecutor
         // We delay the local (potentially blocking) read till the end to avoid stalling remote requests.
         if (hasLocalEndpoint)
         {
-            logger.trace("reading {} locally", readCommand.isDigestQuery() ? "digest" : "data");
+            logger.debug("reading {} locally", readCommand.isDigestQuery() ? "digest" : "data");
             StageManager.getStage(Stage.READ).maybeExecuteImmediately(new LocalReadRunnable(command, handler));
         }
     }
@@ -288,7 +294,7 @@ public abstract class AbstractReadExecutor
                 InetAddress extraReplica = Iterables.getLast(targetReplicas);
                 if (traceState != null)
                     traceState.trace("speculating read retry on {}", extraReplica);
-                logger.trace("speculating read retry on {}", extraReplica);
+                logger.debug("speculating read retry on {}", extraReplica);
                 MessagingService.instance().sendRR(retryCommand.createMessage(), extraReplica, handler);
                 speculated = true;
 
