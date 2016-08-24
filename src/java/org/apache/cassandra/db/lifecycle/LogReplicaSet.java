@@ -41,7 +41,7 @@ import org.apache.cassandra.utils.Throwables;
  *
  * @see LogReplica, LogFile
  */
-public class LogReplicaSet
+public class LogReplicaSet implements AutoCloseable
 {
     private static final Logger logger = LoggerFactory.getLogger(LogReplicaSet.class);
 
@@ -201,7 +201,7 @@ public class LogReplicaSet
                : false;
     }
 
-    void close()
+    public void close()
     {
         Throwables.maybeFail(Throwables.perform(null, replicas().stream().map(r -> r::close)));
     }
