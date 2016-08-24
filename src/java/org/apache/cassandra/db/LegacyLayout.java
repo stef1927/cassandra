@@ -211,7 +211,7 @@ public abstract class LegacyLayout
             if (components.get(components.size() - 1).eoc < 0)
                 boundKind = ClusteringPrefix.Kind.EXCL_END_BOUND;
             else if (components.get(components.size() - 1).eoc == 0)
-                boundKind = ClusteringPrefix.Kind.INCL_END_BOUND_EOC_0;
+                boundKind = ClusteringPrefix.Kind.END_BOUND_EOC_0;
             else
                 boundKind = ClusteringPrefix.Kind.INCL_END_BOUND;
         }
