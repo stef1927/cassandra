@@ -65,10 +65,10 @@ public interface ClusteringPrefix extends IMeasurableMemory, Clusterable
         INCL_END_EXCL_START_BOUNDARY(3,  1),
         INCL_END_BOUND              (3,  1),
         EXCL_START_BOUND            (3,  1),
-        INCL_END_BOUND_EOC_0        (3,  -1); /** This is a legacy value that corresponds to Composite.EOC.NONE in
-                                                  pre 3.0 versions, this value compares as an inclusive end bound
-                                                  but before any clustering values. It can be removed once support for
-                                                  thrift and legacy sstables is removed. See CASSANDRA-12423 for details. */
+        END_BOUND_EOC_0             (3, -1); /** This is a legacy value that corresponds to Composite.EOC.NONE in
+                                                 pre 3.0 versions. This value is inclusive of any exact matches,
+                                                 but does not include any clusterings that it is merely a prefix of.
+                                                 See CASSANDRA-12423 for details. */
 
         private final int comparison;
 
@@ -111,7 +111,7 @@ public interface ClusteringPrefix extends IMeasurableMemory, Clusterable
                 case INCL_START_BOUND:              return EXCL_END_BOUND;
                 case EXCL_END_BOUND:                return INCL_START_BOUND;
                 case INCL_END_BOUND:                return EXCL_START_BOUND;
-                case INCL_END_BOUND_EOC_0:          return EXCL_START_BOUND;
+                case END_BOUND_EOC_0:          return EXCL_START_BOUND;
                 case EXCL_END_INCL_START_BOUNDARY:  return INCL_END_EXCL_START_BOUNDARY;
                 case INCL_END_EXCL_START_BOUNDARY:  return EXCL_END_INCL_START_BOUNDARY;
                 default:                            return this;
@@ -126,7 +126,7 @@ public interface ClusteringPrefix extends IMeasurableMemory, Clusterable
                 case INCL_END_BOUND:
                 case EXCL_START_BOUND:
                 case EXCL_END_BOUND:
-                case INCL_END_BOUND_EOC_0:
+                case END_BOUND_EOC_0:
                     return true;
             }
             return false;
@@ -165,7 +165,7 @@ public interface ClusteringPrefix extends IMeasurableMemory, Clusterable
                 case EXCL_END_INCL_START_BOUNDARY:
                 case INCL_END_EXCL_START_BOUNDARY:
                 case EXCL_END_BOUND:
-                case INCL_END_BOUND_EOC_0:
+                case END_BOUND_EOC_0:
                     return true;
                 default:
                     return false;

@@ -210,7 +210,7 @@ public abstract class LegacyLayout
             if (components.get(components.size() - 1).eoc < 0)
                 boundKind = Slice.Bound.Kind.EXCL_END_BOUND;
             else if (components.get(components.size() - 1).eoc == 0)
-                boundKind = Slice.Bound.Kind.INCL_END_BOUND_EOC_0;
+                boundKind = Slice.Bound.Kind.END_BOUND_EOC_0;
             else
                 boundKind = Slice.Bound.Kind.INCL_END_BOUND;
         }
