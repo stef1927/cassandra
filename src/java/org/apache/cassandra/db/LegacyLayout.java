@@ -23,7 +23,9 @@ import java.io.IOError;
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
+import org.apache.cassandra.config.Config;
 import org.apache.cassandra.utils.AbstractIterator;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Lists;
@@ -52,6 +54,9 @@ import static org.apache.cassandra.utils.ByteBufferUtil.bytes;
 public abstract class LegacyLayout
 {
     private static final Logger logger = LoggerFactory.getLogger(LegacyLayout.class);
+    private static final NoSpamLogger noSpamLogger = NoSpamLogger.getLogger(logger, 2, TimeUnit.HOURS);
+
+    private static final boolean EOC_0_END_BOUNDS_AS_IN_2_X = Boolean.parseBoolean(System.getProperty(Config.PROPERTY_PREFIX + "eoc_0_end_bounds_as_in_2_x", "false"));
 
     public final static int MAX_CELL_NAME_LENGTH = FBUtilities.MAX_UNSIGNED_SHORT;
 
@@ -210,7 +215,7 @@ public abstract class LegacyLayout
             if (components.get(components.size() - 1).eoc < 0)
                 boundKind = Slice.Bound.Kind.EXCL_END_BOUND;
             else if (components.get(components.size() - 1).eoc == 0)
-                boundKind = Slice.Bound.Kind.END_BOUND_EOC_0;
+                boundKind = getEndBoundForEocZero();
             else
                 boundKind = Slice.Bound.Kind.INCL_END_BOUND;
         }
@@ -224,6 +229,16 @@ public abstract class LegacyLayout
                                         ? metadata.getColumnDefinition(components.get(metadata.comparator.size()).value)
                                         : null;
         return new LegacyBound(sb, metadata.isCompound() && CompositeType.isStaticName(bound), collectionName);
+    }
+
+    private static Slice.Bound.Kind getEndBoundForEocZero()
+    {
+        if (EOC_0_END_BOUNDS_AS_IN_2_X)
+            return Slice.Bound.Kind.END_BOUND_EOC_0;
+
+        noSpamLogger.warn("Detected end bound with final eoc of zero but cassandra.eoc_0_end_bounds_as_in_2_x=false: " +
+                          "some Thrift queries may return incorrect results, please read 3.0.9 Upgrading in NEWS.txt");
+        return Slice.Bound.Kind.EXCL_END_BOUND;
     }
 
     public static ByteBuffer encodeBound(CFMetaData metadata, Slice.Bound bound, boolean isStart)
