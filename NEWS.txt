@@ -120,6 +120,25 @@ New features
 
 Upgrading
 ---------
+   - IMPORTANT: users with legacy data generated via the Thrift API or still
+     using the Thrift API in 3.x, please read.
+     End bounds with an EOC component of zero  can now be handled with identical
+     behavior as in 2.x but only by adding -Dcassandra.eoc_0_end_bounds_as_in_2_x=true
+     to the command line arguments.
+     In the 2.x world, such end bounds are exclusive of prefixes but inclusive of exact matches.
+     In 3.x up to 3.0.8, such end bounds are fully inclusive but starting with
+     3.0.9 they are fully exclusive (to avoid loss of data due to range tombstones with final eoc of zero).
+     What this means is that starting with 3.0.9, Thrift slice queries many
+     not return the last cell, or a previously deleted cell may resurface.
+     To fix this, set cassandra.eoc_0_end_bounds_as_in_2_x to true.
+     However, DO NOT set this flag during a rolling upgrade involving older 3.0.x
+     nodes, as this would result in deserialization exceptions in the older nodes.
+     It is safe to set this flag during an upgrade directly from 2.x, but if the upgrade
+     involves older 3.x nodes then set the flag only when the upgrade is completed.
+     No permanent change of data will occurr until the 2.x sstables are upgraded
+     or compacted, so do not run upgradesstables before enabling this flag and
+     consider disabling  autocompaction during the upgrade.
+     Refer to CASSANDRA-12423 for more details.
    - The ReversedType behaviour has been corrected for clustering columns of
      BYTES type containing empty value. Scrub should be run on the existing
      SSTables containing a descending clustering column of BYTES type to correct
