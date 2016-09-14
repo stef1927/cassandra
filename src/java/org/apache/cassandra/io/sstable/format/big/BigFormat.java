@@ -17,13 +17,11 @@
  */
 package org.apache.cassandra.io.sstable.format.big;
 
-import java.util.Collection;
 import java.util.Set;
 
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.RowIndexEntry;
 import org.apache.cassandra.db.SerializationHeader;
-import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.io.sstable.Component;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.format.*;
@@ -81,15 +79,13 @@ public class BigFormat implements SSTableFormat
     {
         @Override
         public SSTableWriter open(Descriptor descriptor,
-                                  long keyCount,
-                                  long repairedAt,
+                                  SSTableWriter.SSTableCreationInfo info,
                                   CFMetaData metadata,
                                   MetadataCollector metadataCollector,
                                   SerializationHeader header,
-                                  Collection<SSTableFlushObserver> observers,
-                                  LifecycleTransaction txn)
+                                  Collection<SSTableFlushObserver> observers)
         {
-            return new BigTableWriter(descriptor, keyCount, repairedAt, metadata, metadataCollector, header, observers, txn);
+            return new BigTableWriter(descriptor, info, metadata, metadataCollector, header, observers);
         }
     }
 

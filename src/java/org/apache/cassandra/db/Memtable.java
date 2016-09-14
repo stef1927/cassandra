@@ -36,7 +36,6 @@ import org.apache.cassandra.config.SchemaConstants;
 import org.apache.cassandra.db.commitlog.CommitLog;
 import org.apache.cassandra.db.commitlog.CommitLogPosition;
 import org.apache.cassandra.db.commitlog.IntervalSet;
-import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.db.filter.ClusteringIndexFilter;
 import org.apache.cassandra.db.filter.ColumnFilter;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
@@ -48,6 +47,7 @@ import org.apache.cassandra.dht.Murmur3Partitioner.LongToken;
 import org.apache.cassandra.index.transactions.UpdateTransaction;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.SSTableMultiWriter;
+import org.apache.cassandra.io.sstable.format.SSTableWriter;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.service.ActiveRepairService;
@@ -502,6 +502,15 @@ public class Memtable implements Comparable<Memtable>
                 logger.trace("High update contention in {}/{} partitions of {} ", heavilyContendedRowCount, toFlush.size(), Memtable.this);
         }
 
+        private double avgKeySize()
+        {
+            OptionalDouble ret = toFlush.keySet().stream()
+                                        .filter(p -> p instanceof DecoratedKey)
+                                        .mapToInt(p -> ((DecoratedKey)p).getKey().remaining())
+                                        .average();
+            return ret.orElse(0);
+        }
+
         public SSTableMultiWriter createFlushWriter(LifecycleTransaction txn,
                                                   String filename,
                                                   PartitionColumns columns,
@@ -510,11 +519,14 @@ public class Memtable implements Comparable<Memtable>
             MetadataCollector sstableMetadataCollector = new MetadataCollector(cfs.metadata.comparator)
                     .commitLogIntervals(new IntervalSet<>(commitLogLowerBound.get(), commitLogUpperBound.get()));
 
+            SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(toFlush.size(),
+                                                                                           avgKeySize(),
+                                                                                           ActiveRepairService.UNREPAIRED_SSTABLE,
+                                                                                           txn);
             return cfs.createSSTableMultiWriter(Descriptor.fromFilename(filename),
-                                                toFlush.size(),
-                                                ActiveRepairService.UNREPAIRED_SSTABLE,
+                                                info,
                                                 sstableMetadataCollector,
-                                                new SerializationHeader(true, cfs.metadata, columns, stats), txn);
+                                                new SerializationHeader(true, cfs.metadata, columns, stats));
         }
 
         @Override

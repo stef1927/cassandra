@@ -89,25 +89,26 @@ public class SSTableFlushObserverTest
 
         SSTableFormat.Type sstableFormat = SSTableFormat.Type.current();
 
-        BigTableWriter writer = new BigTableWriter(new Descriptor(sstableFormat.info.getLatestVersion().version,
-                                                                  directory,
-                                                                  KS_NAME, CF_NAME,
-                                                                  0,
-                                                                  sstableFormat),
-                                                   10L, 0L, cfm,
-                                                   new MetadataCollector(cfm.comparator).sstableLevel(0),
-                                                   new SerializationHeader(true, cfm, cfm.partitionColumns(), EncodingStats.NO_STATS),
-                                                   Collections.singletonList(observer),
-                                                   transaction);
-
+        BigTableWriter writer = null;
         SSTableReader reader = null;
         Multimap<ByteBuffer, Cell> expected = ArrayListMultimap.create();
-
         try
         {
+            ByteBuffer key = UTF8Type.instance.fromString("key1");
+            SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(10L, key.remaining(), 0L, transaction);
+            writer = new BigTableWriter(new Descriptor(sstableFormat.info.getLatestVersion().version,
+                                                       directory,
+                                                       KS_NAME, CF_NAME,
+                                                       0,
+                                                       sstableFormat),
+                                        info,
+                                        cfm,
+                                        new MetadataCollector(cfm.comparator).sstableLevel(0),
+                                        new SerializationHeader(true, cfm, cfm.partitionColumns(), EncodingStats.NO_STATS),
+                                        Collections.singletonList(observer));
+
             final long now = System.currentTimeMillis();
 
-            ByteBuffer key = UTF8Type.instance.fromString("key1");
             expected.putAll(key, Arrays.asList(BufferCell.live(getColumn(cfm, "age"), now, Int32Type.instance.decompose(27)),
                                                BufferCell.live(getColumn(cfm, "first_name"), now,UTF8Type.instance.fromString("jack")),
                                                BufferCell.live(getColumn(cfm, "height"), now, LongType.instance.decompose(183L))));

@@ -67,16 +67,14 @@ public class BigTableWriter extends SSTableWriter
                                                         .build();
 
     public BigTableWriter(Descriptor descriptor,
-                          long keyCount,
-                          long repairedAt,
+                          SSTableWriter.SSTableCreationInfo info,
                           CFMetaData metadata,
-                          MetadataCollector metadataCollector, 
+                          MetadataCollector metadataCollector,
                           SerializationHeader header,
-                          Collection<SSTableFlushObserver> observers,
-                          LifecycleTransaction txn)
+                          Collection<SSTableFlushObserver> observers)
     {
-        super(descriptor, keyCount, repairedAt, metadata, metadataCollector, header, observers);
-        txn.trackNew(this); // must track before any files are created
+        super(descriptor, info.keyCount, info.repairedAt, metadata, metadataCollector, header, observers);
+        info.txn.trackNew(this); // must track before any files are created
 
         if (compression)
         {
@@ -97,9 +95,12 @@ public class BigTableWriter extends SSTableWriter
         dbuilder = new FileHandle.Builder(descriptor.filenameFor(Component.DATA)).compressed(compression)
                                               .mmapped(DatabaseDescriptor.getDiskAccessMode() == Config.DiskAccessMode.mmap);
         chunkCache.ifPresent(dbuilder::withChunkCache);
-        iwriter = new IndexWriter(keyCount);
+        iwriter = new IndexWriter(keyCount, info.keySize);
 
         columnIndexWriter = new ColumnIndex(this.header, dataFile, descriptor.version, this.observers, getRowIndexEntrySerializer().indexInfoSerializer());
+
+        if (logger.isTraceEnabled())
+            logger.trace("Created table writer for {} with info {}", descriptor, info);
     }
 
     public void mark()
@@ -436,12 +437,12 @@ public class BigTableWriter extends SSTableWriter
         public final IFilter bf;
         private DataPosition mark;
 
-        IndexWriter(long keyCount)
+        IndexWriter(long keyCount, double keySize)
         {
             indexFile = new SequentialWriter(new File(descriptor.filenameFor(Component.PRIMARY_INDEX)), writerOption);
             builder = new FileHandle.Builder(descriptor.filenameFor(Component.PRIMARY_INDEX)).mmapped(DatabaseDescriptor.getIndexAccessMode() == Config.DiskAccessMode.mmap);
             chunkCache.ifPresent(builder::withChunkCache);
-            summary = new IndexSummaryBuilder(keyCount, metadata.params.minIndexInterval, Downsampling.BASE_SAMPLING_LEVEL);
+            summary = new IndexSummaryBuilder(keyCount, keySize, metadata.params.minIndexInterval, Downsampling.BASE_SAMPLING_LEVEL);
             bf = FilterFactory.getFilter(keyCount, metadata.params.bloomFilterFpChance, true, descriptor.version.hasOldBfHashOrder());
             // register listeners to be alerted when the data files are flushed
             indexFile.setPostFlushListener(() -> summary.markIndexSynced(indexFile.getLastFlushOffset()));

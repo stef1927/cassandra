@@ -42,6 +42,7 @@ import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.io.sstable.Component;
 import org.apache.cassandra.io.sstable.ISSTableScanner;
+import org.apache.cassandra.io.sstable.format.SSTableWriter;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.schema.CompactionParams;
 import org.apache.cassandra.utils.JVMStabilityInspector;
@@ -577,14 +578,12 @@ public abstract class AbstractCompactionStrategy
     }
 
     public SSTableMultiWriter createSSTableMultiWriter(Descriptor descriptor,
-                                                       long keyCount,
-                                                       long repairedAt,
+                                                       SSTableWriter.SSTableCreationInfo info,
                                                        MetadataCollector meta,
                                                        SerializationHeader header,
-                                                       Collection<Index> indexes,
-                                                       LifecycleTransaction txn)
+                                                       Collection<Index> indexes)
     {
-        return SimpleSSTableMultiWriter.create(descriptor, keyCount, repairedAt, cfs.metadata, meta, header, indexes, txn);
+        return SimpleSSTableMultiWriter.create(descriptor, info, cfs.metadata, meta, header, indexes);
     }
 
     public boolean supportsEarlyOpen()

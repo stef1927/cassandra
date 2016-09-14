@@ -32,6 +32,7 @@ import org.apache.cassandra.index.Index;
 import org.apache.cassandra.io.sstable.format.RangeAwareSSTableWriter;
 import org.apache.cassandra.io.sstable.format.SSTableFormat;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
+import org.apache.cassandra.io.sstable.format.SSTableWriter;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.utils.concurrent.Transactional;
 
@@ -136,6 +137,7 @@ public class SSTableTxnWriter extends Transactional.AbstractTransactional implem
     public static SSTableTxnWriter create(CFMetaData cfm,
                                           Descriptor descriptor,
                                           long keyCount,
+	                                      double keySize,
                                           long repairedAt,
                                           int sstableLevel,
                                           SerializationHeader header,
@@ -144,7 +146,8 @@ public class SSTableTxnWriter extends Transactional.AbstractTransactional implem
         // if the column family store does not exist, we create a new default SSTableMultiWriter to use:
         LifecycleTransaction txn = LifecycleTransaction.offline(OperationType.WRITE);
         MetadataCollector collector = new MetadataCollector(cfm.comparator).sstableLevel(sstableLevel);
-        SSTableMultiWriter writer = SimpleSSTableMultiWriter.create(descriptor, keyCount, repairedAt, cfm, collector, header, indexes, txn);
+        SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(keyCount, keySize, repairedAt, txn);
+        SSTableMultiWriter writer = SimpleSSTableMultiWriter.create(descriptor, info, cfm, collector, header, indexes);
         return new SSTableTxnWriter(txn, writer);
     }
 
