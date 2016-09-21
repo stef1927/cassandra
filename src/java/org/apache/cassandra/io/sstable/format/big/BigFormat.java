@@ -82,10 +82,9 @@ public class BigFormat implements SSTableFormat
                                   SSTableWriter.SSTableCreationInfo info,
                                   CFMetaData metadata,
                                   MetadataCollector metadataCollector,
-                                  SerializationHeader header,
-                                  Collection<SSTableFlushObserver> observers)
+                                  SerializationHeader header)
         {
-            return new BigTableWriter(descriptor, info, metadata, metadataCollector, header, observers);
+            return new BigTableWriter(descriptor, info, metadata, metadataCollector, header);
         }
     }
 

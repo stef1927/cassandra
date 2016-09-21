@@ -38,6 +38,8 @@ import org.apache.cassandra.db.marshal.Int32Type;
 import org.apache.cassandra.db.marshal.LongType;
 import org.apache.cassandra.db.marshal.UTF8Type;
 import org.apache.cassandra.db.rows.*;
+import org.apache.cassandra.index.Index;
+import org.apache.cassandra.index.StubIndex;
 import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.io.sstable.Descriptor;
@@ -95,7 +97,16 @@ public class SSTableFlushObserverTest
         try
         {
             ByteBuffer key = UTF8Type.instance.fromString("key1");
-            SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(10L, key.remaining(), 0L, transaction);
+            SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(transaction) {
+                @Override
+                public Collection<SSTableFlushObserver> getObservers(Descriptor descriptor)
+                {
+                    return Collections.singletonList(observer);
+                }
+
+            };
+            info.keyCount(10L).keySize(key.remaining());
+
             writer = new BigTableWriter(new Descriptor(sstableFormat.info.getLatestVersion().version,
                                                        directory,
                                                        KS_NAME, CF_NAME,
@@ -104,8 +115,7 @@ public class SSTableFlushObserverTest
                                         info,
                                         cfm,
                                         new MetadataCollector(cfm.comparator).sstableLevel(0),
-                                        new SerializationHeader(true, cfm, cfm.partitionColumns(), EncodingStats.NO_STATS),
-                                        Collections.singletonList(observer));
+                                        new SerializationHeader(true, cfm, cfm.partitionColumns(), EncodingStats.NO_STATS));
 
             final long now = System.currentTimeMillis();
 

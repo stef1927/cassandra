@@ -519,10 +519,10 @@ public class Memtable implements Comparable<Memtable>
             MetadataCollector sstableMetadataCollector = new MetadataCollector(cfs.metadata.comparator)
                     .commitLogIntervals(new IntervalSet<>(commitLogLowerBound.get(), commitLogUpperBound.get()));
 
-            SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(toFlush.size(),
-                                                                                           avgKeySize(),
-                                                                                           ActiveRepairService.UNREPAIRED_SSTABLE,
-                                                                                           txn);
+            SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(txn)
+                                                     .keyCount(toFlush.size())
+                                                     .keySize(avgKeySize())
+                                                     .indexes(cfs.indexManager.listIndexes());
             return cfs.createSSTableMultiWriter(Descriptor.fromFilename(filename),
                                                 info,
                                                 sstableMetadataCollector,

@@ -70,10 +70,9 @@ public class BigTableWriter extends SSTableWriter
                           SSTableWriter.SSTableCreationInfo info,
                           CFMetaData metadata,
                           MetadataCollector metadataCollector,
-                          SerializationHeader header,
-                          Collection<SSTableFlushObserver> observers)
+                          SerializationHeader header)
     {
-        super(descriptor, info.keyCount, info.repairedAt, metadata, metadataCollector, header, observers);
+        super(descriptor, info, metadata, metadataCollector, header);
         info.txn.trackNew(this); // must track before any files are created
 
         if (compression)
@@ -95,7 +94,7 @@ public class BigTableWriter extends SSTableWriter
         dbuilder = new FileHandle.Builder(descriptor.filenameFor(Component.DATA)).compressed(compression)
                                               .mmapped(DatabaseDescriptor.getDiskAccessMode() == Config.DiskAccessMode.mmap);
         chunkCache.ifPresent(dbuilder::withChunkCache);
-        iwriter = new IndexWriter(keyCount, info.keySize);
+        iwriter = new IndexWriter(keyCount, info.getKeySize());
 
         columnIndexWriter = new ColumnIndex(this.header, dataFile, descriptor.version, this.observers, getRowIndexEntrySerializer().indexInfoSerializer());
 

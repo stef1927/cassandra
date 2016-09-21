@@ -111,10 +111,9 @@ public class SimpleSSTableMultiWriter implements SSTableMultiWriter
                                             SSTableWriter.SSTableCreationInfo info,
                                             CFMetaData cfm,
                                             MetadataCollector metadataCollector,
-                                            SerializationHeader header,
-                                            Collection<Index> indexes)
+                                            SerializationHeader header)
     {
-        SSTableWriter writer = SSTableWriter.create(descriptor, info, cfm, metadataCollector, header, indexes);
+        SSTableWriter writer = SSTableWriter.create(descriptor, info, cfm, metadataCollector, header);
         return new SimpleSSTableMultiWriter(writer, info.txn);
     }
 }

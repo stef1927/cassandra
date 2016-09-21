@@ -580,10 +580,9 @@ public abstract class AbstractCompactionStrategy
     public SSTableMultiWriter createSSTableMultiWriter(Descriptor descriptor,
                                                        SSTableWriter.SSTableCreationInfo info,
                                                        MetadataCollector meta,
-                                                       SerializationHeader header,
-                                                       Collection<Index> indexes)
+                                                       SerializationHeader header)
     {
-        return SimpleSSTableMultiWriter.create(descriptor, info, cfs.metadata, meta, header, indexes);
+        return SimpleSSTableMultiWriter.create(descriptor, info, cfs.metadata, meta, header);
     }
 
     public boolean supportsEarlyOpen()

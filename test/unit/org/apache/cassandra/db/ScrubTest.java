@@ -639,7 +639,10 @@ public class ScrubTest
     {
         SerializationHeader header = new SerializationHeader(true, metadata, metadata.partitionColumns(), EncodingStats.NO_STATS);
         MetadataCollector collector = new MetadataCollector(metadata.comparator).sstableLevel(0);
-        SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(keyCount, keySize, 0, txn);
+        SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(txn).keyCount(keyCount)
+        .keySize(keySize);
+
+        //keyCount, keySize, 0, txn, Collections.emptySet()
         return new TestMultiWriter(new TestWriter(descriptor, info, metadata, collector, header), txn);
     }
 
@@ -659,7 +662,7 @@ public class ScrubTest
         TestWriter(Descriptor descriptor, SSTableCreationInfo info, CFMetaData metadata,
                    MetadataCollector collector, SerializationHeader header)
         {
-            super(descriptor, info, metadata, collector, header, Collections.emptySet());
+            super(descriptor, info, metadata, collector, header);
         }
 
         @Override

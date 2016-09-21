@@ -891,19 +891,18 @@ public class CompactionStrategyManager implements INotificationConsumer
     public SSTableMultiWriter createSSTableMultiWriter(Descriptor descriptor,
                                                        SSTableWriter.SSTableCreationInfo info,
                                                        MetadataCollector collector,
-                                                       SerializationHeader header,
-                                                       Collection<Index> indexes)
+                                                       SerializationHeader header)
     {
         readLock.lock();
         try
         {
-            if (info.repairedAt == ActiveRepairService.UNREPAIRED_SSTABLE)
+            if (info.getRepairedAt() == ActiveRepairService.UNREPAIRED_SSTABLE)
             {
-                return unrepaired.get(0).createSSTableMultiWriter(descriptor, info, collector, header, indexes);
+                return unrepaired.get(0).createSSTableMultiWriter(descriptor, info, collector, header);
             }
             else
             {
-                return repaired.get(0).createSSTableMultiWriter(descriptor, info, collector, header, indexes);
+                return repaired.get(0).createSSTableMultiWriter(descriptor, info, collector, header);
             }
         }
         finally

@@ -502,13 +502,17 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     {
         MetadataCollector collector = new MetadataCollector(metadata.comparator).sstableLevel(sstableLevel);
         Iterable<SSTableReader> sstables = txn.originals().isEmpty() ? getLiveSSTables() : txn.originals();
-        SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(keyCount, SSTableReader.getApproximateKeySize(sstables), repairedAt, txn);
+        SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(txn)
+                                                 .keyCount(keyCount)
+                                                 .keySize(SSTableReader.getApproximateKeySize(sstables))
+                                                 .repairedAt(repairedAt)
+                                                 .indexes(indexManager.listIndexes());
         return createSSTableMultiWriter(descriptor, info, collector, header);
     }
 
     public SSTableMultiWriter createSSTableMultiWriter(Descriptor descriptor, SSTableWriter.SSTableCreationInfo info, MetadataCollector metadataCollector, SerializationHeader header)
     {
-        return getCompactionStrategyManager().createSSTableMultiWriter(descriptor, info, metadataCollector, header, indexManager.listIndexes());
+        return getCompactionStrategyManager().createSSTableMultiWriter(descriptor, info, metadataCollector, header);
     }
 
     public boolean supportsEarlyOpen()

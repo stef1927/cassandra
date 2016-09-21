@@ -72,14 +72,7 @@ abstract class AbstractSSTableSimpleWriter implements Closeable
         if (makeRangeAware)
             return SSTableTxnWriter.createRangeAware(metadata, 0,  ActiveRepairService.UNREPAIRED_SSTABLE, formatType, 0, header);
 
-        return SSTableTxnWriter.create(metadata,
-                                       createDescriptor(directory, metadata.ksName, metadata.cfName, formatType),
-                                       0,
-                                       0,
-                                       ActiveRepairService.UNREPAIRED_SSTABLE,
-                                       0,
-                                       header,
-                                       Collections.emptySet());
+        return SSTableTxnWriter.create(metadata, createDescriptor(directory, metadata.ksName, metadata.cfName, formatType), 0, header);
     }
 
     private static Descriptor createDescriptor(File directory, final String keyspace, final String columnFamily, final SSTableFormat.Type fmt)
