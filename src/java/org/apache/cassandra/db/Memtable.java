@@ -502,10 +502,11 @@ public class Memtable implements Comparable<Memtable>
                 logger.trace("High update contention in {}/{} partitions of {} ", heavilyContendedRowCount, toFlush.size(), Memtable.this);
         }
 
-        private double avgKeySize()
+        private double estimateKeySize()
         {
             OptionalDouble ret = toFlush.keySet().stream()
                                         .filter(p -> p instanceof DecoratedKey)
+                                        .limit(50)
                                         .mapToInt(p -> ((DecoratedKey)p).getKey().remaining())
                                         .average();
             return ret.orElse(0);
@@ -521,7 +522,7 @@ public class Memtable implements Comparable<Memtable>
 
             SSTableWriter.SSTableCreationInfo info = new SSTableWriter.SSTableCreationInfo(txn)
                                                      .keyCount(toFlush.size())
-                                                     .keySize(avgKeySize())
+                                                     .keySize(estimateKeySize())
                                                      .indexes(cfs.indexManager.listIndexes());
             return cfs.createSSTableMultiWriter(Descriptor.fromFilename(filename),
                                                 info,
