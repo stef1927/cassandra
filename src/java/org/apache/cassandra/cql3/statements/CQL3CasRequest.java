@@ -21,7 +21,6 @@ import java.nio.ByteBuffer;
 import java.util.*;
 
 import com.google.common.collect.*;
-import com.google.common.collect.Sets;
 
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.cql3.*;
@@ -46,7 +45,6 @@ public class CQL3CasRequest implements CASRequest
     private final PartitionColumns conditionColumns;
     private final boolean updatesRegularRows;
     private final boolean updatesStaticRow;
-    private boolean hasExists; // whether we have an exist or if not exist condition
 
     // Conditions on the static row. We keep it separate from 'conditions' as most things related to the static row are
     // special cases anyway.
@@ -102,7 +100,6 @@ public class CQL3CasRequest implements CASRequest
         }
 
         setConditionsForRow(clustering, condition);
-        hasExists = true;
     }
 
     public void addConditions(Clustering clustering, Collection<ColumnCondition> conds, QueryOptions options) throws InvalidRequestException
@@ -150,8 +147,6 @@ public class CQL3CasRequest implements CASRequest
         // We have to do this as we can't rely on row marker for that (see #6623)
         Columns statics = updatesStaticRow ? allColumns.statics : conditionColumns.statics;
         Columns regulars = updatesRegularRows ? allColumns.regulars : conditionColumns.regulars;
-        System.out.println("statics = " + statics);
-        System.out.println("regulars = " + regulars);
         return new PartitionColumns(statics, regulars);
     }
 
