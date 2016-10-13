@@ -19,14 +19,13 @@ package org.apache.cassandra.dht.tokenallocator;
 
 import java.util.*;
 
-import junit.framework.Assert;
-
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 
 import org.apache.commons.math3.stat.descriptive.SummaryStatistics;
 
+import org.junit.Assert;
 import org.junit.Test;
 
 import org.apache.cassandra.Util;
@@ -37,7 +36,13 @@ import org.apache.cassandra.dht.Token;
 
 public class ReplicationAwareTokenAllocatorTest
 {
-    private static final int MAX_VNODE_COUNT = 64;
+    /** The maximum number of vnodes to use in the tests.
+     *  For RandomPartitioner we use a smaller number because
+     *  the tests take much longer and would otherwise timeout,
+     *  see CASSANDRA-12784.
+     * */
+    private static final int MAX_VNODE_COUNT_MURMUR3 = 64;
+    private static final int MAX_VNODE_COUNT_RANDOM = 16;
 
     private static final int TARGET_CLUSTER_SIZE = 250;
 
@@ -513,20 +518,20 @@ public class ReplicationAwareTokenAllocatorTest
     @Test
     public void testExistingClusterWithRandomPartitioner()
     {
-        testExistingCluster(new RandomPartitioner());
+        testExistingCluster(new RandomPartitioner(), MAX_VNODE_COUNT_RANDOM);
     }
 
     @Test
     public void testExistingClusterWithMurmur3Partitioner()
     {
-        testExistingCluster(new Murmur3Partitioner());
+        testExistingCluster(new Murmur3Partitioner(), MAX_VNODE_COUNT_MURMUR3);
     }
 
-    public void testExistingCluster(IPartitioner partitioner)
+    public void testExistingCluster(IPartitioner partitioner, int maxVNodeCount)
     {
         for (int rf = 1; rf <= 5; ++rf)
         {
-            for (int perUnitCount = 1; perUnitCount <= MAX_VNODE_COUNT; perUnitCount *= 4)
+            for (int perUnitCount = 1; perUnitCount <= maxVNodeCount; perUnitCount *= 4)
             {
                 testExistingCluster(perUnitCount, fixedTokenCount, new SimpleReplicationStrategy(rf), partitioner);
                 testExistingCluster(perUnitCount, varyingTokenCount, new SimpleReplicationStrategy(rf), partitioner);
@@ -564,7 +569,7 @@ public class ReplicationAwareTokenAllocatorTest
     public void testNewClusterWithRandomPartitioner()
     {
         Util.flakyTest(this::flakyTestNewClusterWithRandomPartitioner,
-                       5,
+                       3,
                        "It tends to fail sometimes due to the random selection of the tokens in the first few nodes.");
     }
 
@@ -572,21 +577,21 @@ public class ReplicationAwareTokenAllocatorTest
     public void testNewClusterWithMurmur3Partitioner()
     {
         Util.flakyTest(this::flakyTestNewClusterWithMurmur3Partitioner,
-                       5,
+                       3,
                        "It tends to fail sometimes due to the random selection of the tokens in the first few nodes.");
     }
 
     public void flakyTestNewClusterWithRandomPartitioner()
     {
-        flakyTestNewCluster(new RandomPartitioner());
+        flakyTestNewCluster(new RandomPartitioner(), MAX_VNODE_COUNT_RANDOM);
     }
 
     public void flakyTestNewClusterWithMurmur3Partitioner()
     {
-        flakyTestNewCluster(new Murmur3Partitioner());
+        flakyTestNewCluster(new Murmur3Partitioner(), MAX_VNODE_COUNT_MURMUR3);
     }
 
-    public void flakyTestNewCluster(IPartitioner partitioner)
+    public void flakyTestNewCluster(IPartitioner partitioner, int maxVNodeCount)
     {
         // This test is flaky because the selection of the tokens for the first RF nodes (which is random, with an
         // uncontrolled seed) can sometimes cause a pathological situation where the algorithm will find a (close to)
@@ -597,7 +602,7 @@ public class ReplicationAwareTokenAllocatorTest
 
         for (int rf = 2; rf <= 5; ++rf)
         {
-            for (int perUnitCount = 1; perUnitCount <= MAX_VNODE_COUNT; perUnitCount *= 4)
+            for (int perUnitCount = 1; perUnitCount <= maxVNodeCount; perUnitCount *= 4)
             {
                 testNewCluster(perUnitCount, fixedTokenCount, new SimpleReplicationStrategy(rf), partitioner);
                 testNewCluster(perUnitCount, varyingTokenCount, new SimpleReplicationStrategy(rf), partitioner);
