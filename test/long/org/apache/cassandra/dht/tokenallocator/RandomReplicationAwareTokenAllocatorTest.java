@@ -48,7 +48,7 @@ public class RandomReplicationAwareTokenAllocatorTest extends AbstractReplicatio
 
     private void flakyTestNewCluster()
     {
-        flakyTestNewCluster(new RandomPartitioner(), MAX_VNODE_COUNT);
+        testNewCluster(new RandomPartitioner(), MAX_VNODE_COUNT);
     }
 
 }

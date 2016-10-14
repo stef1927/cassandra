@@ -26,6 +26,7 @@ import com.google.common.collect.Sets;
 import org.apache.commons.math3.stat.descriptive.SummaryStatistics;
 
 import org.junit.Assert;
+import org.junit.Ignore;
 
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Token;
@@ -34,6 +35,7 @@ import org.apache.cassandra.dht.Token;
  * Base class for {@link Murmur3ReplicationAwareTokenAllocatorTest} and {@link AbstractReplicationAwareTokenAllocatorTest},
  * we need to separate classes to avoid timeous in case flaky tests need to be repeated, see CASSANDRA-12784.
  */
+@Ignore
 abstract class AbstractReplicationAwareTokenAllocatorTest
 {
     private static final int TARGET_CLUSTER_SIZE = 250;
@@ -545,7 +547,7 @@ abstract class AbstractReplicationAwareTokenAllocatorTest
         System.out.println();
     }
 
-    protected void flakyTestNewCluster(IPartitioner partitioner, int maxVNodeCount)
+    protected void testNewCluster(IPartitioner partitioner, int maxVNodeCount)
     {
         // This test is flaky because the selection of the tokens for the first RF nodes (which is random, with an
         // uncontrolled seed) can sometimes cause a pathological situation where the algorithm will find a (close to)

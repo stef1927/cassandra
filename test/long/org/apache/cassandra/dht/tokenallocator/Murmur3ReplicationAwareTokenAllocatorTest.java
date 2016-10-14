@@ -43,6 +43,6 @@ public class Murmur3ReplicationAwareTokenAllocatorTest extends AbstractReplicati
 
     private void flakyTestNewCluster()
     {
-        flakyTestNewCluster(new Murmur3Partitioner(), MAX_VNODE_COUNT);
+        testNewCluster(new Murmur3Partitioner(), MAX_VNODE_COUNT);
     }
 }
