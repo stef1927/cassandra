@@ -22,7 +22,18 @@ import static org.apache.cassandra.Util.column;
 import static org.junit.Assert.*;
 
 import java.io.IOException;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
+import org.junit.rules.TestRule;
+import org.junit.rules.TestWatcher;
+import org.junit.rules.Timeout;
+import org.junit.runner.Description;
+import org.junit.runners.model.TestTimedOutException;
 
 import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
@@ -34,6 +45,27 @@ import org.apache.cassandra.utils.ByteBufferUtil;
  */
 public class RecoveryManagerTruncateTest extends SchemaLoader
 {
+    @Rule
+    public final TestRule timeout = RuleChain
+                                    .outerRule(new TestWatcher() {
+                                        @Override
+                                        protected void failed(Throwable e, Description description) {
+                                            if (e instanceof TestTimedOutException)
+                                            {
+                                                Map liveThreads = Thread.getAllStackTraces();
+                                                for (Iterator i = liveThreads.keySet().iterator(); i.hasNext(); ) {
+                                                    Thread key = (Thread)i.next();
+                                                    System.err.println("Thread " + key.getName());
+                                                    StackTraceElement[] trace = (StackTraceElement[])liveThreads.get(key);
+                                                    for (int j = 0; j < trace.length; j++) {
+                                                        System.err.println("\tat " + trace[j]);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    })
+                                    .around(new Timeout(120, TimeUnit.SECONDS));
+
     @Test
     public void testTruncate() throws IOException
     {
