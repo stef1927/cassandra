@@ -17,8 +17,19 @@
  */
 package org.apache.cassandra.cql3;
 
+import java.util.Iterator;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
 import org.junit.After;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
+import org.junit.rules.TestRule;
+import org.junit.rules.TestWatcher;
+import org.junit.rules.Timeout;
+import org.junit.runner.Description;
+import org.junit.runners.model.TestTimedOutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,6 +46,27 @@ public class DropKeyspaceCommitLogRecycleTest
 
     private static final String KEYSPACE = "cql_test_keyspace";
     private static final String KEYSPACE2 = "cql_test_keyspace2";
+
+    @Rule
+    public final TestRule timeout = RuleChain
+                                    .outerRule(new TestWatcher() {
+                                        @Override
+                                        protected void failed(Throwable e, Description description) {
+                                            if (e instanceof TestTimedOutException)
+                                            {
+                                                Map liveThreads = Thread.getAllStackTraces();
+                                                for (Iterator i = liveThreads.keySet().iterator(); i.hasNext(); ) {
+                                                    Thread key = (Thread)i.next();
+                                                    System.err.println("Thread " + key.getName());
+                                                    StackTraceElement[] trace = (StackTraceElement[])liveThreads.get(key);
+                                                    for (int j = 0; j < trace.length; j++) {
+                                                        System.err.println("\tat " + trace[j]);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    })
+                                    .around(new Timeout(300, TimeUnit.SECONDS));
 
     static
     {
