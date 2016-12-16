@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.cliffc.high_scale_lib.NonBlockingHashMap;
@@ -639,9 +640,30 @@ public class CommitLogSegment
             {
                 WaitQueue.Signal signal = segment.syncComplete.register(CommitLog.instance.metrics.waitingOnCommit.time());
                 if (segment.lastSyncedOffset < position)
-                    signal.awaitUninterruptibly();
+                {
+                    do
+                    {
+                        try
+                        {
+                            if (signal.awaitUntil(System.nanoTime() + TimeUnit.MINUTES.toNanos(1)))
+                                break;
+
+                            logger.error("CL disk sync still waiting after 1 minute: segment.lastSyncedOffset {}, position  {}",
+                                         segment.lastSyncedOffset, position);
+                        }
+                        catch (InterruptedException t)
+                        {
+                            logger.error("CL disk sync wait was interrupted: segment.lastSyncedOffset {}, position  {}",
+                                         segment.lastSyncedOffset, position);
+                        }
+
+                    } while (segment.lastSyncedOffset < position);
+
+                }
                 else
+                {
                     signal.cancel();
+                }
             }
         }
 

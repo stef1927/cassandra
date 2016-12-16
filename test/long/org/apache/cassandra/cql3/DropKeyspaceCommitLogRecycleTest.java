@@ -66,7 +66,7 @@ public class DropKeyspaceCommitLogRecycleTest
                                             }
                                         }
                                     })
-                                    .around(new Timeout(300, TimeUnit.SECONDS));
+                                    .around(new Timeout(570, TimeUnit.SECONDS)); // 9.5 minutes
 
     static
     {
