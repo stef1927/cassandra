@@ -31,6 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.schema.TableMetadata;
+import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.schema.SchemaConstants;
@@ -254,6 +255,10 @@ public class StartupChecks
         {
             if (!FBUtilities.hasProcFS())
                 return;
+
+            if (DatabaseDescriptor.getDiskAccessMode() == Config.DiskAccessMode.standard &&
+                DatabaseDescriptor.getIndexAccessMode() == Config.DiskAccessMode.standard)
+                return; // no need to check if disk access mode is only standard and not mmap
 
             long maxMapCount = getMaxMapCount();
             if (maxMapCount < EXPECTED_MAX_MAP_COUNT)
