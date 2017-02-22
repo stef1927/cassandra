@@ -52,6 +52,7 @@
 
 
 3.11.0
+ * Fix startup problems due to schema tables not completely flushed (CASSANDRA-12213)
  * Fix testLimitSSTables flake caused by concurrent flush (CASSANDRA-12820)
  * cdc column addition strikes again (CASSANDRA-13382)
  * Fix static column indexes (CASSANDRA-13277)
