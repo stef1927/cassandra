@@ -26,7 +26,8 @@ import org.apache.cassandra.io.sstable.format.SSTableReadsListener;
 public class SSTableReadMetricsCollector implements SSTableReadsListener
 {
     /**
-     * The number of SSTables that need to be merged. This counter is only updated or a single partition queries.
+     * The number of SSTables that need to be merged. This counter is only updated for single partition queries
+     * since this has been the behavior so far.
      */
     private int mergedSSTables;
 

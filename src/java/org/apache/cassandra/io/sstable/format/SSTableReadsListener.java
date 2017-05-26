@@ -20,7 +20,7 @@ package org.apache.cassandra.io.sstable.format;
 import org.apache.cassandra.db.RowIndexEntry;
 
 /**
- * Listener to receive notifications associated to SSTables read.
+ * Listener for receiving notifications associated with reading SSTables.
  */
 public interface SSTableReadsListener
 {
@@ -29,34 +29,37 @@ public interface SSTableReadsListener
      */
     enum Reason
     {
-        BLOOM_FILTER, MIN_MAX_KEYS, PARTITION_INDEX_LOOKUP, INDEX_ENTRY_NOT_FOUND;
+        BLOOM_FILTER,
+        MIN_MAX_KEYS,
+        PARTITION_INDEX_LOOKUP,
+        INDEX_ENTRY_NOT_FOUND
     }
 
     /**
      * Listener that does nothing.
      */
     static final SSTableReadsListener NOOP_LISTENER = new SSTableReadsListener()
-            {
-                @Override
-                public void skippingSSTable(SSTableReader sstable, Reason reason)
-                {
-                }
+    {
+        @Override
+        public void skippingSSTable(SSTableReader sstable, Reason reason)
+        {
+        }
 
-                @Override
-                public void keyCacheHit(SSTableReader sstable)
-                {
-                }
+        @Override
+        public void keyCacheHit(SSTableReader sstable)
+        {
+        }
 
-                @Override
-                public void indexEntryFound(SSTableReader sstable, RowIndexEntry<?> indexEntry)
-                {
-                }
+        @Override
+        public void indexEntryFound(SSTableReader sstable, RowIndexEntry<?> indexEntry)
+        {
+        }
 
-                @Override
-                public void scanning(SSTableReader sstable)
-                {
-                }
-            };
+        @Override
+        public void scanning(SSTableReader sstable)
+        {
+        }
+    };
 
     /**
      * Handles notification that the specified SSTable has been skipped during a single partition query.
