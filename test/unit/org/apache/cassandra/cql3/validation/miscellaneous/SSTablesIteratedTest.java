@@ -71,6 +71,39 @@ public class SSTablesIteratedTest extends CQLTester
     }
 
     @Test
+    public void testSinglePartitionQuery() throws Throwable
+    {
+        createTable("CREATE TABLE %s (pk int, c int, v text, PRIMARY KEY (pk, c))");
+
+        execute("INSERT INTO %s (pk, c, v) VALUES (?, ?, ?)", 1, 40, "41");
+        execute("INSERT INTO %s (pk, c, v) VALUES (?, ?, ?)", 2, 10, "12");
+        flush();
+
+        execute("INSERT INTO %s (pk, c, v) VALUES (?, ?, ?)", 1, 10, "11");
+        execute("INSERT INTO %s (pk, c, v) VALUES (?, ?, ?)", 3, 30, "33");
+        flush();
+
+        execute("INSERT INTO %s (pk, c, v) VALUES (?, ?, ?)", 1, 20, "21");
+        execute("INSERT INTO %s (pk, c, v) VALUES (?, ?, ?)", 2, 40, "42");
+        flush();
+
+        // Test with all the table being merged
+        executeAndCheck("SELECT * FROM %s WHERE pk = 1", 3,
+                        row(1, 10, "11"),
+                        row(1, 20, "21"),
+                        row(1, 40, "41"));
+
+        // Test with only 2 of the 3 SSTables being merged
+        executeAndCheck("SELECT * FROM %s WHERE pk = 2", 2,
+                        row(2, 10, "12"),
+                        row(2, 40, "42"));
+
+        // Test with only 2 of the 3 SSTables being merged and a Slice filter
+        executeAndCheck("SELECT * FROM %s WHERE pk = 2 AND c > 20", 2,
+                        row(2, 40, "42"));
+    }
+
+    @Test
     public void testSSTablesOnlyASC() throws Throwable
     {
         createTable("CREATE TABLE %s (id int, col int, val text, PRIMARY KEY (id, col)) WITH CLUSTERING ORDER BY (col ASC)");
