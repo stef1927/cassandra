@@ -54,17 +54,13 @@ public class IndexSummaryTest
         final long seed = System.nanoTime();
         System.out.println("Using seed: " + seed);
         random.setSeed(seed);
-
-        System.out.println(String.format("Memory in MB: max %d, total %d, free %d",
-                                         Runtime.getRuntime().maxMemory() / (1 << 20),
-                                         Runtime.getRuntime().totalMemory() / (1 << 20),
-                                         Runtime.getRuntime().freeMemory() / (1 << 20)));
     }
 
     @Test
     public void testIndexSummaryKeySizes() throws IOException
     {
-        Assume.assumeTrue(Runtime.getRuntime().maxMemory() >= (512 * 1024 * 1024));
+        // On Circle CI we normally don't have enough off-heap memory for this test so ignore it
+        Assume.assumeTrue(System.getenv("CIRCLECI") == null);
 
         testIndexSummaryProperties(32, 100);
         testIndexSummaryProperties(64, 100);
@@ -110,7 +106,8 @@ public class IndexSummaryTest
     @Test
     public void testLargeIndexSummary() throws IOException
     {
-        Assume.assumeTrue(Runtime.getRuntime().maxMemory() >= (512 * 1024 * 1024));
+        // On Circle CI we normally don't have enough off-heap memory for this test so ignore it
+        Assume.assumeTrue(System.getenv("CIRCLECI") == null);
 
         final int numKeys = 1000000;
         final int keySize = 3000;
@@ -143,7 +140,8 @@ public class IndexSummaryTest
     @Test
     public void testLargeIndexSummaryWithExpectedSizeMatching() throws IOException
     {
-        Assume.assumeTrue(Runtime.getRuntime().maxMemory() > (512 * 1024 * 1024));
+        // On Circle CI we normally don't have enough off-heap memory for this test so ignore it
+        Assume.assumeTrue(System.getenv("CIRCLECI") == null);
 
         final int numKeys = 1000000;
         final int keySize = 3000;
