@@ -26,6 +26,7 @@ import java.util.*;
 import com.google.common.collect.Lists;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.Assume;
 
 import org.apache.cassandra.Util;
 import org.apache.cassandra.db.*;
@@ -53,11 +54,18 @@ public class IndexSummaryTest
         final long seed = System.nanoTime();
         System.out.println("Using seed: " + seed);
         random.setSeed(seed);
+
+        System.out.println(String.format("Memory in MB: max %d, total %d, free %d",
+                                         Runtime.getRuntime().maxMemory() / (1 << 20),
+                                         Runtime.getRuntime().totalMemory() / (1 << 20),
+                                         Runtime.getRuntime().freeMemory() / (1 << 20)));
     }
 
     @Test
     public void testIndexSummaryKeySizes() throws IOException
     {
+        Assume.assumeTrue(Runtime.getRuntime().maxMemory() >= (512 * 1024 * 1024));
+
         testIndexSummaryProperties(32, 100);
         testIndexSummaryProperties(64, 100);
         testIndexSummaryProperties(100, 100);
@@ -100,8 +108,10 @@ public class IndexSummaryTest
      * create an index summary, albeit one that does not cover the entire sstable.
      */
     @Test
-    public void tesLargeIndexSummary() throws IOException
+    public void testLargeIndexSummary() throws IOException
     {
+        Assume.assumeTrue(Runtime.getRuntime().maxMemory() >= (512 * 1024 * 1024));
+
         final int numKeys = 1000000;
         final int keySize = 3000;
         final int minIndexInterval = 1;
@@ -131,8 +141,10 @@ public class IndexSummaryTest
      * the index summary should be downsampled automatically.
      */
     @Test
-    public void tesLargeIndexSummaryWithExpectedSizeMatching() throws IOException
+    public void testLargeIndexSummaryWithExpectedSizeMatching() throws IOException
     {
+        Assume.assumeTrue(Runtime.getRuntime().maxMemory() > (512 * 1024 * 1024));
+
         final int numKeys = 1000000;
         final int keySize = 3000;
         final int minIndexInterval = 1;
