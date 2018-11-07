@@ -26,6 +26,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import com.google.common.collect.Iterables;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,12 +38,14 @@ import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.db.filter.ColumnFilter;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
+import org.apache.cassandra.db.lifecycle.SSTableTracker;
 import org.apache.cassandra.db.partitions.PartitionUpdate;
 import org.apache.cassandra.db.rows.UnfilteredRowIterator;
 import org.apache.cassandra.db.view.View;
 import org.apache.cassandra.dht.Bounds;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.sstable.ISSTableScanner;
+import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.SSTableMultiWriter;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.utils.JVMStabilityInspector;
@@ -133,11 +136,36 @@ public class StreamReceiveTask extends StreamTask
         return totalSize;
     }
 
-    public synchronized LifecycleTransaction getTransaction()
+    public synchronized SSTableTracker getSstableTracker()
     {
         if (done)
             throw new RuntimeException(String.format("Stream receive task %s of cf %s already finished.", session.planId(), cfId));
-        return txn;
+
+        return new SSTableTracker()
+        {
+            @Override
+            public void trackNew(SSTable table)
+            {
+                synchronized (StreamReceiveTask.this)
+                {
+                    txn.trackNew(table);
+                }
+            }
+
+            @Override
+            public void untrackNew(SSTable table)
+            {
+                synchronized (StreamReceiveTask.this)
+                {
+                    txn.untrackNew(table);
+                }
+            }
+
+            public OperationType opType()
+            {
+                return txn.opType();
+            }
+        };
     }
 
     private static class OnCompletionRunnable implements Runnable

@@ -27,10 +27,6 @@ import java.util.stream.Stream;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Iterables;
-
-import org.apache.cassandra.db.DiskBoundaries;
-import org.apache.cassandra.db.Memtable;
-import org.apache.cassandra.index.Index;
 import com.google.common.primitives.Ints;
 
 import org.slf4j.Logger;
@@ -39,11 +35,15 @@ import org.slf4j.LoggerFactory;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Directories;
+import org.apache.cassandra.db.DiskBoundaries;
+import org.apache.cassandra.db.Memtable;
 import org.apache.cassandra.db.SerializationHeader;
 import org.apache.cassandra.db.lifecycle.LifecycleTransaction;
 import org.apache.cassandra.db.lifecycle.SSTableSet;
+import org.apache.cassandra.db.lifecycle.SSTableTracker;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
+import org.apache.cassandra.index.Index;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.SSTableMultiWriter;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
@@ -1016,7 +1016,7 @@ public class CompactionStrategyManager implements INotificationConsumer
                                                        MetadataCollector collector,
                                                        SerializationHeader header,
                                                        Collection<Index> indexes,
-                                                       LifecycleTransaction txn)
+                                                       SSTableTracker sstableTracker)
     {
         maybeReloadDiskBoundaries();
         readLock.lock();
@@ -1024,11 +1024,11 @@ public class CompactionStrategyManager implements INotificationConsumer
         {
             if (repairedAt == ActiveRepairService.UNREPAIRED_SSTABLE)
             {
-                return unrepaired.get(0).createSSTableMultiWriter(descriptor, keyCount, repairedAt, collector, header, indexes, txn);
+                return unrepaired.get(0).createSSTableMultiWriter(descriptor, keyCount, repairedAt, collector, header, indexes, sstableTracker);
             }
             else
             {
-                return repaired.get(0).createSSTableMultiWriter(descriptor, keyCount, repairedAt, collector, header, indexes, txn);
+                return repaired.get(0).createSSTableMultiWriter(descriptor, keyCount, repairedAt, collector, header, indexes, sstableTracker);
             }
         }
         finally
